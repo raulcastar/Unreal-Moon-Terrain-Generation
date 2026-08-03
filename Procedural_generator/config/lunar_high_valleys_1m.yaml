@@ -1,0 +1,30 @@
+# ==========================================
+# LUNAR TERRAIN GENERATOR CONFIGURATION
+# ==========================================
+
+# --- Dimensions & Base ---
+ROWS: 1000
+COLS: 1000
+BASE_ELEVATION: 40.0
+RANDOM_SEED: null           # Set to null for infinite variations, or a number (e.g., 42) to lock it.
+
+# --- Macro-Terrain (Rolling Hills) ---
+MACRO_ELEVATION_MIN: 0.5    # Minimum height differential for hills
+MACRO_ELEVATION_MAX: 10.0    # Maximum height differential for hills
+
+# --- Micro-Terrain (Surface Noise) ---
+MICRO_ROUGHNESS: 0.001      # Very subtle dithering to prevent banding
+
+# --- Craters ---
+CRATER_DENSITY: 0.0001     # Multiplier for total number of craters
+CRATER_MIN_RADIUS_PCT: 0.01 # Minimum crater radius (as % of largest map dimension)
+CRATER_MAX_RADIUS_PCT: 0.12 # Maximum crater radius (as % of largest map dimension)
+CRATER_DEPTH_RATIO: 0.1    # Depth multiplier relative to crater radius 
+CRATER_RIM_HEIGHT_RATIO: 0.3 # 1.0 means the rim pushes up exactly as much as the bowl digs down
+
+# --- Erosion (Smoothing) ---
+EROSION_BLUR_DIVISOR: 50.0  # Higher number = sharper terrain. Lower number = smoother/eroded.
+
+# --- Export Settings ---
+EXPORT_CSV: true
+EXPORT_NPY: true
