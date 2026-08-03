@@ -1,14 +1,11 @@
 """
-Procedural Lunar Terrain Core
------------------------------
-Importable generation engine shared by the CLI (`procedural_landscape_gen.py`)
-and the graphical front-end (`Terrain_Studio/terrain_studio.py`).
+Procedural lunar terrain core.
 
-The pipeline is unchanged from the original script: Fractal-ish Gaussian macro
-terrain, stochastic collision-aware crater placement, and sub-surface dithering
-to prevent quantization banding in the 3D engine. The only structural change is
-that every parameter is now passed explicitly instead of living in module-level
-globals, so the same code path can be driven from a UI.
+Generation engine shared by the CLI (`procedural_landscape_gen.py`) and the GUI
+(`Terrain_Studio/terrain_studio.py`). The pipeline builds low-frequency macro
+terrain, places collision-aware craters, and applies sub-surface dithering to
+prevent quantization banding in the target engine. All parameters are passed
+explicitly so the same code path serves both front-ends.
 """
 
 import os
@@ -18,17 +15,15 @@ import pandas as pd
 import yaml
 from scipy.ndimage import gaussian_filter, zoom
 
-# Longest edge of the grid the low-frequency macro terrain is built on. The
-# macro field is smoothed with a blur radius that scales with the map, so a
-# direct build costs O(N^2 * sigma) = O(N^3). Because the field is intentionally
-# low-frequency (only ~10 features span the whole map), it is instead built and
-# eroded on a grid capped at this size and bilinearly upsampled to the target.
-# Maps at or below the cap are built natively and are unaffected.
+# Longest edge of the grid used to build the low-frequency macro terrain. Its
+# blur radius scales with the map, so a direct build costs O(N^3); building on a
+# capped grid and upsampling bounds that cost. Maps at or below the cap are built
+# natively and are unaffected.
 MACRO_GRID_CAP = 1024
 
 
 class TerrainCancelled(Exception):
-    """Raised out of generate_terrain/export_outputs when cancel_check() is true."""
+    """Raised by generate_terrain / export_outputs when cancel_check() returns true."""
 
 
 # =========================================================================
@@ -176,48 +171,42 @@ EXPORT_NPY: true
 
 def add_crater(matrix, center_row, center_col, radius, depth, rim_height_ratio):
     """
-    Applies a procedural crater to the target elevation matrix using a
-    parabolic impact model and an exponentially decaying ejecta rim.
-
-    Performance Optimization:
-    Calculates localized changes via a bounding box subset rather than
-    evaluating the full n-dimensional array, reducing time complexity.
+    Stamps a crater into the elevation matrix: a parabolic bowl with an
+    exponentially decaying ejecta rim. Only the crater's bounding box is
+    evaluated, not the full array.
 
     Args:
-        matrix (np.ndarray): The target elevation map.
-        center_row (int): Y-axis origin of the impact.
-        center_col (int): X-axis origin of the impact.
-        radius (float): The base radius of the crater bowl.
-        depth (float): Maximum vertical displacement at the center of the bowl.
-        rim_height_ratio (float): Ejecta rim height relative to the bowl depth.
+        matrix (np.ndarray): Elevation map, modified in place.
+        center_row, center_col (int): Impact centre.
+        radius (float): Bowl radius.
+        depth (float): Maximum depth at the bowl centre.
+        rim_height_ratio (float): Ejecta rim height relative to bowl depth.
     """
     rows, cols = matrix.shape
 
-    # Define bounding box localized to the impact footprint (radius * 1.5 allows for rim)
+    # Bounding box around the footprint (1.5x radius covers the rim).
     max_dist = int(np.ceil(radius * 1.5))
     r_min = max(0, center_row - max_dist)
     r_max = min(rows, center_row + max_dist + 1)
     c_min = max(0, center_col - max_dist)
     c_max = min(cols, center_col + max_dist + 1)
 
-    # Abort if the localized bounding box falls completely outside the map bounds
+    # Skip if the box lies entirely off-map.
     if r_min >= r_max or c_min >= c_max:
         return
 
-    # Generate a localized coordinate grid for rapid distance calculations
     r_grid, c_grid = np.ogrid[r_min:r_max, c_min:c_max]
     dist = np.sqrt((r_grid - center_row) ** 2 + (c_grid - center_col) ** 2)
 
-    # Segregate spatial zones: Internal impact bowl vs. external ejecta rim
     bowl_mask = dist <= radius
     rim_mask = (dist > radius) & (dist <= radius * 1.5)
 
     local_matrix = matrix[r_min:r_max, c_min:c_max]
 
-    # Model the internal parabolic depression
+    # Parabolic depression inside the bowl.
     local_matrix[bowl_mask] -= depth * (1 - (dist[bowl_mask] / radius) ** 2)
 
-    # Model the external rim using quadratic decay for a smooth morphological blend
+    # Ejecta rim with quadratic falloff.
     rim_dist_normalized = (dist[rim_mask] - radius) / (radius * 0.5)
     rim_height = (depth * rim_height_ratio) * (1 - rim_dist_normalized) ** 2
     local_matrix[rim_mask] += rim_height
@@ -226,25 +215,19 @@ def add_crater(matrix, center_row, center_col, radius, depth, rim_height_ratio):
 def generate_terrain(params, rows=None, cols=None, crater_count=None,
                      seed=None, progress=None, cancel_check=None):
     """
-    Executes the procedural generation pipeline:
-      1. Base initialization
-      2. Macro-terrain noise injection
-      3. Structural Gaussian smoothing
-      4. Collision-aware impact processing (Craters)
-      5. Sub-surface dithering (Anti-banding)
+    Runs the generation pipeline: macro terrain (noise then erosion),
+    collision-aware crater placement, and sub-surface dithering.
 
     Args:
         params (dict): Coerced parameter dictionary (see `coerce_params`).
-        rows (int|None): Row override, used to render reduced-resolution previews.
-        cols (int|None): Column override, used to render reduced-resolution previews.
-        crater_count (int|None): Explicit impact count. When a preview is rendered
-            at a reduced resolution the caller passes the full-resolution count so
-            the crater population stays morphologically representative.
+        rows, cols (int|None): Size overrides for reduced-resolution previews.
+        crater_count (int|None): Explicit impact count. Previews pass the
+            full-resolution count so the crater population stays representative.
         seed (int|None): Seed override. Falls back to `params['RANDOM_SEED']`.
         progress (callable|None): Optional `fn(message, fraction)` status hook.
         cancel_check (callable|None): Optional `fn() -> bool`. Polled at phase
-            boundaries and during the crater loop; a truthy result aborts the run
-            by raising `TerrainCancelled`.
+            boundaries and during the crater loop; a truthy result raises
+            `TerrainCancelled`.
 
     Returns:
         dict: {'elevation', 'rows', 'cols', 'seed', 'crater_count', 'craters'}
@@ -269,7 +252,6 @@ def generate_terrain(params, rows=None, cols=None, crater_count=None,
     rim_height_ratio = float(params['CRATER_RIM_HEIGHT_RATIO'])
     erosion_divisor = float(params['EROSION_BLUR_DIVISOR'])
 
-    # Establish deterministic vs. stochastic behavior based on config
     if seed is None:
         seed = params.get('RANDOM_SEED', None)
     np.random.seed(seed)
@@ -277,14 +259,10 @@ def generate_terrain(params, rows=None, cols=None, crater_count=None,
     report(f"Initializing {rows}x{cols} elevation matrix", 0.05)
     max_dimension = max(rows, cols)
 
-    # --- Phase 1: Macro-Terrain Construction ---
-    # Build the low-frequency field on a grid whose longest edge is capped, then
-    # upsample. The macro blur and the erosion blur are both linear and both act
-    # on purely low-frequency content (craters are added afterwards), so applying
-    # them on the reduced grid and interpolating is equivalent to the original
-    # full-resolution build for maps at or below the cap, and a close, bounded-cost
-    # approximation above it. This removes the O(N^3) blur that made large maps
-    # take tens of minutes.
+    # --- Phase 1: Macro terrain ---
+    # Built on a capped grid and upsampled. Both blurs are linear and act only on
+    # low-frequency content (craters come later), so this matches a direct
+    # full-resolution build at or below the cap and closely approximates it above.
     report("Synthesizing macro-terrain", 0.15)
     grid_scale = min(1.0, MACRO_GRID_CAP / max_dimension)
     grid_rows = max(2, int(round(rows * grid_scale)))
@@ -294,7 +272,7 @@ def generate_terrain(params, rows=None, cols=None, crater_count=None,
     macro_noise = np.random.normal(loc=0.0, scale=1.0, size=(grid_rows, grid_cols))
     macro_noise = gaussian_filter(macro_noise, sigma=grid_dimension / 10.0)
 
-    # Normalize noise matrix and map to configured elevation amplitudes
+    # Normalize to [0, 1], then to the configured elevation range.
     macro_noise -= np.min(macro_noise)
     peak = np.max(macro_noise)
     if peak != 0:
@@ -302,10 +280,9 @@ def generate_terrain(params, rows=None, cols=None, crater_count=None,
     target_differential = np.random.uniform(macro_min, macro_max)
     macro_noise = (macro_noise * target_differential) - (target_differential / 2.0)
 
-    # Add the base datum and apply heavy structural smoothing, both on the grid.
-    # When the grid equals the target (map at or below the cap) this is the exact
-    # same sequence of operations as a direct full-resolution build, so those
-    # maps are bit-identical; above the cap the eroded field is upsampled.
+    # Add the base datum, then erode. At or below the cap the grid equals the
+    # target, making this identical to a direct build; above it the field is
+    # eroded on the small grid and upsampled.
     field = np.full((grid_rows, grid_cols), base_elevation)
     field += macro_noise
 
@@ -316,8 +293,7 @@ def generate_terrain(params, rows=None, cols=None, crater_count=None,
     if (grid_rows, grid_cols) != (rows, cols):
         field = zoom(field, (rows / grid_rows, cols / grid_cols),
                      order=1, mode='nearest')
-        # zoom's output shape can be off by a pixel from floating-point rounding;
-        # crop or edge-pad back to the exact target so later full-size arrays add.
+        # zoom can be off by a pixel from rounding; force the exact target shape.
         field = field[:rows, :cols]
         pad_r = rows - field.shape[0]
         pad_c = cols - field.shape[1]
@@ -331,11 +307,11 @@ def generate_terrain(params, rows=None, cols=None, crater_count=None,
         crater_count = int(rows * cols * crater_density)
     crater_count = max(0, int(crater_count))
 
-    # Registry of accepted impacts as (row, col, radius) for vectorized collision tests
+    # Accepted impacts as (row, col, radius), used for vectorized collision tests.
     registry = np.empty((crater_count, 3), dtype=float)
     placed = 0
     attempts = 0
-    max_attempts = crater_count * 10  # Hard threshold to prevent infinite loops
+    max_attempts = crater_count * 10  # Bound on rejection sampling.
 
     report(f"Placing {crater_count} impacts", 0.45)
 
@@ -345,28 +321,24 @@ def generate_terrain(params, rows=None, cols=None, crater_count=None,
     while placed < crater_count and attempts < max_attempts:
         attempts += 1
 
-        # Poll for cancellation even while only rejecting candidates, since the
-        # progress report below fires only on successful placement.
+        # Poll for cancellation during rejection runs; the report below only
+        # fires on successful placement.
         if cancel_check and attempts % 512 == 0 and cancel_check():
             raise TerrainCancelled()
 
-        # Calculate random spatial coordinates and physical morphology limits
         r_center = np.random.randint(0, rows)
         c_center = np.random.randint(0, cols)
 
-        # Exponential bias applied via exponentiation to favor smaller impacts
+        # Cube bias favours smaller craters.
         rad = min_rad + (max_rad - min_rad) * (np.random.random() ** 3)
 
-        # Execute Euclidean distance comparisons against registered impacts.
-        # Vectorized so dense fields (thousands of craters) stay tractable.
+        # Reject overlaps with existing craters, rims included.
         if placed:
             existing = registry[:placed]
             distances = np.hypot(existing[:, 0] - r_center, existing[:, 1] - c_center)
-            # Account for the extended ejecta rim footprint on both craters
             if np.any(distances < (rad * 1.5) + (existing[:, 2] * 1.5)):
                 continue
 
-        # Register and process valid impact events
         add_crater(elevation_matrix, r_center, c_center, rad,
                    rad * depth_ratio, rim_height_ratio)
         registry[placed] = (r_center, c_center, rad)
@@ -376,13 +348,12 @@ def generate_terrain(params, rows=None, cols=None, crater_count=None,
             report(f"Placing impacts ({placed}/{crater_count})",
                    0.45 + 0.35 * (placed / crater_count))
 
-    # --- Phase 3: High-Frequency Noise & Post-Processing ---
-    # Inject high-frequency Gaussian noise to act as 3D spatial dithering,
-    # preventing integer-rounding quantization artifacts (terracing/banding).
+    # --- Phase 3: Dithering and post-processing ---
+    # High-frequency dither prevents 16-bit quantization banding in-engine.
     report("Applying micro-roughness dithering", 0.85)
     elevation_matrix += np.random.normal(loc=0.0, scale=micro_roughness, size=(rows, cols))
 
-    # Apply sub-pixel anti-aliasing to soften harsh noise artifacts
+    # Sub-pixel smoothing.
     elevation_matrix = gaussian_filter(elevation_matrix, sigma=0.8)
 
     report("Generation complete", 1.0)
@@ -399,13 +370,11 @@ def generate_terrain(params, rows=None, cols=None, crater_count=None,
 
 def full_crater_count(params):
     """
-    Returns the impact count of the full-resolution map.
+    Crater count for the full-resolution map.
 
-    A reduced-resolution preview must place this same count rather than its own
-    area product: crater radii are a percentage of the largest map dimension and
-    the erosion sigma divides that same dimension, so both shrink with the
-    preview. Reusing the full count keeps the relative surface coverage — and
-    therefore the visual morphology — identical to the final export.
+    Previews reuse this count rather than their own area product: crater radii
+    and the erosion sigma both scale with map size, so keeping the count fixed
+    preserves the relative surface coverage and morphology.
     """
     return int(params['ROWS'] * params['COLS'] * params['CRATER_DENSITY'])
 
@@ -437,7 +406,7 @@ def export_outputs(elevation_matrix, output_dir, base_name='generated_elevationM
         pd.DataFrame(elevation_matrix).to_csv(elevation_csv, index=False, header=False, sep=' ')
         written['elevation_csv'] = elevation_csv
 
-        # Generate edge-masked soil layer for 3D engine material blending
+        # Edge-masked soil layer for engine material blending.
         soil_matrix = np.zeros(elevation_matrix.shape, dtype=int)
         soil_matrix[1:-1, 1:-1] = 1
         soil_csv = os.path.join(output_dir, f"{base_name.replace('_elevationMap', '')}_soilMap_edges_0.csv")

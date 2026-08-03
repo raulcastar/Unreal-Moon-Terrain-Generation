@@ -131,11 +131,9 @@ COLORMAPS = ["gray", "magma", "cividis", "bone", "terrain", "gist_earth", "infer
 
 PREVIEW_SIZES = ["128", "192", "256", "384", "512", "768"]
 
-# Longest edge of the 3D mesh, at rest and while the view is being dragged.
-# Matplotlib re-projects and depth-sorts every quad on each frame, so cost grows
-# with the square of these numbers. Measured on this machine at 125 DPI:
-# a 128-quad mesh redraws in ~610 ms, 85 in ~270 ms, 64 in ~160 ms, 32 in ~57 ms,
-# against a ~21 ms floor for an empty 3D axes.
+# Longest edge of the 3D mesh, at rest and while the view is dragged. Matplotlib
+# depth-sorts every quad per frame, so redraw cost grows with the square of these;
+# the drag value is kept low to stay interactive (~60 ms/frame vs ~600 at full).
 SURFACE_MESH_DETAIL = 100
 SURFACE_DRAG_DETAIL = 36
 
@@ -1224,10 +1222,9 @@ class TerrainStudio(tk.Tk):
         span = max(span_x, span_y)
         relief = max(float(np.ptp(sub)), 1e-6)
 
-        # These maps carry metres of relief over kilometres of ground, so a
-        # true-scale box would be a flat sheet. The Z box is fitted to a readable
-        # height and the exaggeration that implies is reported in the title
-        # rather than left as a hidden distortion.
+        # Relief is metres over kilometres, so a true-scale box would look flat.
+        # Fit the Z box to a readable height and report the implied exaggeration
+        # in the title instead of hiding it.
         z_box = 0.35
         implied_exaggeration = (z_box * span) / relief
 
@@ -1252,9 +1249,8 @@ class TerrainStudio(tk.Tk):
 
         fine_surface = plot_mesh(sub, sub_res)
 
-        # Rotating a 3D axes re-projects and depth-sorts every quad on each mouse
-        # motion event, which stalls at full detail. A coarse copy is drawn once
-        # and swapped in for the duration of a drag (see _on_surface_press).
+        # A coarse copy, drawn once and swapped in during a drag to keep rotation
+        # responsive (see _on_surface_press).
         drag_step = max(1, int(np.ceil(max(rows, cols) / SURFACE_DRAG_DETAIL)))
         if drag_step > step:
             coarse_surface = plot_mesh(elevation[::drag_step, ::drag_step],

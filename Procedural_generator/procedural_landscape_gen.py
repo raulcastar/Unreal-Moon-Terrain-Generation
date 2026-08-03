@@ -1,11 +1,9 @@
 """
-Procedural Lunar Terrain Generator & Visualizer
------------------------------------------------
-Command-line front-end for the procedural lunar surface pipeline.
+Command-line front-end for the procedural lunar terrain pipeline.
 
-The generation logic itself lives in `terrain_core`, which is shared with the
-graphical front-end (`Terrain_Studio/terrain_studio.py`). This module handles
-configuration ingestion, file serialization, and the Matplotlib debug preview.
+The generation logic lives in `terrain_core`, shared with the GUI
+(`Terrain_Studio/terrain_studio.py`). This module handles configuration loading,
+file output, and an optional Matplotlib preview.
 """
 
 import argparse
@@ -17,7 +15,7 @@ import numpy as np
 import terrain_core
 
 # =========================================================================
-# CONFIGURATION INGESTION & ENVIRONMENT SETUP
+# CONFIGURATION
 # =========================================================================
 
 parser = argparse.ArgumentParser(description="Procedural Lunar Terrain Generator")
@@ -51,35 +49,28 @@ OUTPUT_DIR = args.output_dir
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Generate a default configuration template if the specified file is missing
+# Write a default configuration template if the target file is missing.
 if not os.path.exists(CONFIG_PATH):
-    print(f"[*] Configuration file not found. Initializing default at '{CONFIG_PATH}'")
+    print(f"[*] Config not found; writing default to '{CONFIG_PATH}'")
     terrain_core.write_default_config(CONFIG_PATH)
 
-print(f"[*] Ingesting parameters from '{CONFIG_PATH}'")
+print(f"[*] Loading parameters from '{CONFIG_PATH}'")
 config = terrain_core.load_config(CONFIG_PATH)
 
 
 # =========================================================================
-# PIPELINE EXECUTION
+# PIPELINE
 # =========================================================================
 
 def log_progress(message, fraction):
-    """Streams pipeline status updates to stdout."""
+    """Prints pipeline status to stdout."""
     print(f"[*] {message}")
 
 
 def generate_and_save_data():
-    """
-    Runs the procedural pipeline and serializes the results to disk.
-
-    Returns:
-        np.ndarray: The finalized 2D elevation matrix.
-    """
-    if config['RANDOM_SEED'] is not None:
-        print(f"[*] State locked. Using deterministic seed: {config['RANDOM_SEED']}")
-    else:
-        print("[*] State open. Proceeding with stochastic generation...")
+    """Runs the pipeline, writes the outputs, and returns the elevation matrix."""
+    seed = config['RANDOM_SEED']
+    print(f"[*] Seed: {seed}" if seed is not None else "[*] Seed: random")
 
     result = terrain_core.generate_terrain(config, progress=log_progress)
 
@@ -92,39 +83,30 @@ def generate_and_save_data():
         progress=log_progress,
     )
 
-    print(f"[+] Pipeline completed successfully. Valid impacts registered: {result['crater_count']}")
+    print(f"[+] Done. Craters placed: {result['crater_count']}")
     return result['elevation']
 
 
 def preview_terrain(elevation_matrix):
-    """
-    Constructs a 2D topographical heatmap and a 3D structural mesh utilizing
-    Matplotlib to visually debug the procedural generation outputs.
-
-    Args:
-        elevation_matrix (np.ndarray): The finalized 2D elevation matrix to render.
-    """
-    print("[*] Generating structural preview telemetry... (Terminate window to exit)")
+    """Shows a 2D contour map and a 3D surface of the elevation matrix."""
+    print("[*] Opening preview window (close to exit).")
 
     rows, cols = elevation_matrix.shape
     X, Y = np.meshgrid(np.arange(cols), np.arange(rows))
 
     fig = plt.figure(figsize=(14, 6))
 
-    # Compile 2D topological contour map
     ax1 = fig.add_subplot(121)
     contour = ax1.contourf(X, Y, elevation_matrix, cmap='magma', levels=50)
-    fig.colorbar(contour, ax=ax1, shrink=0.7, label='Elevation (Meters)')
-    ax1.set_title('2D Topographical Analysis')
+    fig.colorbar(contour, ax=ax1, shrink=0.7, label='Elevation (m)')
+    ax1.set_title('2D Topography')
     ax1.set_aspect('equal')
 
-    # Compile 3D structural downsampled surface mesh
     ax2 = fig.add_subplot(122, projection='3d')
     ax2.plot_surface(X, Y, elevation_matrix, cmap='magma', edgecolor='none',
                      alpha=0.9, rcount=150, ccount=150)
-    ax2.set_title('3D Structural Preview')
+    ax2.set_title('3D Surface')
 
-    # Set localized camera view and constraint bounds
     ax2.view_init(elev=45, azim=-45)
     z_min, z_max = np.min(elevation_matrix), np.max(elevation_matrix)
     z_range = max(1.0, z_max - z_min)
@@ -135,7 +117,7 @@ def preview_terrain(elevation_matrix):
 
 
 # =========================================================================
-# RUNTIME EXECUTION
+# ENTRY POINT
 # =========================================================================
 
 if __name__ == "__main__":

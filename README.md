@@ -34,58 +34,48 @@ only if you import GeoTIFF DEMs). Tkinter ships with Python.
 
 A single window covering the whole pipeline.
 
-**Parameters (left column)** — every knob of the simulation, grouped by stage,
-each with a slider, a typed entry, and a hover tooltip explaining its physical
-meaning. Presets are the same YAML files the CLI consumes
-(`Procedural_generator/config/`), so anything you save here runs headless later.
+**Parameters (left)** — every simulation parameter as a slider plus typed entry,
+grouped by stage, each with a hover tooltip. Presets are the same YAML files the
+CLI reads (`Procedural_generator/config/`), so anything saved here runs headless.
 
-**Preview (centre)** — a reduced-resolution render of the *exact same pipeline*,
-updated automatically as you drag:
+**Preview (centre)** — a reduced-resolution render of the same pipeline, updated
+as you drag, in three tabs:
 
-- **Shaded Relief** — sun-lit hillshade with adjustable sun azimuth and
-  elevation, for judging how the surface reads under grazing polar light.
-- **3D Surface** — the terrain as a shaded mesh. These maps are metres of relief
-  over kilometres of ground, so a true-scale box would be a flat sheet: the view
-  auto-fits its vertical exaggeration and reports the factor in the title rather
-  than hiding the distortion. The mesh drops to a coarse level of detail while
-  you drag the view and restores full detail on release, which keeps orbiting
-  responsive (~17 fps instead of ~1.6).
+- **Shaded Relief** — hillshade with adjustable sun azimuth and elevation.
+- **3D Surface** — shaded mesh. Relief is metres over kilometres, so the view
+  auto-fits its vertical exaggeration and reports the factor in the title. The
+  mesh drops to coarse detail while dragging and restores on release.
 - **Slope Analysis** — slope magnitude in degrees plus the elevation histogram.
 
-Crater radii and the erosion sigma are defined as fractions of the map size, and
-the preview reuses the full-resolution crater count, so the downscaled preview is
-morphologically representative of the final export. Once you press **Generate
-Full Resolution**, the preview panes switch to showing the real exported array.
+Crater radii and the erosion sigma scale with the map, and the preview reuses the
+full-resolution crater count, so it is representative of the final export. After
+**Generate Full Resolution**, the panes show the real exported array.
 
-**Determinism** — leave the seed blank and the studio rolls one, writes it into
-the field, and reuses it for both the preview and the export, so what you
-previewed is what you generate. Type a seed to reproduce a surface exactly.
+**Determinism** — leave the seed blank and one is rolled, written to the field,
+and reused for preview and export. Type a seed to reproduce a surface.
 
 **Readouts (right)** — live surface statistics (relief, mean/P99/max slope,
-crater count) and the Unreal Landscape topology that will be produced: section
-size, component grid, final vertex count, and world size in metres. The topology
-panel warns *before* you generate if the map exceeds the 50×50 component ceiling
-of a single Landscape.
+crater count) and the resulting Unreal Landscape topology (section size,
+component grid, vertex count, world size). The topology panel warns before you
+generate if the map exceeds the 50×50 component ceiling of a single Landscape.
 
-**Export & Unreal (right column)** — the two-step output workflow lives here,
-each step with its own description:
+**Export & Unreal (right)** — the two-step output workflow:
 
 1. *Generate Full Resolution* writes `<name>_elevationMap.npy`,
    `<name>_elevationMap.csv`, and `<name>_soilMap_edges_0.csv` to
    `Procedural_generator/outputs/`.
 2. *Send to Unreal* converts that DEM to Unreal's scalar space, writes the
-   `.r16` / `.json` / `.txt` files into `Lunar_terrain_loader/outputs/`, then
-   broadcasts for a running editor and spawns the Landscape actor. Untick
-   *Dispatch to running Unreal Editor* to only produce the files.
+   `.r16` / `.json` / `.txt` files to `Lunar_terrain_loader/outputs/`, then
+   spawns the Landscape actor in a running editor. Untick *Dispatch to running
+   Unreal Editor* to only write the files.
 
-*Stop* aborts a running generation or Unreal export at its next checkpoint
-(phase boundaries, and every few hundred crater attempts). Partial output files
-may remain and should be regenerated.
+*Stop* cancels a running generation or Unreal export at its next checkpoint;
+partial files may remain and should be regenerated.
 
-Unreal must have the **Python Editor Script Plugin** enabled with **Remote
-Execution** switched on in Project Settings. Applying the heightmap to the
-spawned Landscape is still the manual import step described by the editor dialog
-(Landscape Mode → Manage → right-click → Import).
+Unreal needs the **Python Editor Script Plugin** with **Remote Execution**
+enabled in Project Settings. Applying the heightmap to the spawned Landscape is a
+manual step, described by the editor dialog (Landscape Mode → Manage →
+right-click → Import).
 
 ---
 
@@ -132,19 +122,16 @@ py main.py maps\Lunar_LROnac_Haworth_1m.tif outputs 1.0
 | `CRATER_RIM_HEIGHT_RATIO` | Ejecta rim height relative to bowl depth. |
 | `EXPORT_CSV`, `EXPORT_NPY` | Output formats. |
 
-Craters are placed with collision rejection so bowls and their ejecta rims never
-overlap, and placement gives up after ten attempts per requested crater — at high
-densities the number actually placed will be lower than the target, which the
-studio reports.
+Craters are placed with collision rejection so bowls and rims never overlap, and
+placement gives up after ten attempts per crater — at high densities fewer than
+the target are placed, which the studio reports.
 
-**Performance note.** The low-frequency macro terrain is built and eroded on a
-grid whose longest edge is capped (1024 px) and then bilinearly upsampled to the
-target size. The macro blur radius scales with the map, so a direct build costs
-roughly O(N³) and a 10000×10000 map took ~45 minutes for that step alone; the
-capped build makes the same map generate in seconds. Maps at or below the cap are
-built natively and are bit-for-bit identical to the direct method. Crater
-placement and file writing still scale with the map, so very large maps remain
-non-trivial — use *Stop* if a run is taking longer than you want.
+**Performance.** The macro terrain is built and eroded on a grid capped at
+1024 px, then upsampled. Its blur radius scales with the map, so a direct build
+is roughly O(N³) — a 10000×10000 map took ~45 minutes for that step alone, versus
+seconds with the cap. Maps at or below the cap are built natively and are
+bit-for-bit identical to the direct method. Crater placement and file writing
+still scale with the map, so use *Stop* if a large run runs long.
 
 ---
 

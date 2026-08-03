@@ -1,9 +1,6 @@
 @echo off
-REM ==========================================================
-REM  Lunar Terrain Studio launcher
-REM  Uses the Windows Python launcher so the interpreter that
-REM  actually carries numpy/scipy/matplotlib is selected.
-REM ==========================================================
+REM Lunar Terrain Studio launcher. Uses the Windows "py" launcher to select the
+REM interpreter that has numpy/scipy/matplotlib installed.
 setlocal
 
 py "%~dp0Terrain_Studio\terrain_studio.py" %*
