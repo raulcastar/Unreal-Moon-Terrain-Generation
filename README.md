@@ -15,24 +15,51 @@ The project has three parts:
 
 ## Quick start
 
+Windows:
+
 ```bat
 run_terrain_studio.bat
 ```
 
-or
+Linux / macOS:
 
-```bat
-py Terrain_Studio\terrain_studio.py
+```sh
+chmod +x run_terrain_studio.sh   # once
+./run_terrain_studio.sh
+```
+
+Or directly, on any platform:
+
+```sh
+python Terrain_Studio/terrain_studio.py
 ```
 
 Requirements: `numpy`, `scipy`, `pandas`, `pyyaml`, `matplotlib` (and `tifffile`
-only if you import GeoTIFF DEMs). Tkinter ships with Python.
+only if you import GeoTIFF DEMs). Tkinter ships with Python (on Debian/Ubuntu
+install it with `sudo apt install python3-tk`).
+
+The studio opens maximized. On Windows it is per-monitor DPI aware: dragging the
+window between monitors with different display scaling keeps it crisp and
+rescales the UI to the new monitor (preserving your parameters, preview, and
+selected map).
 
 ---
 
 ## Lunar Terrain Studio
 
-A single window covering the whole pipeline.
+**Home screen** — on launch the studio opens on a landing screen with three
+choices:
+
+- *Generate New Terrain* — opens the studio to set parameters, preview, and export.
+- *View an Existing Map* — opens a file picker and shows the chosen `.npy` /
+  `.csv` / `.tif` DEM in a preview window: the shaded relief on top and an
+  activity log below (like the studio). Loading runs in the background with a
+  "Loading…" indicator, so large maps never freeze the window.
+- *Send a Map to Unreal* — opens the studio and prompts for a DEM to convert.
+
+The `⌂ Home` button at the top of the parameter column returns here anytime.
+
+The studio itself covers the whole pipeline.
 
 **Parameters (left)** — every simulation parameter as a slider plus typed entry,
 grouped by stage, each with a hover tooltip. Presets are the same YAML files the
@@ -61,13 +88,21 @@ generate if the map exceeds the 50×50 component ceiling of a single Landscape.
 
 **Export & Unreal (right)** — the two-step output workflow:
 
-1. *Generate Full Resolution* writes `<name>_elevationMap.npy`,
-   `<name>_elevationMap.csv`, and `<name>_soilMap_edges_0.csv` to
-   `Procedural_generator/outputs/`.
-2. *Send to Unreal* converts that DEM to Unreal's scalar space, writes the
-   `.r16` / `.json` / `.txt` files to `Lunar_terrain_loader/outputs/`, then
-   spawns the Landscape actor in a running editor. Untick *Dispatch to running
-   Unreal Editor* to only write the files.
+1. *Generate Full Resolution* first shows a dialog listing the output files
+   (`<name>_elevationMap.npy`, `<name>_elevationMap.csv`, `<name>_soilMap.csv`)
+   and their target folder; on confirm it runs and writes them. Each run gets its
+   own subfolder `Procedural_generator/outputs/<name>/`.
+2. *Send to Unreal* converts the **source map** to Unreal's scalar space, writes
+   the `.r16` / `.json` / `.txt` files to `Lunar_terrain_loader/outputs/`, then
+   spawns the Landscape actor in a running editor. A dialog reports the `.r16`
+   path and the manual import steps. Untick *Dispatch to running Unreal Editor*
+   to only write the files.
+
+   The *Source map* defaults to the last full-resolution generation; use
+   *Browse* to pick any `.npy` / `.csv` / `.tif` DEM instead (which also previews
+   it). Resolution comes from the Map Geometry field (GeoTIFFs use their embedded
+   scale). To just look at a map without sending it, use *View an Existing Map*
+   on the home screen.
 
 *Stop* cancels a running generation or Unreal export at its next checkpoint;
 partial files may remain and should be regenerated.
@@ -144,7 +179,7 @@ Procedural_generator/
   terrain_core.py              Generation engine (shared by GUI and CLI)
   procedural_landscape_gen.py  CLI front-end
   config/*.yaml                Presets
-  outputs/                     Generated DEMs
+  outputs/<name>/              Generated DEMs, one subfolder per run
 Lunar_terrain_loader/
   main.py                      DEM -> Unreal orchestration
   terrain_files_generator.py   DEM reading, 16-bit conversion, component solving
@@ -152,5 +187,6 @@ Lunar_terrain_loader/
   unreal_api.py                Remote Execution client
   maps/                        Source DEMs
   outputs/                     .r16 heightmaps and metadata
-run_terrain_studio.bat
+run_terrain_studio.bat         Windows launcher
+run_terrain_studio.sh          Linux / macOS launcher
 ```

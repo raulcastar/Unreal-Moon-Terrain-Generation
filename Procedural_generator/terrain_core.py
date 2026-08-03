@@ -388,8 +388,9 @@ def export_outputs(elevation_matrix, output_dir, base_name='generated_elevationM
     """
     Serializes the elevation matrix to the formats consumed downstream.
 
-    Returns:
-        dict: Mapping of format key -> absolute written file path.
+    All files for one run are written to a per-group subfolder of `output_dir`,
+    named after `base_name` with any `_elevationMap` tag removed. Returns a dict
+    mapping each format key to its absolute path.
     """
     def report(message, fraction):
         if cancel_check and cancel_check():
@@ -397,25 +398,27 @@ def export_outputs(elevation_matrix, output_dir, base_name='generated_elevationM
         if progress:
             progress(message, fraction)
 
-    os.makedirs(output_dir, exist_ok=True)
+    group = base_name.replace('_elevationMap', '')
+    target_dir = os.path.join(output_dir, group)
+    os.makedirs(target_dir, exist_ok=True)
     written = {}
 
     if export_csv:
         report("Serializing CSV datasets", 0.3)
-        elevation_csv = os.path.join(output_dir, f"{base_name}.csv")
+        elevation_csv = os.path.join(target_dir, f"{base_name}.csv")
         pd.DataFrame(elevation_matrix).to_csv(elevation_csv, index=False, header=False, sep=' ')
         written['elevation_csv'] = elevation_csv
 
         # Edge-masked soil layer for engine material blending.
         soil_matrix = np.zeros(elevation_matrix.shape, dtype=int)
         soil_matrix[1:-1, 1:-1] = 1
-        soil_csv = os.path.join(output_dir, f"{base_name.replace('_elevationMap', '')}_soilMap_edges_0.csv")
+        soil_csv = os.path.join(target_dir, f"{group}_soilMap.csv")
         pd.DataFrame(soil_matrix).to_csv(soil_csv, index=False, header=False, sep=' ')
         written['soil_csv'] = soil_csv
 
     if export_npy:
         report("Serializing NumPy binary", 0.8)
-        elevation_npy = os.path.join(output_dir, f"{base_name}.npy")
+        elevation_npy = os.path.join(target_dir, f"{base_name}.npy")
         np.save(elevation_npy, elevation_matrix)
         written['elevation_npy'] = elevation_npy
 

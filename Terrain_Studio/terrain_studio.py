@@ -144,19 +144,38 @@ SURFACE_DRAG_DETAIL = 36
 
 def enable_dpi_awareness():
     """
-    Opts the process into real pixels on Windows.
+    Opts the process into per-monitor DPI awareness on Windows.
 
-    Without this, a display running at 125%/150% scaling hands Tk a virtualized
-    resolution and then bitmap-upscales the window, which both blurs the
-    Matplotlib canvases and makes the window overflow the physical screen.
+    Without awareness a scaled display (125%/150%) hands Tk a virtualized
+    resolution and bitmap-upscales the window, blurring it. With only *system*
+    awareness the window is still bitmap-stretched when dragged to a monitor with
+    a different scale factor. Per-Monitor-v2 keeps every monitor crisp; the app
+    then rescales its widgets on the DPI-change events Windows sends (see
+    TerrainStudio._apply_dpi_change). Falls back to older modes on old Windows.
     """
     if sys.platform != "win32":
         return
+    user32 = ctypes.windll.user32
+    # Per-Monitor-Aware v2 (Windows 10 1703+).
     try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(1)  # System DPI aware
+        user32.SetProcessDpiAwarenessContext.restype = ctypes.c_bool
+        user32.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+        if user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+            return
+    except Exception:
+        pass
+    # Per-Monitor aware (Windows 8.1+); HRESULT S_OK == 0.
+    try:
+        if ctypes.windll.shcore.SetProcessDpiAwareness(2) == 0:
+            return
+    except Exception:
+        pass
+    # System DPI aware, then the legacy call.
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except Exception:
         try:
-            ctypes.windll.user32.SetProcessDPIAware()
+            user32.SetProcessDPIAware()
         except Exception:
             pass
 
@@ -301,6 +320,182 @@ class ParamRow:
         self._syncing = False
 
 
+def load_dem_array(path):
+    """
+    Loads a DEM file into a 2D float array. Supports .npy, .csv/.txt (whitespace
+    or comma delimited), and .tif/.tiff (requires tifffile). Raises ValueError
+    with a readable message on failure.
+    """
+    ext = os.path.splitext(path)[1].lower()
+    if ext == '.npy':
+        data = np.load(path)
+    elif ext in ('.tif', '.tiff'):
+        try:
+            import tifffile
+        except ImportError:
+            raise ValueError("Reading .tif needs the 'tifffile' package.")
+        data = tifffile.imread(path)
+    elif ext in ('.csv', '.txt'):
+        try:
+            data = np.loadtxt(path)              # whitespace-delimited
+        except ValueError:
+            data = np.loadtxt(path, delimiter=',')
+    else:
+        raise ValueError(f"Unsupported map format '{ext}'.")
+
+    data = np.asarray(data, dtype=float)
+    if data.ndim != 2:
+        raise ValueError(f"Expected a 2D map, got shape {data.shape}.")
+    return data
+
+
+class MapViewer(tk.Toplevel):
+    """
+    Standalone window that renders a DEM file as a sun-lit shaded relief with an
+    elevation colourbar. Reused across selections; large maps are downsampled for
+    display.
+    """
+
+    DISPLAY_MAX_EDGE = 1200
+
+    def __init__(self, master, figure_dpi=100):
+        super().__init__(master)
+        self.title("Map Viewer")
+        self.geometry("820x780")
+        self.minsize(520, 500)
+
+        # Plot area on top, an output log at the bottom (mirrors the studio's).
+        plot_frame = ttk.Frame(self)
+        self.figure = Figure(figsize=(7.0, 6.0), dpi=figure_dpi, layout="constrained")
+        self.canvas = FigureCanvasTkAgg(self.figure, master=plot_frame)
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        NavigationToolbar2Tk(self.canvas, plot_frame).update()
+
+        log_frame = ttk.Frame(self, padding=(8, 4, 8, 8))
+        ttk.Label(log_frame, text="Activity log",
+                  font=("Segoe UI Semibold", 10)).pack(anchor="w")
+        self.log_text = tk.Text(log_frame, height=7, font=("Consolas", 8), wrap="word",
+                                relief="solid", borderwidth=1, background="#1e1e1e",
+                                foreground="#d4d4d4", insertbackground="#d4d4d4")
+        self.log_text.pack(fill="x", pady=(4, 0))
+        self.log_text.tag_configure("warn", foreground="#e6c07b")
+        self.log_text.tag_configure("error", foreground="#e06c75")
+        self.log_text.tag_configure("ok", foreground="#98c379")
+        self.log_text.configure(state="disabled")
+
+        # Pack the fixed-height log first so the expanding plot cannot squeeze it.
+        log_frame.pack(side="bottom", fill="x")
+        plot_frame.pack(side="top", fill="both", expand=True)
+
+        # A large DEM takes seconds to load, so loading runs in a worker thread
+        # and results are polled here on the main thread. The token discards a
+        # stale load if a newer map is requested before it finishes.
+        self._load_queue = queue.Queue()
+        self._load_token = 0
+        self._awaiting = None
+        self._poll_job = None
+
+    def log(self, text, level=None):
+        """Appends a line to the viewer's activity log."""
+        self.log_text.configure(state="normal")
+        self.log_text.insert("end", text.rstrip() + "\n", level or ())
+        self.log_text.see("end")
+        self.log_text.configure(state="disabled")
+
+    def show_path(self, path):
+        """Shows a loading indicator, then loads and renders `path` off-thread."""
+        name = os.path.basename(path)
+        self._load_token += 1
+        token = self._load_token
+        self._awaiting = token
+
+        self.title(f"Map Viewer - loading {name}...")
+        self._show_message(f"Loading  {name} ...")
+        self.log(f"Loading {name} ...")
+
+        def worker():
+            try:
+                data = load_dem_array(path)
+                self._load_queue.put((token, "ok", name, self._prepare(data)))
+            except Exception as exc:
+                self._load_queue.put((token, "error", name, str(exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
+        if self._poll_job is None:
+            self._poll_job = self.after(80, self._poll_load)
+
+    def _prepare(self, data):
+        """Downsamples and shades the DEM (runs in the worker thread; numpy only)."""
+        step = max(1, int(np.ceil(max(data.shape) / self.DISPLAY_MAX_EDGE)))
+        disp = data[::step, ::step]
+
+        finite = np.isfinite(disp)
+        vmin = float(np.min(disp[finite])) if finite.any() else 0.0
+        vmax = float(np.max(disp[finite])) if finite.any() else 1.0
+        relief = max(vmax - vmin, 1e-6)
+        filled = np.where(finite, disp, (vmin + vmax) / 2.0)
+
+        # Exaggerate so relief is visible regardless of the map's units/scale.
+        light = LightSource(azdeg=315, altdeg=45)
+        vert_exag = (0.12 * max(disp.shape)) / relief
+        shaded = light.shade(filled, cmap=matplotlib.colormaps["gray"],
+                             blend_mode="soft", vert_exag=vert_exag)
+        return {'orig_shape': data.shape, 'step': step, 'shaded': shaded,
+                'vmin': vmin, 'vmax': vmax, 'relief': relief}
+
+    def _poll_load(self):
+        """Main-thread pump: renders a finished load, ignoring superseded ones."""
+        self._poll_job = None
+        try:
+            while True:
+                token, kind, name, payload = self._load_queue.get_nowait()
+                if token != self._load_token:
+                    continue  # a newer map was requested; drop this result
+                self._awaiting = None
+                if kind == "ok":
+                    self._render(name, payload)
+                    rows, cols = payload['orig_shape']
+                    self.log(f"Loaded {name}  ({cols} x {rows} px, "
+                             f"relief {payload['relief']:.3g})", level="ok")
+                else:
+                    self._show_message(f"Could not load\n{name}")
+                    self.log(f"Failed to load {name}: {payload}", level="error")
+                self.title(f"Map Viewer - {name}")
+        except queue.Empty:
+            pass
+        if self._awaiting is not None:
+            self._poll_job = self.after(80, self._poll_load)
+
+    def _show_message(self, text):
+        """Draws a centred status message in place of the plot."""
+        self.figure.clear()
+        axes = self.figure.add_subplot(111)
+        axes.axis("off")
+        axes.text(0.5, 0.5, text, ha="center", va="center", fontsize=12,
+                  transform=axes.transAxes)
+        self.canvas.draw_idle()
+
+    def _render(self, name, payload):
+        """Draws the shaded relief prepared by the worker."""
+        self.figure.clear()
+        axes = self.figure.add_subplot(111)
+        axes.imshow(payload['shaded'], origin="upper", interpolation="bilinear")
+
+        step = payload['step']
+        note = f" (shown at 1/{step})" if step > 1 else ""
+        rows, cols = payload['orig_shape']
+        axes.set_title(
+            f"{name}{note}\n{cols} x {rows} px   min {payload['vmin']:.3g}   "
+            f"max {payload['vmax']:.3g}   relief {payload['relief']:.3g}", fontsize=9)
+        axes.set_xlabel("pixels")
+        axes.set_ylabel("pixels")
+
+        mappable = ScalarMappable(
+            norm=Normalize(vmin=payload['vmin'], vmax=payload['vmax']), cmap="gray")
+        self.figure.colorbar(mappable, ax=axes, shrink=0.8, label="Elevation")
+        self.canvas.draw_idle()
+
+
 # =========================================================================
 # MAIN APPLICATION
 # =========================================================================
@@ -312,9 +507,11 @@ class TerrainStudio(tk.Tk):
         self.title("Lunar Terrain Studio - Procedural DEM to Unreal Engine")
 
         # Every hard-coded pixel dimension below is expressed at 96 DPI and
-        # multiplied by this factor; point-sized fonts are scaled by Tk itself.
-        self.ui_scale = self.winfo_fpixels('1i') / 96.0
-        self.figure_dpi = round(100 * self.ui_scale)
+        # multiplied by ui_scale; point-sized fonts scale via Tk's 'scaling'.
+        # Both are recomputed if the window moves to a different-DPI monitor.
+        self._built_dpi = self._query_dpi()
+        self._dpi_job = None
+        self._apply_scale_from_dpi(self._built_dpi)
 
         # Fit the preferred size to the actual display; laptop panels running at
         # a scaled resolution are frequently narrower than the ideal layout.
@@ -336,9 +533,12 @@ class TerrainStudio(tk.Tk):
         self.full_result = None        # Full-resolution render (what gets exported)
         self.displayed = None          # Whichever result the canvas is showing
         self.exported_paths = {}
+        self.unreal_source_path = None  # DEM chosen for "Send to Unreal"
+        self.map_viewer = None          # Reused MapViewer window
         self.stale_axes = {'relief': True, 'surface': True, 'slope': True}
         self._surface_artists = None   # (full detail, drag detail) collections
         self._redraw_job = None
+        self._preview_started = False  # First preview is deferred until the studio opens
 
         self._build_style()
         self._build_layout()
@@ -347,11 +547,17 @@ class TerrainStudio(tk.Tk):
 
         self.after(100, self._drain_queue)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.bind("<Configure>", self._on_root_configure, add="+")
 
         self.log("Lunar Terrain Studio ready.")
         if not LOADER_AVAILABLE:
             self.log(f"Unreal loader unavailable: {LOADER_IMPORT_ERROR}", level="warn")
-        self.request_preview()
+
+        # Start on the home screen; the preview begins when the studio is opened.
+        self.show_home()
+        # Open maximized (kept as a normal window so it can still be moved between
+        # monitors); the centred geometry above becomes the restored size.
+        self.after(0, self._maximize)
 
     # =====================================================================
     # LAYOUT CONSTRUCTION
@@ -361,6 +567,141 @@ class TerrainStudio(tk.Tk):
         """Converts a 96-DPI design dimension into physical pixels."""
         return int(round(value * self.ui_scale))
 
+    def _maximize(self):
+        """Maximizes the window across platforms (kept movable, not borderless)."""
+        for attempt in (lambda: self.state("zoomed"),          # Windows / some WMs
+                        lambda: self.attributes("-zoomed", True)):  # many Linux WMs
+            try:
+                attempt()
+                return
+            except tk.TclError:
+                continue
+        # Fallback: fill the screen.
+        self.geometry(f"{self.winfo_screenwidth()}x{self.winfo_screenheight()}+0+0")
+
+    def _is_maximized(self):
+        try:
+            return self.state() == "zoomed" or bool(self.attributes("-zoomed"))
+        except tk.TclError:
+            return False
+
+    # ---------------------------------------------------------------- DPI
+    def _query_dpi(self):
+        """Returns the DPI of the monitor the window is currently on."""
+        if sys.platform == "win32":
+            try:
+                user32 = ctypes.windll.user32
+                user32.GetDpiForWindow.restype = ctypes.c_uint
+                user32.GetDpiForWindow.argtypes = [ctypes.c_void_p]
+                dpi = int(user32.GetDpiForWindow(self.winfo_id()))
+                if dpi:
+                    return dpi
+            except Exception:
+                pass
+        try:
+            return int(round(self.winfo_fpixels("1i")))
+        except Exception:
+            return 96
+
+    def _apply_scale_from_dpi(self, dpi):
+        """Sets ui_scale, the Matplotlib figure DPI, and Tk's font scaling."""
+        self.ui_scale = dpi / 96.0
+        self.figure_dpi = max(72, round(100 * self.ui_scale))
+        try:
+            self.tk.call("tk", "scaling", dpi / 72.0)
+        except Exception:
+            pass
+
+    def _on_root_configure(self, event):
+        """Watches for the window crossing onto a monitor with different DPI."""
+        if event.widget is not self or self._dpi_job is not None:
+            return
+        if self._query_dpi() != self._built_dpi:
+            # Debounce: dragging between monitors fires many Configure events.
+            self._dpi_job = self.after(300, self._apply_dpi_change)
+
+    def _apply_dpi_change(self):
+        """
+        Rebuilds the UI at the new monitor's DPI, preserving state. Tkinter does
+        not reflow for per-monitor DPI on its own, so the widget tree is recreated
+        at the new scale rather than left bitmap-crisp-but-mis-sized.
+        """
+        self._dpi_job = None
+        new_dpi = self._query_dpi()
+        if new_dpi == self._built_dpi:
+            return
+        if self._busy():
+            # Never rebuild while a worker owns the log/canvas; retry shortly.
+            self._dpi_job = self.after(1500, self._apply_dpi_change)
+            return
+
+        # Snapshot everything the rebuilt widgets need to restore.
+        self._collect_params()
+        on_studio = bool(self.studio_frame.winfo_ismapped())
+        snapshot = {
+            'source': self.unreal_source_path,
+            'preview_size': self.preview_size_var.get(),
+            'auto_preview': self.auto_preview_var.get(),
+            'cmap': self.cmap_var.get(),
+            'sun_az': self.sun_azimuth_var.get(),
+            'sun_alt': self.sun_altitude_var.get(),
+            'exag': self.exaggeration_var.get(),
+            'export_name': self.export_name_var.get(),
+            'dispatch': self.dispatch_var.get(),
+            'displayed': self.displayed,
+            'full_result': self.full_result,
+            'preview_result': self.preview_result,
+            'preview_started': self._preview_started,
+        }
+
+        self._built_dpi = new_dpi
+        self._apply_scale_from_dpi(new_dpi)
+
+        self._surface_artists = None
+        self.stale_axes = {key: True for key in self.stale_axes}
+        self.home_frame.destroy()
+        self.studio_frame.destroy()
+        self._build_layout()
+
+        self._apply_params_to_widgets()
+        self._set_unreal_source(snapshot['source'])
+        self.preview_size_var.set(snapshot['preview_size'])
+        self.auto_preview_var.set(snapshot['auto_preview'])
+        self.cmap_var.set(snapshot['cmap'])
+        self.sun_azimuth_var.set(snapshot['sun_az'])
+        self.sun_altitude_var.set(snapshot['sun_alt'])
+        self.exaggeration_var.set(snapshot['exag'])
+        self.export_name_var.set(snapshot['export_name'])
+        self.dispatch_var.set(snapshot['dispatch'])
+        self.displayed = snapshot['displayed']
+        self.full_result = snapshot['full_result']
+        self.preview_result = snapshot['preview_result']
+        self._preview_started = snapshot['preview_started']
+
+        self._refresh_derived_readouts()
+        if on_studio:
+            self.show_studio()
+            if self.displayed is not None:
+                self._invalidate_axes()
+                self.redraw()
+        else:
+            self.show_home()
+
+        # Tk does not resize for WM_DPICHANGED, so on a higher-DPI monitor the
+        # rescaled widgets can outgrow the old window. Grow to the new minimum if
+        # needed; never shrink, to avoid fighting any resize Windows applied. Skip
+        # when maximized (the window already fills the monitor).
+        self.update_idletasks()
+        min_w, min_h = self.px(1100), self.px(720)
+        self.minsize(min_w, min_h)
+        if not self._is_maximized():
+            grow_w = max(self.winfo_width(), min_w)
+            grow_h = max(self.winfo_height(), min_h)
+            if grow_w > self.winfo_width() or grow_h > self.winfo_height():
+                self.geometry(f"{grow_w}x{grow_h}")
+
+        self.log(f"Rescaled UI for {new_dpi} DPI ({int(self.ui_scale * 100)}%).")
+
     def _build_style(self):
         style = ttk.Style(self)
         if "vista" in style.theme_names():
@@ -369,24 +710,99 @@ class TerrainStudio(tk.Tk):
         style.configure("Group.TLabelframe.Label", font=("Segoe UI Semibold", 9))
         style.configure("Readout.TLabel", font=("Consolas", 8))
         style.configure("Accent.TButton", font=("Segoe UI Semibold", 9))
+        style.configure("Home.TButton", font=("Segoe UI Semibold", 12))
+        style.configure("HomeTitle.TLabel", font=("Segoe UI Semibold", 22))
+        style.configure("HomeSub.TLabel", font=("Segoe UI", 10), foreground="#666666")
+        style.configure("HomeHint.TLabel", font=("Segoe UI", 8), foreground="#777777")
 
     def _build_layout(self):
+        # Two top-level views swapped by show_home / show_studio.
+        self._build_home()
+
+        self.studio_frame = ttk.Frame(self)
+
         # --- Left: scrollable parameter column ---
-        left = ttk.Frame(self, padding=(8, 8, 4, 8))
+        left = ttk.Frame(self.studio_frame, padding=(8, 8, 4, 8))
         left.pack(side="left", fill="y")
         self._build_param_panel(left)
 
         # --- Right: preview + footer ---
         # Pack order matters: the fixed-height footer must claim its space before
         # the expanding preview area, or it gets squeezed off the window.
-        right = ttk.Frame(self, padding=(4, 8, 8, 8))
+        right = ttk.Frame(self.studio_frame, padding=(4, 8, 8, 8))
         right.pack(side="right", fill="both", expand=True)
         self._build_footer(right)
         self._build_preview_panel(right)
 
+    # ---------------------------------------------------------------- home
+    def _build_home(self):
+        """Landing screen with the app's top-level actions."""
+        self.home_frame = ttk.Frame(self)
+
+        center = ttk.Frame(self.home_frame)
+        center.place(relx=0.5, rely=0.44, anchor="center")
+
+        ttk.Label(center, text="Lunar Terrain Studio",
+                  style="HomeTitle.TLabel").pack()
+        ttk.Label(center, text="Procedural lunar DEM generation, preview, and Unreal import",
+                  style="HomeSub.TLabel").pack(pady=(2, 26))
+
+        actions = [
+            ("Generate New Terrain",
+             "Set parameters, preview, and export a new DEM.",
+             self.enter_generate),
+            ("View an Existing Map",
+             "Open any .npy / .csv / .tif DEM in a preview window.",
+             self.view_map_file),
+            ("Send a Map to Unreal",
+             "Pick a DEM and build its Unreal Landscape heightmap.",
+             self.enter_send_to_unreal),
+        ]
+        for label, hint, command in actions:
+            ttk.Button(center, text=label, style="Home.TButton", width=30,
+                       command=command).pack(fill="x", ipady=8)
+            ttk.Label(center, text=hint, style="HomeHint.TLabel").pack(pady=(3, 16))
+
+    def show_home(self):
+        """Switches to the landing screen."""
+        self.studio_frame.pack_forget()
+        self.home_frame.pack(fill="both", expand=True)
+
+    def show_studio(self):
+        """Switches to the main studio, starting the preview on first entry."""
+        self.home_frame.pack_forget()
+        self.studio_frame.pack(fill="both", expand=True)
+        if not self._preview_started:
+            self._preview_started = True
+            self.request_preview()
+
+    def enter_generate(self):
+        self.show_studio()
+
+    def enter_send_to_unreal(self):
+        self.show_studio()
+        # Go straight to choosing the DEM to convert.
+        self.browse_unreal_source()
+
+    def view_map_file(self):
+        """Opens a file picker and shows the chosen map in the viewer window."""
+        path = filedialog.askopenfilename(
+            title="Select a map to view",
+            initialdir=GENERATOR_OUTPUT_DIR if os.path.isdir(GENERATOR_OUTPUT_DIR) else PROJECT_ROOT,
+            filetypes=[("DEM files", "*.npy *.csv *.txt *.tif *.tiff"),
+                       ("All files", "*.*")])
+        if path:
+            self.log(f"Viewing map: {path}")
+            self._open_viewer(path)
+
     # ---------------------------------------------------------------- left
     def _build_param_panel(self, parent):
-        ttk.Label(parent, text="Simulation Parameters", style="Header.TLabel").pack(anchor="w")
+        top_row = ttk.Frame(parent)
+        top_row.pack(fill="x", pady=(0, 6))
+        ttk.Button(top_row, text="⌂ Home", width=9,
+                   command=self.show_home).pack(side="left")
+        ttk.Label(top_row, text="Simulation Parameters",
+                  style="Header.TLabel").pack(side="left", padx=(8, 0))
 
         # Preset bar
         presets = ttk.Frame(parent)
@@ -583,8 +999,8 @@ class TerrainStudio(tk.Tk):
                   font=("Consolas", 9)).pack(fill="x", pady=(2, 6))
 
         ttk.Label(export_group, wraplength=wrap, justify="left", font=("Segoe UI", 8),
-                  text="Step 1 - run the simulation at the full grid size and write "
-                       "the DEM (.npy / .csv) to Procedural_generator/outputs.").pack(
+                  text="Step 1 - generate the full-resolution DEM "
+                       "(written to Procedural_generator/outputs).").pack(
             anchor="w", pady=(0, 4))
 
         self.generate_button = ttk.Button(export_group, text="Generate Full Resolution",
@@ -605,10 +1021,26 @@ class TerrainStudio(tk.Tk):
         ttk.Separator(export_group, orient="horizontal").pack(fill="x", pady=8)
 
         ttk.Label(export_group, wraplength=wrap, justify="left", font=("Segoe UI", 8),
-                  text="Step 2 - convert that DEM to Unreal's 16-bit .r16 heightmap, "
-                       "then spawn the Landscape actor in the running editor. "
-                       "Requires a full-resolution generation first.").pack(
+                  text="Step 2 - convert the source map below to a .r16 heightmap "
+                       "and spawn the Landscape actor.").pack(
             anchor="w", pady=(0, 4))
+
+        # Source map for Step 2: defaults to the last generation, or Browse to
+        # pick any .npy / .csv / .tif DEM.
+        ttk.Label(export_group, text="Source map", font=("Segoe UI", 8)).pack(anchor="w")
+        source_row = ttk.Frame(export_group)
+        source_row.pack(fill="x", pady=(2, 6))
+        self.unreal_source_var = tk.StringVar(value="(none - generate or browse)")
+        source_entry = ttk.Entry(source_row, textvariable=self.unreal_source_var,
+                                 state="readonly", font=("Consolas", 8))
+        source_entry.pack(side="left", fill="x", expand=True)
+        ttk.Button(source_row, text="Browse...", width=9,
+                   command=self.browse_unreal_source).pack(side="left", padx=(4, 0))
+        Tooltip(source_entry,
+                "DEM sent to Unreal: the last full-resolution generation, or any\n"
+                ".npy / .csv / .tif you pick with Browse (which also previews it).\n"
+                "Resolution comes from the Map Geometry field (GeoTIFFs use their\n"
+                "embedded scale).")
 
         self.dispatch_var = tk.BooleanVar(value=True)
         dispatch_check = ttk.Checkbutton(
@@ -632,7 +1064,7 @@ class TerrainStudio(tk.Tk):
 
         # --- Readouts (fill whatever space is left above the actions) ---
         ttk.Label(side, text="Surface Statistics", style="Header.TLabel").pack(anchor="w")
-        self.stats_text = tk.Text(side, height=19, width=34, font=("Consolas", 8),
+        self.stats_text = tk.Text(side, height=16, width=34, font=("Consolas", 8),
                                   relief="solid", borderwidth=1, wrap="none",
                                   background="#fbfbfb")
         self.stats_text.pack(fill="x", pady=(4, 10))
@@ -640,7 +1072,7 @@ class TerrainStudio(tk.Tk):
 
         ttk.Label(side, text="Unreal Landscape Topology",
                   style="Header.TLabel").pack(anchor="w")
-        self.topology_text = tk.Text(side, height=9, width=34, font=("Consolas", 8),
+        self.topology_text = tk.Text(side, height=8, width=34, font=("Consolas", 8),
                                      relief="solid", borderwidth=1, wrap="none",
                                      background="#fbfbfb")
         self.topology_text.pack(fill="x", pady=(4, 10))
@@ -932,9 +1364,15 @@ class TerrainStudio(tk.Tk):
                     self._invalidate_axes()
                     self.redraw()
                     self._refresh_derived_readouts()
+                    # Newly generated map becomes the default Unreal source.
+                    if 'elevation_npy' in self.exported_paths:
+                        self._set_unreal_source(self.exported_paths['elevation_npy'])
                 elif kind == "error":
                     self.log(payload, level="error")
                     self.status_var.set("Failed")
+                elif kind == "dialog":
+                    title, message = payload
+                    messagebox.showinfo(title, message)
                 elif kind == "cancelled":
                     self.log("Job cancelled.", level="warn")
                     self.status_var.set("Cancelled")
@@ -959,6 +1397,10 @@ class TerrainStudio(tk.Tk):
 
     def _log_from_worker(self, text, level=None):
         self._post("log", (text, level))
+
+    def _dialog_from_worker(self, title, message):
+        """Requests an info dialog on the main thread from a worker."""
+        self._post("dialog", (title, message))
 
     # =====================================================================
     # ACTIONS
@@ -1009,16 +1451,38 @@ class TerrainStudio(tk.Tk):
         base_name = self.export_name_var.get().strip() or "procedural_lunar_terrain"
         elevation_name = f"{base_name}_elevationMap"
 
+        # Describe the run and its outputs, and let the user confirm.
+        # Outputs land in a per-run subfolder named after the base filename.
         pixels = params['ROWS'] * params['COLS']
+        target_dir = os.path.join(GENERATOR_OUTPUT_DIR, base_name)
+        files = [
+            (f"{elevation_name}.npy",
+             "Elevation grid as a NumPy binary; the input for Send to Unreal."),
+        ]
+        if params['EXPORT_CSV']:
+            files += [
+                (f"{elevation_name}.csv",
+                 "Elevation grid as space-separated metres, one row per line."),
+                (f"{base_name}_soilMap.csv",
+                 "Soil/material mask (interior 1, border 0) for engine blending."),
+            ]
+        file_list = "\n".join(f"    {name}\n        {desc}" for name, desc in files)
+
+        message = (
+            f"Generate a {params['COLS']} x {params['ROWS']} px DEM "
+            f"({pixels / 1e6:.1f} megapixels) with seed {seed}.\n\n"
+            f"Files will be written to:\n    {target_dir}\n\n{file_list}"
+        )
         if pixels > 25_000_000:
-            proceed = messagebox.askokcancel(
-                "Large map",
-                f"{params['COLS']} x {params['ROWS']} is {pixels / 1e6:.1f} megapixels.\n\n"
-                "Crater placement and file writing scale with the map and can take a "
-                "while, using multiple gigabytes of RAM.\n\n"
-                "You can abort with the Stop button once it starts.\n\nContinue?")
-            if not proceed:
-                return
+            message += (
+                "\n\nThis map is large: generation and file writing may take a "
+                "while and use several GB of RAM. You can abort with the Stop "
+                "button once it starts."
+            )
+        message += "\n\nContinue?"
+
+        if not messagebox.askokcancel("Generate full-resolution DEM", message):
+            return
 
         def job():
             self._log_from_worker(
@@ -1039,19 +1503,60 @@ class TerrainStudio(tk.Tk):
 
         self._start_worker(job, "Generating full resolution...", cancellable=True)
 
+    SUPPORTED_DEM_EXTENSIONS = ('.npy', '.csv', '.txt', '.tif', '.tiff')
+
+    def _set_unreal_source(self, path):
+        """Sets the DEM that 'Send to Unreal' will convert, and updates the field."""
+        self.unreal_source_path = path
+        self.unreal_source_var.set(
+            os.path.basename(path) if path else "(none - generate or browse)")
+
+    def browse_unreal_source(self):
+        """Lets the user pick any supported DEM to send to Unreal."""
+        initial = GENERATOR_OUTPUT_DIR if os.path.isdir(GENERATOR_OUTPUT_DIR) else PROJECT_ROOT
+        path = filedialog.askopenfilename(
+            title="Select a DEM to send to Unreal",
+            initialdir=initial,
+            filetypes=[("DEM files", "*.npy *.csv *.txt *.tif *.tiff"),
+                       ("All files", "*.*")])
+        if path:
+            self._set_unreal_source(path)
+            self.log(f"Unreal source map: {path}")
+            # Show the picked map so the choice can be confirmed visually.
+            self._open_viewer(path)
+
+    def _open_viewer(self, path):
+        """Opens (or refreshes) the reused Map Viewer window on `path`."""
+        if self.map_viewer is None or not self.map_viewer.winfo_exists():
+            self.map_viewer = MapViewer(self, figure_dpi=self.figure_dpi)
+        self.map_viewer.show_path(path)
+        self.map_viewer.deiconify()
+        self.map_viewer.lift()
+
     def run_unreal_dispatch(self):
         if not LOADER_AVAILABLE:
             self.log("Unreal loader modules are not importable.", level="error")
             return
-        if self.full_result is None or 'elevation_npy' not in self.exported_paths:
-            self.log("Generate a full-resolution map first "
-                     "(the preview is not exported).", level="warn")
+
+        source_path = self.unreal_source_path
+        if not source_path:
+            self.log("Select a map to send: generate one, or use Browse.",
+                     level="warn")
+            return
+        if not os.path.exists(source_path):
+            self.log(f"Source map not found: {source_path}", level="error")
+            return
+        if os.path.splitext(source_path)[1].lower() not in self.SUPPORTED_DEM_EXTENSIONS:
+            self.log("Unsupported map format (use .npy, .csv, .txt, or .tif).",
+                     level="error")
             return
 
-        npy_path = self.exported_paths['elevation_npy']
+        npy_path = source_path
         resolution = self.params['RESOLUTION_M_PER_PX']
         dispatch = self.dispatch_var.get()
         output_dir = lunar_loader.BASE_OUTPUT_DIRECTORY
+
+        self.log(f"Sending to Unreal: {os.path.basename(source_path)}")
 
         def job():
             os.makedirs(output_dir, exist_ok=True)
@@ -1066,8 +1571,24 @@ class TerrainStudio(tk.Tk):
                 if line.strip():
                     self._log_from_worker(line)
 
-            self._log_from_worker(
-                f"Heightmap written: {output_dir}/{heightmap}", level="ok")
+            heightmap_path = os.path.normpath(f"{output_dir}/{heightmap}")
+            self._log_from_worker(f"Heightmap written: {heightmap_path}", level="ok")
+
+            # Import into Unreal is a manual step, so show the instructions and
+            # the exact file path in the studio (not only inside the editor).
+            self._dialog_from_worker(
+                "Heightmap ready for Unreal",
+                "The 16-bit heightmap has been written to:\n\n"
+                f"    {heightmap_path}\n\n"
+                "To apply it to a Landscape in Unreal:\n"
+                "    1. Enter Landscape Mode (Shift + 2).\n"
+                "    2. Select the Landscape actor. With 'Dispatch to running\n"
+                "       Unreal Editor' enabled the studio spawns one; otherwise\n"
+                "       create a Landscape sized to the heightmap.\n"
+                "    3. Right-click it in the Manage tab list and choose 'Import'.\n"
+                "    4. Set the Heightmap File to the path above.\n"
+                "    5. Click Import.\n\n"
+                "The relief is applied immediately.")
 
             if not dispatch:
                 self._progress_hook("Conversion complete (dispatch disabled)", 1.0)
