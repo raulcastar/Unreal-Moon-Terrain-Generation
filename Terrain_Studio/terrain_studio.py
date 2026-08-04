@@ -361,7 +361,7 @@ class MapViewer(tk.Toplevel):
     def __init__(self, master, figure_dpi=100):
         super().__init__(master)
         self.title("Map Viewer")
-        self.geometry("820x780")
+        self.geometry("820x780")   # restored size once un-maximized
         self.minsize(520, 500)
 
         # Plot area on top, an output log at the bottom (mirrors the studio's).
@@ -394,6 +394,21 @@ class MapViewer(tk.Toplevel):
         self._load_token = 0
         self._awaiting = None
         self._poll_job = None
+
+        # Open maximized (kept as a normal, movable window). Deferred so the
+        # window exists first; only on creation, so a later un-maximize sticks.
+        self.after(0, self._maximize)
+
+    def _maximize(self):
+        """Maximizes the viewer across platforms (movable, not borderless)."""
+        for attempt in (lambda: self.state("zoomed"),
+                        lambda: self.attributes("-zoomed", True)):
+            try:
+                attempt()
+                return
+            except tk.TclError:
+                continue
+        self.geometry(f"{self.winfo_screenwidth()}x{self.winfo_screenheight()}+0+0")
 
     def log(self, text, level=None):
         """Appends a line to the viewer's activity log."""
