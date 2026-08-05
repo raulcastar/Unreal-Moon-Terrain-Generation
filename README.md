@@ -55,6 +55,8 @@ choices:
   `.csv` / `.tif` DEM in a preview window: the shaded relief on top and an
   activity log below (like the studio). Loading runs in the background with a
   "Loading…" indicator, so large maps never freeze the window.
+- *Place Rocks & Paths* — scatters rocks as obstacles across a DEM while keeping
+  a connected corridor network the rover can always drive (see below).
 - *Send a Map to Unreal* — opens the studio and prompts for a DEM to convert.
 
 The `⌂ Home` button at the top of the parameter column returns here anytime.
@@ -111,6 +113,52 @@ Unreal needs the **Python Editor Script Plugin** with **Remote Execution**
 enabled in Project Settings. Applying the heightmap to the spawned Landscape is a
 manual step, described by the editor dialog (Landscape Mode → Manage →
 right-click → Import).
+
+---
+
+## Rock Field & Rover Paths
+
+*Place Rocks & Paths* on the home screen opens a planner that decides where to
+put rocks as obstacles on an elevation map, while guaranteeing the rover keeps a
+drivable route. The guarantee is structural, not statistical:
+
+1. **Craters** are the impassable hazard — closed depressions at least a set
+   depth deep, found by a priority-flood sink fill (so crater bowls are caught,
+   not ordinary valleys). The DEM is reflection-padded first so the map border
+   acts as a no-flow wall, which means craters straddling the edges are detected
+   too, not missed as if they drained off the map. Craters are impassable *and*
+   excluded from rock placement; everything else is drivable.
+2. The road network follows the **Voronoi diagram of the craters**: each crater
+   is a Voronoi *site*, and the roads are the Voronoi *edges* between them —
+   every edge is equidistant from the two craters it separates, so the rover
+   drives down the middle of the gaps. Pieces broken by a crater are bridged into
+   one connected network. (With fewer than two craters there is no diagram, so no
+   roads are drawn.)
+3. Those corridors, widened to the path width, are protected — no rock is ever
+   placed within half the path width of them. The lane therefore stays open no
+   matter how densely rocks are scattered elsewhere.
+
+Load any `.npy` / `.csv` / `.tif` DEM (or let it inherit the last generated map),
+set the path width, the crater depth threshold, and the rock population
+(coverage — capped at 0.05 — plus min/max scale and height ratio). The preview
+overlays craters (blue), the corridors (green) and their crater sites, and the
+rocks sized by footprint, with a legend; the log reports the rock count, the
+drivable and crater fractions, and whether the road network is one connected
+route. Planning runs on a grid capped at 512 px, so it stays fast on large DEMs
+and scales the results back to world metres.
+
+The parameter panel scrolls, with **⌂ Home**, **Update Preview**, **Stop**, and
+**Generate & Export** pinned in view at all times. *Stop* cancels a long plan at
+its next checkpoint while keeping the DEM loaded, so you can retune and retry.
+
+*Generate & Export* writes, into the same `Procedural_generator/outputs/<name>/`
+folder as the DEM:
+
+| File | Contents |
+| --- | --- |
+| `<name>_rocks.csv` | One row per rock: `id, row, col, x_m, y_m, scale, height_m` — an instance list to spawn as static meshes in Unreal (`scale` is the uniform mesh scale). |
+| `<name>_roverPaths.csv` | The rover corridor polylines: `path_id, x_m, y_m`. |
+| `<name>_obstacleMap.csv` | Optional full-resolution `0/1` rock-footprint raster (a mask aligned to the DEM). |
 
 ---
 
@@ -177,6 +225,7 @@ Terrain_Studio/
   terrain_studio.py            GUI: parameters, preview, export, Unreal dispatch
 Procedural_generator/
   terrain_core.py              Generation engine (shared by GUI and CLI)
+  rock_field.py                Rock placement & rover-corridor planning engine
   procedural_landscape_gen.py  CLI front-end
   config/*.yaml                Presets
   outputs/<name>/              Generated DEMs, one subfolder per run

@@ -42,6 +42,8 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import LightSource, Normalize
 from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 from matplotlib.ticker import MaxNLocator
 
 # =========================================================================
@@ -62,6 +64,7 @@ for path in (GENERATOR_DIR, LOADER_DIR):
         sys.path.insert(0, path)
 
 import terrain_core  # noqa: E402  (path setup must precede the import)
+import rock_field     # noqa: E402
 
 # The Unreal loader is optional: the studio still generates and previews terrain
 # on a machine without the loader dependencies available.
@@ -136,6 +139,37 @@ PREVIEW_SIZES = ["128", "192", "256", "384", "512", "768"]
 # the drag value is kept low to stay interactive (~60 ms/frame vs ~600 at full).
 SURFACE_MESH_DETAIL = 100
 SURFACE_DRAG_DETAIL = 36
+
+
+# Parameter schema for the Rock Field & Rover Paths window (same tuple layout as
+# PARAM_GROUPS). Keys map directly onto rock_field.DEFAULTS.
+ROCK_PARAM_GROUPS = [
+    ("Rover Path", [
+        ("PATH_WIDTH_M", "Path width (m)", 0.5, 30.0, 'float',
+         "Full width of the cleared rover corridor. No rock is placed within half\n"
+         "this distance of a road, so the whole lane stays drivable (this now\n"
+         "includes what used to be the separate path margin)."),
+    ]),
+    ("Crater Hazards", [
+        ("MIN_CRATER_DEPTH_M", "Min crater depth (m)", 0.05, 20.0, 'log',
+         "A closed depression at least this deep is treated as a crater: impassable\n"
+         "to the rover and excluded from rock placement.\n"
+         "Lower values flag shallower craters; higher values ignore them."),
+    ]),
+    ("Rock Population", [
+        ("ROCK_COVERAGE", "Coverage (fraction)", 0.0, 0.05, 'float',
+         "Target fraction of the drivable ground covered by rock footprints.\n"
+         "The resulting rock count is reported after each preview."),
+        ("ROCK_MIN_SCALE", "Min scale", 0.05, 10.0, 'log',
+         "Smallest rock scale: the uniform mesh scale, i.e. the metre radius of a\n"
+         "1 m base mesh."),
+        ("ROCK_MAX_SCALE", "Max scale", 0.1, 30.0, 'log',
+         "Largest rock scale. Scales are cubically biased towards the minimum."),
+        ("ROCK_HEIGHT_RATIO", "Height / scale", 0.1, 2.0, 'float',
+         "Rock height as a fraction of its radius, written to the instance list\n"
+         "for scaling the mesh in Unreal."),
+    ]),
+]
 
 
 # =========================================================================
@@ -361,8 +395,18 @@ class MapViewer(tk.Toplevel):
     def __init__(self, master, figure_dpi=100):
         super().__init__(master)
         self.title("Map Viewer")
-        self.geometry("820x780")   # restored size once un-maximized
-        self.minsize(520, 500)
+
+        # A large, centred window rather than full-screen. Maximised to a wide
+        # monitor, a square DEM would sit in a broad empty margin (once the title
+        # bar, taskbar and log are subtracted, the plot area is far wider than it
+        # is tall). A near-4:3 window keeps the preview big and crisp while the
+        # map stays close to the frame; the title-bar button still maximises it.
+        screen_w, screen_h = self.winfo_screenwidth(), self.winfo_screenheight()
+        width = min(1200, int(screen_w * 0.64))
+        height = min(1040, int(screen_h * 0.90))
+        self.geometry(f"{width}x{height}+{max(0, (screen_w - width) // 2)}+"
+                      f"{max(0, (screen_h - height) // 3)}")
+        self.minsize(560, 520)
 
         # Plot area on top, an output log at the bottom (mirrors the studio's).
         plot_frame = ttk.Frame(self)
@@ -394,21 +438,6 @@ class MapViewer(tk.Toplevel):
         self._load_token = 0
         self._awaiting = None
         self._poll_job = None
-
-        # Open maximized (kept as a normal, movable window). Deferred so the
-        # window exists first; only on creation, so a later un-maximize sticks.
-        self.after(0, self._maximize)
-
-    def _maximize(self):
-        """Maximizes the viewer across platforms (movable, not borderless)."""
-        for attempt in (lambda: self.state("zoomed"),
-                        lambda: self.attributes("-zoomed", True)):
-            try:
-                attempt()
-                return
-            except tk.TclError:
-                continue
-        self.geometry(f"{self.winfo_screenwidth()}x{self.winfo_screenheight()}+0+0")
 
     def log(self, text, level=None):
         """Appends a line to the viewer's activity log."""
@@ -511,6 +540,525 @@ class MapViewer(tk.Toplevel):
         self.canvas.draw_idle()
 
 
+class RockPlannerStudio(tk.Toplevel):
+    """
+    Window that turns an elevation map into a rock field with guaranteed rover
+    corridors. The user picks a DEM, tunes the rover and rock parameters, previews
+    the plan (traversability, corridors, rocks), and exports the placement files.
+
+    Computation runs in a worker thread and is drawn on the main thread through a
+    queue, mirroring the studio; the plan itself lives in the UI-free rock_field
+    module.
+    """
+
+    def __init__(self, master, figure_dpi=100, source_path=None, resolution=1.0):
+        super().__init__(master)
+        self.title("Rock Field & Rover Paths")
+        self.geometry("1180x820")     # restored size once un-maximized
+        self.minsize(900, 640)
+
+        self.figure_dpi = figure_dpi
+        self.dem = None               # Loaded elevation array
+        self.dem_path = None
+        self.result = None            # Last rock_field.build_rock_field() output
+        self.params = rock_field.default_params()
+        self.rows_widgets = {}
+
+        self._queue = queue.Queue()
+        self._worker = None
+        self._cancel = threading.Event()
+        self._preview_job = None
+
+        self._build_ui()
+        self._apply_params_to_widgets()
+        self.resolution_var.set(f"{resolution:g}")
+
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.after(80, self._drain_queue)
+        self.log("Rock planner ready. Load a DEM to begin.")
+
+        if source_path and os.path.exists(source_path):
+            self.load_dem(source_path)
+
+        self.after(0, self._maximize)
+
+    # ------------------------------------------------------------------ UI
+    def _build_ui(self):
+        panel_width = self.master.px(348) if hasattr(self.master, "px") else 348
+        left = ttk.Frame(self, width=panel_width, padding=(8, 8, 4, 8))
+        left.pack(side="left", fill="y")
+        left.pack_propagate(False)   # honour the fixed width; never collapse
+
+        # Top bar: Home + title, always visible above the scroll area.
+        top_bar = ttk.Frame(left)
+        top_bar.pack(fill="x")
+        ttk.Button(top_bar, text="⌂ Home", width=9, command=self.go_home).pack(side="left")
+        ttk.Label(top_bar, text="Rock Field & Rover Paths",
+                  font=("Segoe UI Semibold", 11)).pack(side="left", padx=(8, 0))
+
+        # Action bar pinned to the bottom, packed BEFORE the scroll area so it
+        # always keeps its space and the buttons stay reachable at any height.
+        actions = ttk.Frame(left)
+        actions.pack(side="bottom", fill="x", pady=(6, 0))
+        self.preview_button = ttk.Button(actions, text="Update Preview",
+                                         command=self.request_preview)
+        self.preview_button.pack(fill="x")
+        self.stop_button = ttk.Button(actions, text="Stop", command=self.stop_job)
+        self.stop_button.pack(fill="x", pady=(4, 0))
+        self.stop_button.state(["disabled"])
+        Tooltip(self.stop_button,
+                "Stops the running plan at its next checkpoint (slope, corridors, or\n"
+                "rock placement). The DEM stays loaded so you can retune and retry.")
+        self.export_button = ttk.Button(actions, text="Generate & Export",
+                                        style="Accent.TButton", command=self.export_plan)
+        self.export_button.pack(fill="x", pady=(4, 0))
+        ttk.Button(actions, text="Open output folder",
+                   command=self.open_output_folder).pack(fill="x", pady=(4, 0))
+
+        # Scrollable parameter area between the top bar and the action bar.
+        scroll_host = ttk.Frame(left)
+        scroll_host.pack(side="top", fill="both", expand=True, pady=(8, 0))
+        canvas = tk.Canvas(scroll_host, highlightthickness=0, borderwidth=0,
+                           background=self.cget("background"))
+        scrollbar = ttk.Scrollbar(scroll_host, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas)
+        inner.bind("<Configure>",
+                   lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        window = canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(window, width=e.width))
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        ttk.Label(inner, wraplength=panel_width - self.master.px(40)
+                  if hasattr(self.master, "px") else panel_width - 40,
+                  justify="left", font=("Segoe UI", 8), foreground="#555555",
+                  text="Scatters rocks as obstacles across the drivable terrain while "
+                       "keeping a connected corridor network the rover can always "
+                       "traverse.").pack(anchor="w", pady=(0, 8), fill="x")
+
+        # Source DEM
+        source_group = ttk.Labelframe(inner, text="Source DEM", padding=(8, 4, 8, 8),
+                                      style="Group.TLabelframe")
+        source_group.pack(fill="x", pady=(0, 8))
+        self.source_var = tk.StringVar(value="(none - load a DEM)")
+        ttk.Entry(source_group, textvariable=self.source_var, state="readonly",
+                  font=("Consolas", 8)).pack(fill="x")
+        res_row = ttk.Frame(source_group)
+        res_row.pack(fill="x", pady=(6, 0))
+        ttk.Button(res_row, text="Load DEM...", command=self.browse_dem).pack(
+            side="left", fill="x", expand=True)
+        ttk.Label(res_row, text="  Resolution (m/px)", font=("Segoe UI", 8)).pack(side="left")
+        self.resolution_var = tk.StringVar(value="1")
+        res_entry = ttk.Entry(res_row, textvariable=self.resolution_var, width=7,
+                              justify="right", font=("Consolas", 9))
+        res_entry.pack(side="left", padx=(4, 0))
+        res_entry.bind("<Return>", lambda e: self.request_preview())
+        res_entry.bind("<FocusOut>", lambda e: self.request_preview())
+        Tooltip(res_entry,
+                "Ground metres per DEM pixel. Sets the real-world scale, so the path\n"
+                "width, crater depth and rock scale are all interpreted in metres.\n"
+                "Defaults to the studio's Map Geometry resolution.")
+
+        # Parameters
+        for group_name, specs in ROCK_PARAM_GROUPS:
+            group = ttk.Labelframe(inner, text=group_name, padding=(8, 4, 8, 8),
+                                   style="Group.TLabelframe")
+            group.pack(fill="x", pady=(0, 8))
+            for spec in specs:
+                self.rows_widgets[spec[0]] = ParamRow(group, spec, self._on_param_change)
+
+        seed_group = ttk.Labelframe(inner, text="Determinism", padding=(8, 4, 8, 8),
+                                    style="Group.TLabelframe")
+        seed_group.pack(fill="x", pady=(0, 8))
+        seed_row = ttk.Frame(seed_group)
+        seed_row.pack(fill="x")
+        ttk.Label(seed_row, text="Random seed", font=("Segoe UI", 8)).pack(side="left")
+        self.seed_var = tk.StringVar(value="1")
+        seed_entry = ttk.Entry(seed_row, textvariable=self.seed_var, width=11,
+                               justify="right", font=("Consolas", 9))
+        seed_entry.pack(side="right")
+        seed_entry.bind("<Return>", lambda e: self.request_preview())
+        seed_entry.bind("<FocusOut>", lambda e: self.request_preview())
+
+        self.auto_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(inner, text="Auto-update preview on change",
+                        variable=self.auto_var).pack(anchor="w", pady=(0, 8))
+
+        # Export options (the buttons themselves live in the pinned action bar).
+        export_group = ttk.Labelframe(inner, text="Export", padding=(8, 4, 8, 8),
+                                      style="Group.TLabelframe")
+        export_group.pack(fill="x", pady=(0, 4))
+        ttk.Label(export_group, text="Base filename", font=("Segoe UI", 8)).pack(anchor="w")
+        self.export_name_var = tk.StringVar(value="procedural_lunar_terrain")
+        ttk.Entry(export_group, textvariable=self.export_name_var,
+                  font=("Consolas", 9)).pack(fill="x", pady=(2, 6))
+        self.obstacle_map_var = tk.BooleanVar(value=False)
+        obstacle_check = ttk.Checkbutton(
+            export_group, text="Also write full-res obstacle map (large)",
+            variable=self.obstacle_map_var)
+        obstacle_check.pack(anchor="w")
+        Tooltip(obstacle_check,
+                "Writes a full-resolution 0/1 rock-footprint raster alongside the\n"
+                "instance list. Useful as a mask, but large for big DEMs.")
+
+        # Mouse-wheel scrolling over the panel, bound locally (not app-wide) so it
+        # never fights the main studio's own wheel scrolling.
+        self._bind_mousewheel(inner, canvas)
+        self._bind_mousewheel(canvas, canvas)
+
+        # Right: plot on top, log at bottom.
+        right = ttk.Frame(self)
+        right.pack(side="right", fill="both", expand=True)
+
+        log_frame = ttk.Frame(right, padding=(8, 4, 8, 8))
+        ttk.Label(log_frame, text="Activity log",
+                  font=("Segoe UI Semibold", 10)).pack(anchor="w")
+        self.status_var = tk.StringVar(value="Idle")
+        self.progress = ttk.Progressbar(log_frame, mode="determinate", maximum=1.0)
+        self.progress.pack(fill="x", pady=(4, 4))
+        self.log_text = tk.Text(log_frame, height=7, font=("Consolas", 8), wrap="word",
+                                relief="solid", borderwidth=1, background="#1e1e1e",
+                                foreground="#d4d4d4", insertbackground="#d4d4d4")
+        self.log_text.pack(fill="x")
+        self.log_text.tag_configure("warn", foreground="#e6c07b")
+        self.log_text.tag_configure("error", foreground="#e06c75")
+        self.log_text.tag_configure("ok", foreground="#98c379")
+        self.log_text.configure(state="disabled")
+        log_frame.pack(side="bottom", fill="x")
+
+        plot_frame = ttk.Frame(right)
+        self.figure = Figure(figsize=(7.6, 6.4), dpi=self.figure_dpi, layout="constrained")
+        self.canvas = FigureCanvasTkAgg(self.figure, master=plot_frame)
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        NavigationToolbar2Tk(self.canvas, plot_frame).update()
+        plot_frame.pack(side="top", fill="both", expand=True)
+        self._show_message("Load a DEM to plan a rock field.")
+
+    def _maximize(self):
+        for attempt in (lambda: self.state("zoomed"),
+                        lambda: self.attributes("-zoomed", True)):
+            try:
+                attempt()
+                return
+            except tk.TclError:
+                continue
+        self.geometry(f"{self.winfo_screenwidth()}x{self.winfo_screenheight()}+0+0")
+
+    def _bind_mousewheel(self, widget, canvas):
+        """Binds vertical wheel scrolling on `widget` and all its descendants."""
+        widget.bind("<MouseWheel>",
+                    lambda e: canvas.yview_scroll(int(-e.delta / 120), "units"))
+        for child in widget.winfo_children():
+            self._bind_mousewheel(child, canvas)
+
+    def go_home(self):
+        """Closes the planner and returns to the studio's home screen."""
+        self._cancel.set()
+        master = self.master
+        self.destroy()
+        try:
+            master.show_home()
+            master.deiconify()
+            master.lift()
+        except Exception:
+            pass
+
+    def stop_job(self):
+        """Requests cooperative cancellation of the running plan/export."""
+        if not self._busy():
+            return
+        self._cancel.set()
+        self.stop_button.state(["disabled"])
+        self.status_var.set("Cancelling...")
+        self.log("Cancellation requested; stopping at the next checkpoint...",
+                 level="warn")
+
+    # ------------------------------------------------------------ params
+    def _apply_params_to_widgets(self):
+        for key, row in self.rows_widgets.items():
+            row.set(self.params[key])
+
+    def _collect_params(self):
+        for key, row in self.rows_widgets.items():
+            self.params[key] = row.get()
+        self.params = rock_field.coerce_params(self.params)
+        return self.params
+
+    def _on_param_change(self):
+        if self.auto_var.get():
+            self.request_preview(debounce_ms=500)
+
+    def _seed(self):
+        text = self.seed_var.get().strip()
+        try:
+            return int(text) if text else None
+        except ValueError:
+            return None
+
+    def _resolution(self):
+        try:
+            return max(1e-6, float(self.resolution_var.get()))
+        except ValueError:
+            return 1.0
+
+    # --------------------------------------------------------------- I/O
+    def browse_dem(self):
+        path = filedialog.askopenfilename(
+            parent=self, title="Select a DEM for rock planning",
+            initialdir=GENERATOR_OUTPUT_DIR if os.path.isdir(GENERATOR_OUTPUT_DIR) else PROJECT_ROOT,
+            filetypes=[("DEM files", "*.npy *.csv *.txt *.tif *.tiff"),
+                       ("All files", "*.*")])
+        if path:
+            self.load_dem(path)
+
+    def load_dem(self, path):
+        """Loads the DEM off-thread, then triggers a preview."""
+        self.source_var.set(os.path.basename(path))
+        self.dem_path = path
+        self.log(f"Loading DEM: {os.path.basename(path)} ...")
+        self._show_message(f"Loading {os.path.basename(path)} ...")
+
+        def worker():
+            try:
+                data = load_dem_array(path)
+                self._queue.put(("dem", data))
+            except Exception as exc:
+                self._queue.put(("error", f"Could not load DEM: {exc}"))
+        threading.Thread(target=worker, daemon=True).start()
+
+    # ---------------------------------------------------------- preview
+    def request_preview(self, debounce_ms=0):
+        if self.dem is None:
+            return
+        if self._preview_job:
+            self.after_cancel(self._preview_job)
+            self._preview_job = None
+        if debounce_ms:
+            self._preview_job = self.after(debounce_ms, self._launch)
+        else:
+            self._launch()
+
+    def _busy(self):
+        return self._worker is not None and self._worker.is_alive()
+
+    def _launch(self, export=False):
+        self._preview_job = None
+        if self.dem is None:
+            self.log("Load a DEM first.", level="warn")
+            return
+        if self._busy():
+            self.log("A job is already running; wait for it to finish.", level="warn")
+            return
+
+        self._collect_params()
+        params = dict(self.params)
+        seed = self._seed()
+        resolution = self._resolution()
+        dem = self.dem
+        do_map = self.obstacle_map_var.get()
+        base_name = self.export_name_var.get().strip() or "procedural_lunar_terrain"
+
+        self._cancel.clear()
+        self.preview_button.state(["disabled"])
+        self.export_button.state(["disabled"])
+        self.stop_button.state(["!disabled"])
+        self.status_var.set("Exporting..." if export else "Planning...")
+
+        def worker():
+            try:
+                result = rock_field.build_rock_field(
+                    dem, resolution, params, seed=seed,
+                    progress=lambda m, f: self._queue.put(("progress", (m, f))),
+                    cancel_check=self._cancel.is_set)
+                self._queue.put(("result", result))
+                if export:
+                    written = rock_field.export_rock_field(
+                        result, GENERATOR_OUTPUT_DIR, f"{base_name}_elevationMap",
+                        export_obstacle_map=do_map,
+                        progress=lambda m, f: self._queue.put(("progress", (m, f))),
+                        cancel_check=self._cancel.is_set)
+                    self._queue.put(("written", written))
+            except terrain_core.TerrainCancelled:
+                self._queue.put(("cancelled", None))
+            except Exception:
+                self._queue.put(("error", traceback.format_exc()))
+            finally:
+                self._queue.put(("done", None))
+
+        self._worker = threading.Thread(target=worker, daemon=True)
+        self._worker.start()
+
+    def export_plan(self):
+        if self.dem is None:
+            self.log("Load a DEM first.", level="warn")
+            return
+        self._collect_params()
+        base_name = self.export_name_var.get().strip() or "procedural_lunar_terrain"
+        group_dir = os.path.join(GENERATOR_OUTPUT_DIR, base_name)
+        files = [f"{base_name}_rocks.csv    - rock instances (id, row, col, x_m, y_m, scale, height_m)",
+                 f"{base_name}_roverPaths.csv - rover corridor polylines (path_id, x_m, y_m)"]
+        if self.obstacle_map_var.get():
+            files.append(f"{base_name}_obstacleMap.csv - full-resolution 0/1 rock mask")
+        message = ("Plan the rock field and write:\n\n    " + "\n    ".join(files)
+                   + f"\n\nInto:\n    {group_dir}\n\nContinue?")
+        if not messagebox.askokcancel("Generate & export rock field", message, parent=self):
+            return
+        self._launch(export=True)
+
+    def open_output_folder(self):
+        base_name = self.export_name_var.get().strip() or "procedural_lunar_terrain"
+        target = os.path.join(GENERATOR_OUTPUT_DIR, base_name)
+        target = target if os.path.isdir(target) else GENERATOR_OUTPUT_DIR
+        os.makedirs(target, exist_ok=True)
+        try:
+            os.startfile(target)  # noqa: S606 - Windows shell open
+        except AttributeError:  # pragma: no cover - non-Windows fallback
+            subprocess.Popen(["xdg-open", target])
+
+    # --------------------------------------------------------- main pump
+    def _drain_queue(self):
+        try:
+            while True:
+                kind, payload = self._queue.get_nowait()
+                if kind == "dem":
+                    self.dem = payload
+                    self.log(f"Loaded DEM {payload.shape[1]} x {payload.shape[0]} px.",
+                             level="ok")
+                    self.request_preview()
+                elif kind == "progress":
+                    message, fraction = payload
+                    self.status_var.set(message)
+                    self.progress.configure(value=fraction)
+                elif kind == "result":
+                    self.result = payload
+                    self._render(payload)
+                    self._log_result(payload)
+                elif kind == "written":
+                    self.log("Rock field written:", level="ok")
+                    for label, path in payload.items():
+                        self.log(f"  {label}: {path}")
+                elif kind == "cancelled":
+                    self.log("Job cancelled.", level="warn")
+                    self.status_var.set("Cancelled")
+                elif kind == "error":
+                    self.log(payload, level="error")
+                    self.status_var.set("Failed")
+                    self._show_message("Rock planning failed.\nSee the activity log.")
+                elif kind == "done":
+                    self.preview_button.state(["!disabled"])
+                    self.export_button.state(["!disabled"])
+                    self.stop_button.state(["disabled"])
+                    if self.status_var.get() not in ("Failed", "Cancelled"):
+                        self.status_var.set("Idle")
+                    self.progress.configure(value=0)
+        except queue.Empty:
+            pass
+        self.after(80, self._drain_queue)
+
+    def _log_result(self, result):
+        self.log(
+            f"Placed {result['rock_count']} rocks. "
+            f"Drivable {result['drivable_frac'] * 100:.1f}% of map "
+            f"(craters cover {result['crater_frac'] * 100:.1f}%, impassable), "
+            f"free after rocks {result['free_frac'] * 100:.1f}%.")
+        if result['road_segments'] == 0:
+            self.log("Fewer than two craters found, so no Voronoi roads were laid. "
+                     "Lower the crater depth threshold to catch shallower craters.",
+                     level="warn")
+        elif result['connected']:
+            self.log("Voronoi road network is one connected route.", level="ok")
+        else:
+            self.log("The Voronoi road network is split by impassable terrain into "
+                     "more than one piece.", level="warn")
+
+    def log(self, text, level=None):
+        self.log_text.configure(state="normal")
+        self.log_text.insert("end", text.rstrip() + "\n", level or ())
+        self.log_text.see("end")
+        self.log_text.configure(state="disabled")
+
+    # ---------------------------------------------------------- drawing
+    def _show_message(self, text):
+        self.figure.clear()
+        axes = self.figure.add_subplot(111)
+        axes.axis("off")
+        axes.text(0.5, 0.5, text, ha="center", va="center", fontsize=12,
+                  transform=axes.transAxes)
+        self.canvas.draw_idle()
+
+    def _render(self, result):
+        """Draws the hillshade with the impassable, corridor and rock overlays."""
+        self.figure.clear()
+        axes = self.figure.add_subplot(111)
+
+        plan = result['plan_elevation']
+        res_row, res_col = result['plan_res']
+        relief = max(float(np.ptp(plan)), 1e-6)
+        light = LightSource(azdeg=315, altdeg=45)
+        vert_exag = (0.1 * max(plan.shape)) / relief
+        shaded = light.shade(plan, cmap=matplotlib.colormaps["gray"],
+                             blend_mode="soft", vert_exag=vert_exag)
+        axes.imshow(shaded, origin="upper", interpolation="bilinear")
+
+        # Craters: impassable and off-limits for rocks. Fill value 0.0 so the
+        # winter colormap paints them blue (its 1.0 end is green, which would
+        # clash with the corridors).
+        crater = result['crater_mask']
+        axes.imshow(np.where(crater, 0.0, np.nan), origin="upper",
+                    cmap="winter", alpha=0.45, vmin=0, vmax=1)
+
+        # Guaranteed corridors.
+        for rr, cc in result['paths']:
+            axes.plot(cc, rr, color="#39d353", linewidth=1.4, alpha=0.9)
+
+        # Markers: crater centres, i.e. the Voronoi sites.
+        marker_label = result.get('marker_label', 'Waypoint')
+        if result.get('markers'):
+            mr = [r for r, _ in result['markers']]
+            mc = [c for _, c in result['markers']]
+            axes.plot(mc, mr, "o", color="#58a6ff", markersize=5,
+                      markeredgecolor="white", linewidth=0, label=marker_label)
+
+        # Rocks, sized by footprint radius (points^2 area at the display scale).
+        rocks = result['rocks_px']
+        if len(rocks):
+            axes.scatter(rocks[:, 1], rocks[:, 0], s=np.maximum(2, (rocks[:, 2] * 1.6) ** 2),
+                         facecolor="#d9a066", edgecolor="#3a2a17", linewidths=0.2,
+                         alpha=0.8, label="Rocks")
+
+        rows, cols = result['plan_shape']
+        if result['road_segments'] == 0:
+            status = "no craters found for roads"
+        elif result['connected']:
+            status = "connected route OK"
+        else:
+            status = "route split by terrain"
+        axes.set_title(
+            f"Rock field & Voronoi rover corridors  -  {result['rock_count']} rocks, "
+            f"{result['drivable_frac'] * 100:.0f}% drivable, {status}\n"
+            f"craters cover {result['crater_frac'] * 100:.0f}%   |   "
+            f"planning grid {cols} x {rows} px  ({res_col:.2f} m/px)", fontsize=9)
+        axes.set_xlabel("planning pixels")
+        axes.set_ylabel("planning pixels")
+
+        legend_handles = [
+            Line2D([0], [0], color="#39d353", lw=2, label="Rover corridor"),
+            Line2D([0], [0], marker="o", color="#58a6ff", lw=0,
+                   markeredgecolor="white", label=marker_label),
+            Patch(facecolor="#d9a066", edgecolor="#3a2a17", label="Rock"),
+            Patch(facecolor="blue", alpha=0.45, label="Crater"),
+        ]
+        axes.legend(handles=legend_handles, loc="upper right", fontsize=7,
+                    framealpha=0.9)
+        self.canvas.draw_idle()
+
+    # --------------------------------------------------------- shutdown
+    def _on_close(self):
+        self._cancel.set()
+        self.destroy()
+
+
 # =========================================================================
 # MAIN APPLICATION
 # =========================================================================
@@ -550,6 +1098,7 @@ class TerrainStudio(tk.Tk):
         self.exported_paths = {}
         self.unreal_source_path = None  # DEM chosen for "Send to Unreal"
         self.map_viewer = None          # Reused MapViewer window
+        self.rock_planner = None         # Reused RockPlannerStudio window
         self.stale_axes = {'relief': True, 'surface': True, 'slope': True}
         self._surface_artists = None   # (full detail, drag detail) collections
         self._redraw_job = None
@@ -769,6 +1318,9 @@ class TerrainStudio(tk.Tk):
             ("View an Existing Map",
              "Open any .npy / .csv / .tif DEM in a preview window.",
              self.view_map_file),
+            ("Place Rocks & Paths",
+             "Scatter rocks on a DEM while keeping drivable rover corridors.",
+             self.enter_rock_planner),
             ("Send a Map to Unreal",
              "Pick a DEM and build its Unreal Landscape heightmap.",
              self.enter_send_to_unreal),
@@ -798,6 +1350,23 @@ class TerrainStudio(tk.Tk):
         self.show_studio()
         # Go straight to choosing the DEM to convert.
         self.browse_unreal_source()
+
+    def enter_rock_planner(self):
+        """Opens the rock-field planner, seeded with the last generated / chosen DEM."""
+        source = None
+        if self.exported_paths.get('elevation_npy'):
+            source = self.exported_paths['elevation_npy']
+        elif self.unreal_source_path:
+            source = self.unreal_source_path
+        if self.rock_planner is None or not self.rock_planner.winfo_exists():
+            self.rock_planner = RockPlannerStudio(
+                self, figure_dpi=self.figure_dpi, source_path=source,
+                resolution=self.params.get('RESOLUTION_M_PER_PX', 1.0))
+        else:
+            self.rock_planner.deiconify()
+            if source:
+                self.rock_planner.load_dem(source)
+        self.rock_planner.lift()
 
     def view_map_file(self):
         """Opens a file picker and shows the chosen map in the viewer window."""
