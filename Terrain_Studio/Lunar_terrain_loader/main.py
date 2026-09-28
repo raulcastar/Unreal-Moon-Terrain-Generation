@@ -16,9 +16,24 @@ import terrain_files_generator
 # --- Global Directory Configuration ---
 # Absolute paths are normalized with forward slashes to prevent escape character 
 # errors when passing these string paths over the network to Unreal Engine.
+# Source DEMs and generated files live at the repository root, two levels up,
+# so every tool in the studio reads from and writes to the same two folders.
 BASE_DIRECTORY        = os.path.dirname(os.path.abspath(__file__)).replace("\\", "/")
-BASE_MAPS_DIRECTORY   = os.path.join(BASE_DIRECTORY, "maps").replace("\\", "/")
-BASE_OUTPUT_DIRECTORY = os.path.join(BASE_DIRECTORY, "outputs").replace("\\", "/")
+PROJECT_ROOT          = os.path.dirname(os.path.dirname(BASE_DIRECTORY)).replace("\\", "/")
+BASE_MAPS_DIRECTORY   = os.path.join(PROJECT_ROOT, "input_maps").replace("\\", "/")
+BASE_OUTPUT_DIRECTORY = os.path.join(PROJECT_ROOT, "outputs").replace("\\", "/")
+
+
+def output_group_directory(source_map_filepath):
+    """
+    Resolves the per-map output folder for a DEM: <root>/outputs/<group>, where
+    <group> is the filename without its extension and without the
+    '_elevationMap' tag. terrain_core and rock_field derive their folder the
+    same way, so a DEM, its rock field, and its .r16 heightmap end up together.
+    """
+    stem = os.path.splitext(os.path.basename(source_map_filepath))[0]
+    group = stem.replace("_elevationMap", "")
+    return os.path.join(BASE_OUTPUT_DIRECTORY, group).replace("\\", "/")
 
 
 def generate_lunar_terrain(input_map_filepath, output_map_directory, input_resolution):
@@ -32,13 +47,23 @@ def generate_lunar_terrain(input_map_filepath, output_map_directory, input_resol
         input_resolution (float): Spatial resolution in meters per pixel.
         
     Returns:
-        tuple: (landscape_config, interpolation_resolution, z_axis_scale, heightmap_filename)
+        tuple: (landscape_config, interpolation_resolution, z_axis_scale, heightmap_filename, z_offset)
     """
     
     # =========================================================================
     # 1. READ ORIGINAL DEM
     # =========================================================================
     raw_elevation_data = terrain_files_generator.terrain_file_reading(input_map_filepath, input_resolution)
+
+    # Solve the Landscape vertical transform from the surface's real extent,
+    # before the conversion below rescales it into 16-bit scalar space. Both
+    # numbers are needed: the scale sets how tall the terrain is, the offset
+    # sets where it sits, and getting either wrong moves the surface.
+    elev_min, elev_max = terrain_files_generator.metric_extent(raw_elevation_data)
+    z_axis_scale_metric, z_offset = terrain_files_generator.solve_landscape_z_transform(
+        elev_min, elev_max)
+    print(f"[*] Surface extent: {elev_min:.3f} .. {elev_max:.3f} m "
+          f"(relief {elev_max - elev_min:.3f} m)")
     
     # =========================================================================
     # 2. UNREAL FORMAT CONVERSION
@@ -73,7 +98,16 @@ def generate_lunar_terrain(input_map_filepath, output_map_directory, input_resol
     # Extract dimensions from the cached header
     header_values = [float(val) for val in file_header.split()]
     dem_width, dem_height, interpolation_resolution, z_axis_scale = header_values
-    
+
+    # The header's z_axis_scale was derived from the absolute maximum, which
+    # only holds for a heightmap that is NOT re-normalised. create_unreal_heightmap
+    # stretches the data across the full 16-bit range, so use the scale solved
+    # from the relief instead -- otherwise the landscape is exaggerated by
+    # (65535 * z_axis_scale / 128) / relief.
+    z_axis_scale = z_axis_scale_metric
+    print(f"[*] Landscape transform: Scale.Z = {z_axis_scale:.4f}, "
+          f"actor Z = {z_offset:.3f} m (midpoint of the surface)")
+
     # Determine the most memory-efficient landscape component grid
     landscape_config = terrain_files_generator.calculate_optimal_landscape_config(dem_width, dem_height)
     
@@ -90,10 +124,11 @@ def generate_lunar_terrain(input_map_filepath, output_map_directory, input_resol
     # Construct the exact resulting filename to pass to the Unreal receiver script
     heightmap_filename = f"{filename_without_extension}_heightmap.r16"
 
-    return landscape_config, interpolation_resolution, z_axis_scale, heightmap_filename
+    return landscape_config, interpolation_resolution, z_axis_scale, heightmap_filename, z_offset
 
 
-def send_to_unreal(landscape_config, interpolation_resolution, z_axis_scale, heightmap_filename):
+def send_to_unreal(landscape_config, interpolation_resolution, z_axis_scale, heightmap_filename,
+                   z_offset=0.0, output_directory=None):
     """
     Initializes a network broadcast to locate a running Unreal Editor, connects to 
     the first available node, and injects the Python execution command.
@@ -119,8 +154,11 @@ def send_to_unreal(landscape_config, interpolation_resolution, z_axis_scale, hei
             # Establish a direct command socket to the target Engine instance
             remote_exec.open_command_connection(node_id)
             
-            # Construct the absolute path for the targeted binary file
-            target_r16_path = f"{BASE_OUTPUT_DIRECTORY}/{heightmap_filename}"
+            # Construct the absolute path for the targeted binary file. The
+            # heightmap sits in the folder generate_lunar_terrain wrote it to,
+            # which is per-map, not the shared outputs root.
+            heightmap_directory = (output_directory or BASE_OUTPUT_DIRECTORY).replace("\\", "/")
+            target_r16_path = f"{heightmap_directory}/{heightmap_filename}"
             
             # --- Remote Command Construction ---
             # Append local directory to Unreal's sys.path, reload the target module to ensure 
@@ -130,9 +168,9 @@ def send_to_unreal(landscape_config, interpolation_resolution, z_axis_scale, hei
                 f"sys.path.append('{BASE_DIRECTORY}') if '{BASE_DIRECTORY}' not in sys.path else None; "
                 f"import unreal_terrain_generator; "
                 f"import importlib; importlib.reload(unreal_terrain_generator); "
-                f"unreal_terrain_generator.create_landscape({landscape_config}, {interpolation_resolution}, {z_axis_scale}, '{target_r16_path}')"
+                f"unreal_terrain_generator.create_landscape({landscape_config}, {interpolation_resolution}, {z_axis_scale}, '{target_r16_path}', {0.0}, {0.0}, {z_offset})"
             )
-            
+
             remote_exec.run_command(command)
             print(f"[+] Success: Command dispatched to Node [{node_id}]")
     else:
@@ -146,31 +184,40 @@ def send_to_unreal(landscape_config, interpolation_resolution, z_axis_scale, hei
 # EXECUTION ENTRY POINT 
 # =========================================================================
 if __name__ == "__main__":
-    # Ensure the target export directory exists before execution to prevent I/O crashes
-    if not os.path.exists(BASE_OUTPUT_DIRECTORY):
-        os.makedirs(BASE_OUTPUT_DIRECTORY)
-
     # Establish fallback defaults for direct script execution
     input_map_filepath   = os.path.join(BASE_MAPS_DIRECTORY, "procedural_lunar_terrain_1_elevationMap.npy").replace("\\", "/") 
-    output_map_directory = BASE_OUTPUT_DIRECTORY 
+    output_map_directory = None
     input_resolution     = 1.0
 
-    # Override defaults if executed with arguments via CLI (e.g., from a batch file or UI tool)
-    if len(sys.argv) >= 4:
+    # Override defaults if executed with arguments via CLI (e.g., from a batch
+    # file or UI tool). Each argument stands on its own, so passing only the map
+    # is valid: the destination then falls back to that map's output folder.
+    #   main.py <map> [output_dir] [resolution]
+    if len(sys.argv) >= 2:
         input_map_filepath   = sys.argv[1].replace("\\", "/")
+    if len(sys.argv) >= 3:
         output_map_directory = sys.argv[2].replace("\\", "/")
+    if len(sys.argv) >= 4:
         input_resolution     = float(sys.argv[3])
+
+    # Default the destination to this map's folder under the root outputs dir.
+    if not output_map_directory:
+        output_map_directory = output_group_directory(input_map_filepath)
+
+    # Ensure the target export directory exists before execution to prevent I/O crashes
+    os.makedirs(output_map_directory, exist_ok=True)
 
     print("\n========================================================")
     print(" LUNAR TERRAIN GENERATOR - INITIATING PIPELINE")
     print("========================================================\n")
 
     # Step 1: Execute local array math and binary generation
-    landscape_config, interpolation_resolution, z_axis_scale, heightmap_filename = generate_lunar_terrain(
+    landscape_config, interpolation_resolution, z_axis_scale, heightmap_filename, z_offset = generate_lunar_terrain(
         input_map_filepath, 
         output_map_directory, 
         input_resolution
     )
     
     # Step 2: Dispatch the compiled configuration to the Unreal Engine host
-    send_to_unreal(landscape_config, interpolation_resolution, z_axis_scale, heightmap_filename)
+    send_to_unreal(landscape_config, interpolation_resolution, z_axis_scale, heightmap_filename,
+                   z_offset=z_offset, output_directory=output_map_directory)

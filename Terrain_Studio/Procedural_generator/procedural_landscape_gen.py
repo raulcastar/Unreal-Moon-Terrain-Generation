@@ -2,7 +2,7 @@
 Command-line front-end for the procedural lunar terrain pipeline.
 
 The generation logic lives in `terrain_core`, shared with the GUI
-(`Terrain_Studio/terrain_studio.py`). This module handles configuration loading,
+(`../terrain_studio.py`). This module handles configuration loading,
 file output, and an optional Matplotlib preview.
 """
 
@@ -18,18 +18,25 @@ import terrain_core
 # CONFIGURATION
 # =========================================================================
 
+# Everything the studio produces goes to one folder at the repository root, so
+# the CLI defaults there too rather than to a directory relative to the shell.
+GENERATOR_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(GENERATOR_DIR))
+DEFAULT_OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
+DEFAULT_CONFIG_PATH = os.path.join(PROJECT_ROOT, "config", "settings.yaml")
+
 parser = argparse.ArgumentParser(description="Procedural Lunar Terrain Generator")
 parser.add_argument(
     "-c", "--config",
     type=str,
-    default="config/settings.yaml",
-    help="Path to the YAML configuration file (default: config/settings.yaml)"
+    default=DEFAULT_CONFIG_PATH,
+    help="Path to the YAML configuration file (default: <repo root>/config/settings.yaml)"
 )
 parser.add_argument(
     "-o", "--output-dir",
     type=str,
-    default="outputs",
-    help="Destination directory for the serialized DEM (default: outputs)"
+    default=DEFAULT_OUTPUT_DIR,
+    help="Destination directory for the serialized DEM (default: <repo root>/outputs)"
 )
 parser.add_argument(
     "-n", "--name",

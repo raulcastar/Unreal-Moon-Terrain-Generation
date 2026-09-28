@@ -3,13 +3,25 @@
 Procedural lunar Digital Elevation Model (DEM) generation, previewing, and import
 into Unreal Engine as a scaled Landscape actor.
 
-The project has three parts:
+Everything lives under `Terrain_Studio/`, which has three parts:
 
 | Component | Purpose |
 | --- | --- |
-| `Terrain_Studio/` | Graphical front-end: set parameters, preview the surface, generate, and push to Unreal. |
+| `terrain_studio.py` | Graphical front-end: set parameters, preview the surface, generate, and push to Unreal. |
 | `Procedural_generator/` | The procedural simulation itself, plus a CLI for batch/headless runs. |
 | `Lunar_terrain_loader/` | Converts any DEM (procedural, `.npy`, `.csv`, GeoTIFF) into Unreal's 16-bit `.r16` heightmap and spawns the Landscape actor over Remote Execution. |
+
+Paths below are written from the repository root, so the two engines appear as
+`Terrain_Studio/Procedural_generator/` and `Terrain_Studio/Lunar_terrain_loader/`.
+
+Three folders at the root carry the data. `config/` is tracked; the other two
+are not, so nobody commits a gigabyte of DEMs by accident:
+
+| Folder | Contents |
+| --- | --- |
+| `config/` | Terrain presets as YAML, shared by the GUI and the CLI. |
+| `input_maps/` | Raw source DEMs you bring in (GeoTIFF, `.npy`, `.csv`). |
+| `outputs/` | Everything the studio produces, in one subfolder per map: the generated DEM, its soil and rock-field CSVs, and the Unreal `.r16` heightmap. |
 
 ---
 
@@ -38,6 +50,14 @@ Requirements: `numpy`, `scipy`, `pandas`, `pyyaml`, `matplotlib` (and `tifffile`
 only if you import GeoTIFF DEMs). Tkinter ships with Python (on Debian/Ubuntu
 install it with `sudo apt install python3-tk`).
 
+**Column widths** — the three columns are separated by drag handles: one between
+the parameters and the preview, one between the preview and the readouts. Drag
+either to give a wide DEM more preview, or the readouts more room. Only the
+preview absorbs a window resize, so the two side columns keep the width you set.
+Both side columns scroll when their content is taller than the window, and the
+export panel's text rewraps to the width you give it, so a wider column is also
+a shorter one.
+
 The studio opens maximized. On Windows it is per-monitor DPI aware: dragging the
 window between monitors with different display scaling keeps it crisp and
 rescales the UI to the new monitor (preserving your parameters, preview, and
@@ -47,25 +67,65 @@ selected map).
 
 ## Lunar Terrain Studio
 
-**Home screen** — on launch the studio opens on a landing screen with three
+**Home screen** — on launch the studio opens on a landing screen with four
 choices:
 
 - *Generate New Terrain* — opens the studio to set parameters, preview, and export.
-- *View an Existing Map* — opens a file picker and shows the chosen `.npy` /
-  `.csv` / `.tif` DEM in a preview window: the shaded relief on top and an
-  activity log below (like the studio). Loading runs in the background with a
-  "Loading…" indicator, so large maps never freeze the window.
+- *View an Existing Map* — opens the map browser: the project's maps listed on
+  the left, the selected one rendered on the right. Moving the selection
+  redraws the view, so a folder can be read through in one pass instead of
+  reopening a file picker per map.
+
+  It opens maximized. The list covers `input_maps/` and `outputs/` one level
+  deep, grouped by folder, and both are always shown — an `outputs/` that does
+  not exist yet is listed as such rather than left out, so exports are never
+  somewhere you cannot see. The divider between the list and the view is
+  draggable. *Add folder…* brings in any other directory, *Refresh* picks up
+  maps written since it opened, and *Include masks and other rasters* adds the
+  `_classMap` / `_soilMap` files that are hidden by default (fine to look at,
+  never to import). Loading runs in the background with a "Loading…" indicator,
+  so large maps never freeze the window, and moving quickly through the list
+  loads only the map you land on rather than every one you pass.
 - *Place Rocks & Paths* — scatters rocks as obstacles across a DEM while keeping
   a connected corridor network the rover can always drive (see below).
-- *Send a Map to Unreal* — opens the studio and prompts for a DEM to convert.
+- *Send a Map to Unreal* — opens a dedicated export window (below). It does not
+  open the parameter studio: converting an existing DEM does not use any of
+  those controls.
 
 The `⌂ Home` button at the top of the parameter column returns here anytime.
+
+### Send a Map to Unreal
+
+A standalone window holding only what the export reads:
+
+- **Source map** — *Browse* drops down the DEMs already in `input_maps/` and
+  `outputs/`, grouped by folder, since that is where almost every map is. Below
+  the list it can open the file picker aimed at either folder, or anywhere else,
+  for maps the list does not reach.
+  Companion rasters that share those folders and extensions but are not terrain
+  (`_classMap`, `_soilMap`, `_obstacleMap`, `_rocks`, `_roverPaths`, and the
+  loader's `_converted` intermediates) are left off the list, so a class raster
+  cannot be imported as a landscape by mistake.
+  *Preview* shows the chosen map in the shared Map Viewer.
+- **Resolution (m/px)** — the ground distance one pixel covers, which sets the
+  landscape's XY scale. GeoTIFFs carry their own and ignore it.
+- **Dispatch to running Unreal Editor** — unticked, the heightmap is written but
+  no editor is contacted.
+- **Writes to** — the exact folder the files will land in, updated as soon as a
+  map is picked, so there is no guessing afterwards.
+- A log and progress bar, and *Stop*, which cancels between the conversion and
+  the network dispatch.
+
+When it finishes, a dialog gives the `.r16` path and the manual import steps.
+The same export is still available inside the studio, next to the generator
+controls, where it follows on from a surface you just generated; both run the
+same pipeline.
 
 The studio itself covers the whole pipeline.
 
 **Parameters (left)** — every simulation parameter as a slider plus typed entry,
 grouped by stage, each with a hover tooltip. Presets are the same YAML files the
-CLI reads (`Procedural_generator/config/`), so anything saved here runs headless.
+CLI reads (`config/`), so anything saved here runs headless.
 
 **Preview (centre)** — a reduced-resolution render of the same pipeline, updated
 as you drag, in three tabs:
@@ -90,19 +150,32 @@ generate if the map exceeds the 50×50 component ceiling of a single Landscape.
 
 **Export & Unreal (right)** — the two-step output workflow:
 
-1. *Generate Full Resolution* first shows a dialog listing the output files
-   (`<name>_elevationMap.npy`, `<name>_elevationMap.csv`, `<name>_soilMap.csv`)
-   and their target folder; on confirm it runs and writes them. Each run gets its
-   own subfolder `Procedural_generator/outputs/<name>/`.
-2. *Send to Unreal* converts the **source map** to Unreal's scalar space, writes
-   the `.r16` / `.json` / `.txt` files to `Lunar_terrain_loader/outputs/`, then
+1. *Generate Full Resolution*. The panel lists the filenames it will write,
+   extensions included, under the base filename field and updates as you type,
+   so the result is visible before the run rather than inferred from a stem.
+   Confirming shows the same list with a description of each file, then runs.
+   Each run gets its own subfolder `outputs/<name>/`. The `.csv` pair only
+   appears when `EXPORT_CSV` is on in the loaded preset.
+2. *Send to Unreal* needs an **elevation map** in metres, as `.npy`, `.csv`,
+   `.txt`, `.tif` or `.tiff` - usually Step 1's `<name>_elevationMap.npy`. The
+   companion rasters written beside it (`_classMap`, `_soilMap`, `_obstacleMap`,
+   `_rocks`, `_roverPaths`) share those extensions but are not heights, so the
+   *Browse* drop-down leaves them off the list and picking one by hand raises a
+   warning under the field rather than silently building terrain out of mask
+   values.
+
+   It converts that map to Unreal's scalar space, writes
+   the `.r16` / `.json` / `.txt` files to `outputs/<name>/` beside the DEM
+   they came from, then
    spawns the Landscape actor in a running editor. A dialog reports the `.r16`
    path and the manual import steps. Untick *Dispatch to running Unreal Editor*
    to only write the files.
 
-   The *Source map* defaults to the last full-resolution generation; use
-   *Browse* to pick any `.npy` / `.csv` / `.tif` DEM instead (which also previews
-   it). Resolution comes from the Map Geometry field (GeoTIFFs use their embedded
+   The *Source map* defaults to the last full-resolution generation; *Browse*
+   drops down the DEMs already in `input_maps/` and `outputs/`, then offers the
+   file picker aimed at either folder, or anywhere else, for maps the list does
+   not reach (either way it previews the pick). Resolution comes from the Map
+   Geometry field (GeoTIFFs use their embedded
    scale). To just look at a map without sending it, use *View an Existing Map*
    on the home screen.
 
@@ -151,7 +224,7 @@ The parameter panel scrolls, with **⌂ Home**, **Update Preview**, **Stop**, an
 **Generate & Export** pinned in view at all times. *Stop* cancels a long plan at
 its next checkpoint while keeping the DEM loaded, so you can retune and retry.
 
-*Generate & Export* writes, into the same `Procedural_generator/outputs/<name>/`
+*Generate & Export* writes, into the same `outputs/<name>/`
 folder as the DEM:
 
 | File | Contents |
@@ -167,23 +240,23 @@ folder as the DEM:
 The generator remains fully usable without the GUI:
 
 ```bat
-cd Procedural_generator
-py procedural_landscape_gen.py -c config/lunar_1m.yaml
-py procedural_landscape_gen.py -c config/lunar_high_valleys_1m.yaml -n my_terrain --no-preview
+cd Terrain_Studio\Procedural_generator
+py procedural_landscape_gen.py -c ..\..\config\lunar_1m.yaml
+py procedural_landscape_gen.py -c ..\..\config\lunar_high_valleys_1m.yaml -n my_terrain --no-preview
 ```
 
 | Flag | Meaning |
 | --- | --- |
 | `-c, --config` | YAML configuration (created with defaults if missing). |
-| `-o, --output-dir` | Destination directory (default `outputs`). |
+| `-o, --output-dir` | Destination directory (default `<repo root>/outputs`). |
 | `-n, --name` | Base filename for the exported elevation map. |
 | `--no-preview` | Skip the Matplotlib window, for batch runs. |
 
 Importing an existing DEM (GeoTIFF, `.npy`, `.csv`) into Unreal without the GUI:
 
 ```bat
-cd Lunar_terrain_loader
-py main.py maps\Lunar_LROnac_Haworth_1m.tif outputs 1.0
+cd Terrain_Studio\Lunar_terrain_loader
+py main.py ..\..\input_maps\Lunar_LROnac_Haworth_1m.tif ..\..\outputs\Haworth 1.0
 ```
 
 ---
@@ -222,20 +295,23 @@ still scale with the map, so use *Stop* if a large run runs long.
 
 ```
 Terrain_Studio/
-  terrain_studio.py            GUI: parameters, preview, export, Unreal dispatch
-Procedural_generator/
-  terrain_core.py              Generation engine (shared by GUI and CLI)
-  rock_field.py                Rock placement & rover-corridor planning engine
-  procedural_landscape_gen.py  CLI front-end
-  config/*.yaml                Presets
-  outputs/<name>/              Generated DEMs, one subfolder per run
-Lunar_terrain_loader/
-  main.py                      DEM -> Unreal orchestration
-  terrain_files_generator.py   DEM reading, 16-bit conversion, component solving
-  unreal_terrain_generator.py  Runs inside Unreal; spawns the Landscape actor
-  unreal_api.py                Remote Execution client
-  maps/                        Source DEMs
-  outputs/                     .r16 heightmaps and metadata
-run_terrain_studio.bat         Windows launcher
-run_terrain_studio.sh          Linux / macOS launcher
+  terrain_studio.py              GUI: parameters, preview, export, Unreal dispatch
+  Procedural_generator/
+    terrain_core.py              Generation engine (shared by GUI and CLI)
+    rock_field.py                Rock placement & rover-corridor planning engine
+    procedural_landscape_gen.py  CLI front-end
+  Lunar_terrain_loader/
+    main.py                      DEM -> Unreal orchestration
+    terrain_files_generator.py   DEM reading, 16-bit conversion, component solving
+    unreal_terrain_generator.py  Runs inside Unreal; spawns the Landscape actor
+    unreal_api.py                Remote Execution client
+config/*.yaml                    Terrain presets
+input_maps/                      Raw source DEMs (untracked)
+outputs/<name>/                  Everything generated for one map (untracked)
+run_terrain_studio.bat           Windows launcher
+run_terrain_studio.sh            Linux / macOS launcher
 ```
+
+The studio finds both engines relative to its own file, and both engines find
+`config/`, `input_maps/` and `outputs/` relative to the repository root, so
+`Terrain_Studio/` can be moved or renamed as a whole without editing any path.

@@ -2,7 +2,7 @@
 Procedural lunar terrain core.
 
 Generation engine shared by the CLI (`procedural_landscape_gen.py`) and the GUI
-(`Terrain_Studio/terrain_studio.py`). The pipeline builds low-frequency macro
+(`../terrain_studio.py`). The pipeline builds low-frequency macro
 terrain, places collision-aware craters, and applies sub-surface dithering to
 prevent quantization banding in the target engine. All parameters are passed
 explicitly so the same code path serves both front-ends.
