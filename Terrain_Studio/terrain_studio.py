@@ -890,35 +890,73 @@ def load_dem_array(path):
 
 class MapView(ttk.Frame):
     """
-    Embeddable DEM view: shaded relief with an elevation colourbar.
+    Embeddable DEM view: shaded relief with an elevation colourbar, and
+    optionally a 3D surface tab.
 
     Maps load on a worker thread and are drawn on the main thread; a token
-    discards stale loads when a newer map is requested. The host supplies
-    `on_status` (log line) and `on_title` (map name).
+    discards stale loads when a newer map is requested. The 3D surface is drawn
+    only while its tab is showing. The host supplies `on_status` (log line) and
+    `on_title` (map name).
     """
 
     DISPLAY_MAX_EDGE = 1200
 
-    def __init__(self, parent, figure_dpi=100, on_status=None, on_title=None):
+    def __init__(self, parent, figure_dpi=100, on_status=None, on_title=None,
+                 show_3d=False):
         super().__init__(parent)
         self._on_status = on_status or (lambda text, level=None: None)
         self._on_title = on_title or (lambda name: None)
-
-        self.figure = Figure(figsize=(7.0, 6.0), dpi=figure_dpi, layout="constrained")
-        self.canvas = FigureCanvasTkAgg(self.figure, master=self)
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
-        NavigationToolbar2Tk(self.canvas, self).update()
 
         self._load_queue = queue.Queue()
         self._load_token = 0
         self._awaiting = None
         self._poll_job = None
 
+        self._name = None
+        self._payload = None
+        self._surface_stale = True
+        self._surface_artists = None
+
+        if show_3d:
+            self.notebook = ttk.Notebook(self)
+            self.notebook.pack(fill="both", expand=True)
+            relief_tab = ttk.Frame(self.notebook)
+            surface_tab = ttk.Frame(self.notebook)
+            self.notebook.add(relief_tab, text="Shaded Relief")
+            self.notebook.add(surface_tab, text="3D Surface")
+            self.figure, self.canvas = self._make_canvas(
+                relief_tab, figure_dpi, "constrained")
+            self.surface_figure, self.surface_canvas = self._make_canvas(
+                surface_tab, figure_dpi, None)
+            # Coarse mesh while rotating, full mesh on release.
+            self.surface_canvas.mpl_connect(
+                "button_press_event",
+                lambda e: e.inaxes is not None and self._set_surface_detail(True))
+            self.surface_canvas.mpl_connect(
+                "button_release_event", lambda e: self._set_surface_detail(False))
+            self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+        else:
+            self.notebook = None
+            self.figure, self.canvas = self._make_canvas(self, figure_dpi, "constrained")
+            self.surface_figure = self.surface_canvas = None
+
         self.show_message("No map selected")
+
+    @staticmethod
+    def _make_canvas(parent, figure_dpi, layout):
+        figure = Figure(figsize=(7.0, 6.0), dpi=figure_dpi, layout=layout)
+        canvas = FigureCanvasTkAgg(figure, master=parent)
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+        NavigationToolbar2Tk(canvas, parent).update()
+        return figure, canvas
 
     @property
     def busy(self):
         return self._awaiting is not None
+
+    def _surface_showing(self):
+        return (self.notebook is not None
+                and self.notebook.index(self.notebook.select()) == 1)
 
     def show_path(self, path):
         """Shows a loading indicator, then loads and renders `path` off-thread."""
@@ -959,7 +997,7 @@ class MapView(ttk.Frame):
         shaded = light.shade(filled, cmap=matplotlib.colormaps["gray"],
                              blend_mode="soft", vert_exag=vert_exag)
         return {'orig_shape': data.shape, 'step': step, 'shaded': shaded,
-                'vmin': vmin, 'vmax': vmax, 'relief': relief}
+                'elevation': filled, 'vmin': vmin, 'vmax': vmax, 'relief': relief}
 
     def _poll_load(self):
         """Main-thread pump: renders a finished load, ignoring superseded ones."""
@@ -985,16 +1023,26 @@ class MapView(ttk.Frame):
             self._poll_job = self.after(80, self._poll_load)
 
     def show_message(self, text):
-        """Draws a centred status message in place of the plot."""
-        self.figure.clear()
-        axes = self.figure.add_subplot(111)
-        axes.axis("off")
-        axes.text(0.5, 0.5, text, ha="center", va="center", fontsize=12,
-                  transform=axes.transAxes)
-        self.canvas.draw_idle()
+        """Draws a centred status message in place of the plots."""
+        self._payload = None
+        self._surface_artists = None
+        figures = [(self.figure, self.canvas)]
+        if self.surface_figure is not None:
+            figures.append((self.surface_figure, self.surface_canvas))
+        for figure, canvas in figures:
+            figure.clear()
+            axes = figure.add_subplot(111)
+            axes.axis("off")
+            axes.text(0.5, 0.5, text, ha="center", va="center", fontsize=12,
+                      transform=axes.transAxes)
+            canvas.draw_idle()
 
     def _render(self, name, payload):
-        """Draws the shaded relief prepared by the worker."""
+        """Draws the shaded relief prepared by the worker, and the 3D view if shown."""
+        self._name = name
+        self._payload = payload
+        self._surface_stale = True
+
         self.figure.clear()
         axes = self.figure.add_subplot(111)
         axes.imshow(payload['shaded'], origin="upper", interpolation="bilinear")
@@ -1012,6 +1060,82 @@ class MapView(ttk.Frame):
             norm=Normalize(vmin=payload['vmin'], vmax=payload['vmax']), cmap="gray")
         self.figure.colorbar(mappable, ax=axes, shrink=0.8, label="Elevation")
         self.canvas.draw_idle()
+
+        if self._surface_showing():
+            self._draw_surface()
+
+    def _on_tab_changed(self, _event=None):
+        if self._surface_showing() and self._surface_stale and self._payload:
+            self._draw_surface()
+
+    def _draw_surface(self):
+        """3D mesh of the loaded map, with an auto-fitted vertical exaggeration."""
+        payload = self._payload
+        elevation = payload['elevation']
+        rows_full, cols_full = payload['orig_shape']
+        rows, cols = elevation.shape
+
+        figure = self.surface_figure
+        figure.clear()
+        self._surface_artists = None
+        axes = figure.add_subplot(111, projection="3d")
+
+        span_x, span_y = float(cols_full), float(rows_full)
+        span = max(span_x, span_y)
+        relief = max(float(np.ptp(elevation)), 1e-6)
+        z_box = 0.35
+        exaggeration = (z_box * span) / relief
+        light = LightSource(azdeg=315, altdeg=45)
+
+        def plot_mesh(detail):
+            step = max(1, int(np.ceil(max(rows, cols) / detail)))
+            mesh = elevation[::step, ::step]
+            mesh_x = np.linspace(0, span_x, mesh.shape[1])
+            mesh_y = np.linspace(0, span_y, mesh.shape[0])
+            grid_x, grid_y = np.meshgrid(mesh_x, mesh_y)
+            cell = span / max(mesh.shape)
+            colors = light.shade(mesh, cmap=matplotlib.colormaps["gray"],
+                                 blend_mode="soft", vert_exag=exaggeration,
+                                 dx=cell, dy=cell)
+            # rcount/ccount match the mesh so the face colours stay aligned.
+            return axes.plot_surface(grid_x, grid_y, mesh, facecolors=colors,
+                                     shade=False, linewidth=0, antialiased=False,
+                                     rcount=mesh.shape[0], ccount=mesh.shape[1]), step
+
+        fine, fine_step = plot_mesh(SURFACE_MESH_DETAIL)
+        coarse, coarse_step = plot_mesh(SURFACE_DRAG_DETAIL)
+        if coarse_step > fine_step:
+            coarse.set_visible(False)
+            self._surface_artists = (fine, coarse)
+        else:
+            coarse.remove()
+
+        # No exaggeration factor in the title: the map's resolution is unknown
+        # here, so X/Y are in pixels and a ratio against Z would mix units.
+        axes.set_title(f"{self._name} - 3D surface\n"
+                       f"vertical scale auto-fitted", fontsize=9)
+        axes.set_xlabel("pixels")
+        axes.set_ylabel("pixels")
+        axes.set_zlabel("elevation")
+        axes.view_init(elev=32, azim=-125)
+        axes.set_zlim(float(np.min(elevation)) - relief * 0.15,
+                      float(np.max(elevation)) + relief * 0.15)
+        axes.zaxis.set_major_locator(MaxNLocator(5))
+        axes.set_box_aspect((span_x / span, span_y / span, z_box))
+        figure.subplots_adjust(left=0.0, right=0.97, top=0.93, bottom=0.02)
+        self.surface_canvas.draw_idle()
+        self._surface_stale = False
+
+    def _set_surface_detail(self, coarse):
+        """Swaps the coarse mesh in while rotating and back on release."""
+        if not self._surface_artists:
+            return
+        fine, rough = self._surface_artists
+        if rough.get_visible() == coarse:
+            return
+        fine.set_visible(not coarse)
+        rough.set_visible(coarse)
+        self.surface_canvas.draw()
 
 
 class ActivityLog(ttk.Frame):
@@ -1156,7 +1280,7 @@ class MapBrowser(ttk.Frame):
         # --- right: the map itself ---
         self._log = ActivityLog(right, height=6)
         self.view = MapView(right, figure_dpi=figure_dpi, on_status=self.log,
-                            on_title=self.header.set_subtitle)
+                            on_title=self.header.set_subtitle, show_3d=True)
         self._log.pack(side="bottom", fill="x")
         self.view.pack(side="top", fill="both", expand=True)
 

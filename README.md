@@ -27,6 +27,8 @@ Every view opens in the same window and has a **⌂ Home** button to return.
   Presets are the YAML files in `config/`, shared with the CLI.
 - **Preview** (centre): shaded relief, 3D surface and slope analysis, updated as
   you drag. A fixed seed reproduces a surface; a blank seed rolls a new one.
+
+  ![Preview tabs: shaded relief, 3D surface, slope analysis](docs/images/create-terrain-tabs.gif)
 - **Readouts** (right): surface statistics and the resulting Unreal Landscape
   topology, which warns if the map exceeds a single Landscape's 50×50 components.
 - **Generate Full Resolution** writes the DEM to `outputs/<name>/`; the panel
@@ -68,9 +70,6 @@ Landscape actor in a running editor. The heightmap is written to
 `outputs/<name>/`, with a dialog giving its path and the import steps. Untick
 *Dispatch to running Unreal Editor* to only write the files.
 
-The Landscape reproduces the DEM's real elevations: `Scale.Z` is derived from the
-relief and the actor is placed at its midpoint.
-
 **Unreal setup:** enable the *Python Editor Script Plugin* and *Remote Execution*
 in Project Settings. Applying the heightmap is manual: Landscape Mode → Manage →
 right-click → Import.
@@ -79,9 +78,10 @@ right-click → Import.
 
 ![Browsing maps](docs/images/browse-maps.gif)
 
-Lists every map in `input_maps/` and `outputs/`; selecting one renders it. The
-selected map becomes the current map for stages 2 and 3. Class, soil and rock
-rasters are hidden by default, since they share extensions but are not heights.
+Lists every map in `input_maps/` and `outputs/`; selecting one renders it as a
+shaded relief or, in the second tab, a rotatable 3D surface. The selected map
+becomes the current map for stages 2 and 3. Class, soil and rock rasters are
+hidden by default, since they share extensions but are not heights.
 
 ## Folders
 

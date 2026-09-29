@@ -53,14 +53,10 @@ def generate_lunar_terrain(input_map_filepath, output_map_directory, input_resol
     # 1. READ ORIGINAL DEM
     # =========================================================================
     raw_elevation_data = terrain_files_generator.terrain_file_reading(input_map_filepath, input_resolution)
+    lowest_elevation = np.min(raw_elevation_data)
+    z_offset = lowest_elevation
+    print(f"Lowest elevation: {z_offset}")
 
-    # Vertical transform from the metric extent, before 16-bit rescaling.
-    elev_min, elev_max = terrain_files_generator.metric_extent(raw_elevation_data)
-    z_axis_scale_metric, z_offset = terrain_files_generator.solve_landscape_z_transform(
-        elev_min, elev_max)
-    print(f"[*] Surface extent: {elev_min:.3f} .. {elev_max:.3f} m "
-          f"(relief {elev_max - elev_min:.3f} m)")
-    
     # =========================================================================
     # 2. UNREAL FORMAT CONVERSION
     # =========================================================================
@@ -94,12 +90,6 @@ def generate_lunar_terrain(input_map_filepath, output_map_directory, input_resol
     # Extract dimensions from the cached header
     header_values = [float(val) for val in file_header.split()]
     dem_width, dem_height, interpolation_resolution, z_axis_scale = header_values
-
-    # The header's scale assumes no re-normalisation; create_unreal_heightmap
-    # re-normalises, so use the relief-based scale instead.
-    z_axis_scale = z_axis_scale_metric
-    print(f"[*] Landscape transform: Scale.Z = {z_axis_scale:.4f}, "
-          f"actor Z = {z_offset:.3f} m (midpoint of the surface)")
 
     # Determine the most memory-efficient landscape component grid
     landscape_config = terrain_files_generator.calculate_optimal_landscape_config(dem_width, dem_height)

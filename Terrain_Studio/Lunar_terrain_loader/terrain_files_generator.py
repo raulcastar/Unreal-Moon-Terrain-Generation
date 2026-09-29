@@ -123,68 +123,18 @@ def convert_to_unreal_format(elevation_data, interpolation_resolution=1.0):
     # Scale geometry against the 16-bit midpoint (Unreal's defined Z=0)
     scaled_elevation = (elevation_cm * height_scaling_factor) + UNREAL_SEA_LEVEL
     
-    # Fill no-data with the surface minimum rather than the 16-bit midpoint.
-    # For an all-positive DEM the midpoint lies below the terrain and widens the
-    # normalised range, which solve_landscape_z_transform assumes equals the relief.
-    valid_floor = np.nanmin(scaled_elevation) if np.any(np.isfinite(scaled_elevation)) \
-        else UNREAL_SEA_LEVEL
+    # Flatten anomalous/missing data strictly to the sea-level baseline
     sanitized_elevation = np.nan_to_num(
         scaled_elevation,
-        nan=valid_floor,
-        posinf=valid_floor,
-        neginf=valid_floor
+        nan=UNREAL_SEA_LEVEL,
+        posinf=UNREAL_SEA_LEVEL,
+        neginf=UNREAL_SEA_LEVEL
     )
-    
-    # Round rather than floor to avoid a systematic half-step downward bias.
-    unreal_elevation_data = np.rint(sanitized_elevation).astype(int)
+
+    unreal_elevation_data = np.floor(sanitized_elevation).astype(int)
     file_header = f"{elevation_data.shape[1]} {elevation_data.shape[0]} {interpolation_resolution} {z_axis_scale}"
 
     return file_header, unreal_elevation_data
-
-
-def solve_landscape_z_transform(elev_min_m, elev_max_m):
-    """
-    Landscape Scale.Z and actor Z that reproduce the DEM's elevations at
-    one engine metre per DEM metre.
-
-    Unreal maps a 16-bit heightmap as:
-
-        world_z_cm = actor_z_cm + (raw16 - 32768) / 128 * Scale.Z
-
-    create_unreal_heightmap normalises the surface to the full 0..65535 range,
-    so Scale.Z is derived from the relief rather than the absolute maximum:
-
-        Scale.Z = relief_m * 12800 / 65535
-
-    The actor anchors raw16 = 32768, so it is placed at the midpoint of the
-    relief, not at the minimum.
-
-    Returns:
-        tuple: (z_axis_scale, z_offset_m)
-    """
-    relief_m = max(float(elev_max_m) - float(elev_min_m), 1e-9)
-    z_axis_scale = relief_m * 12800.0 / UINT16_MAX
-    # raw16 = 0 must land on elev_min, and 0 is half a range below the anchor.
-    half_span_cm = (32768.0 / 128.0) * z_axis_scale
-    z_offset_m = float(elev_min_m) + half_span_cm / CM_PER_METER
-    return z_axis_scale, z_offset_m
-
-
-def metric_extent(elevation_data):
-    """
-    The surface's (min, max) in metres, excluding NaN and zeros.
-
-    Zeros are no-data in convert_to_unreal_format.
-    """
-    data = np.asarray(elevation_data, dtype=float)
-    valid = np.isfinite(data) & (data != 0)
-    if not valid.any():
-        return 0.0, 1.0
-    lo = float(data[valid].min())
-    hi = float(data[valid].max())
-    if hi - lo < 1e-9:
-        hi = lo + 1.0
-    return lo, hi
 
 
 def calculate_optimal_landscape_config(dem_width, dem_height):
@@ -269,8 +219,7 @@ def create_unreal_heightmap(unreal_elevation_data, dem_width, dem_height, landsc
     elevation_range = max(1.0, max_elevation - min_elevation)
     
     normalized_grid = ((padded_grid - min_elevation) / elevation_range) * UINT16_MAX
-    # Round before the cast; astype truncates.
-    heightmap_data = np.rint(np.clip(normalized_grid, 0, UINT16_MAX)).astype('<u2')
+    heightmap_data = np.clip(normalized_grid, 0, UINT16_MAX).astype('<u2')
     print("[*] Applying Left-Right flip (fliplr) to heightmap data...")
     
     # np.fliplr returns a view, so we use np.ascontiguousarray to ensure 
