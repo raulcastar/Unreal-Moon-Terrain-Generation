@@ -16,8 +16,7 @@ import terrain_files_generator
 # --- Global Directory Configuration ---
 # Absolute paths are normalized with forward slashes to prevent escape character 
 # errors when passing these string paths over the network to Unreal Engine.
-# Source DEMs and generated files live at the repository root, two levels up,
-# so every tool in the studio reads from and writes to the same two folders.
+# input_maps/ and outputs/ live at the repository root, two levels up.
 BASE_DIRECTORY        = os.path.dirname(os.path.abspath(__file__)).replace("\\", "/")
 PROJECT_ROOT          = os.path.dirname(os.path.dirname(BASE_DIRECTORY)).replace("\\", "/")
 BASE_MAPS_DIRECTORY   = os.path.join(PROJECT_ROOT, "input_maps").replace("\\", "/")
@@ -55,10 +54,7 @@ def generate_lunar_terrain(input_map_filepath, output_map_directory, input_resol
     # =========================================================================
     raw_elevation_data = terrain_files_generator.terrain_file_reading(input_map_filepath, input_resolution)
 
-    # Solve the Landscape vertical transform from the surface's real extent,
-    # before the conversion below rescales it into 16-bit scalar space. Both
-    # numbers are needed: the scale sets how tall the terrain is, the offset
-    # sets where it sits, and getting either wrong moves the surface.
+    # Vertical transform from the metric extent, before 16-bit rescaling.
     elev_min, elev_max = terrain_files_generator.metric_extent(raw_elevation_data)
     z_axis_scale_metric, z_offset = terrain_files_generator.solve_landscape_z_transform(
         elev_min, elev_max)
@@ -99,11 +95,8 @@ def generate_lunar_terrain(input_map_filepath, output_map_directory, input_resol
     header_values = [float(val) for val in file_header.split()]
     dem_width, dem_height, interpolation_resolution, z_axis_scale = header_values
 
-    # The header's z_axis_scale was derived from the absolute maximum, which
-    # only holds for a heightmap that is NOT re-normalised. create_unreal_heightmap
-    # stretches the data across the full 16-bit range, so use the scale solved
-    # from the relief instead -- otherwise the landscape is exaggerated by
-    # (65535 * z_axis_scale / 128) / relief.
+    # The header's scale assumes no re-normalisation; create_unreal_heightmap
+    # re-normalises, so use the relief-based scale instead.
     z_axis_scale = z_axis_scale_metric
     print(f"[*] Landscape transform: Scale.Z = {z_axis_scale:.4f}, "
           f"actor Z = {z_offset:.3f} m (midpoint of the surface)")
@@ -154,9 +147,7 @@ def send_to_unreal(landscape_config, interpolation_resolution, z_axis_scale, hei
             # Establish a direct command socket to the target Engine instance
             remote_exec.open_command_connection(node_id)
             
-            # Construct the absolute path for the targeted binary file. The
-            # heightmap sits in the folder generate_lunar_terrain wrote it to,
-            # which is per-map, not the shared outputs root.
+            # The heightmap is in its per-map output folder.
             heightmap_directory = (output_directory or BASE_OUTPUT_DIRECTORY).replace("\\", "/")
             target_r16_path = f"{heightmap_directory}/{heightmap_filename}"
             
@@ -189,10 +180,7 @@ if __name__ == "__main__":
     output_map_directory = None
     input_resolution     = 1.0
 
-    # Override defaults if executed with arguments via CLI (e.g., from a batch
-    # file or UI tool). Each argument stands on its own, so passing only the map
-    # is valid: the destination then falls back to that map's output folder.
-    #   main.py <map> [output_dir] [resolution]
+    # Usage: main.py <map> [output_dir] [resolution]
     if len(sys.argv) >= 2:
         input_map_filepath   = sys.argv[1].replace("\\", "/")
     if len(sys.argv) >= 3:

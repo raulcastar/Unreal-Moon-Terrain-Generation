@@ -67,16 +67,26 @@ selected map).
 
 ## Lunar Terrain Studio
 
-**Home screen** — on launch the studio opens on a landing screen with four
-choices:
+**Home screen** — on launch the studio opens on a landing screen laid out as
+the pipeline it is: three numbered stages, then the map library. A status line
+reports how many maps are in `input_maps/` and `outputs/` and which one the
+stages would act on, so the next step is visible rather than guessed.
 
-- *Generate New Terrain* — opens the studio to set parameters, preview, and export.
-- *View an Existing Map* — opens the map browser: the project's maps listed on
+1. *Create a Terrain* — set parameters, preview, and export a procedural DEM.
+2. *Add Rocks & Rover Paths* (optional) — scatter rocks across the drivable
+   ground while keeping a connected corridor network the rover can always
+   drive. Writes an instance list, not a new DEM.
+3. *Send to Unreal* — convert an elevation map to a `.r16` heightmap and spawn
+   the Landscape actor. It does not open the parameter studio: converting an
+   existing DEM does not use any of those controls.
+
+*Browse Maps* is the library rather than a stage, and whatever you leave
+selected becomes the current map for stages 2 and 3. It opens the map browser: the project's maps listed on
   the left, the selected one rendered on the right. Moving the selection
   redraws the view, so a folder can be read through in one pass instead of
   reopening a file picker per map.
 
-  It opens maximized. The list covers `input_maps/` and `outputs/` one level
+  The list covers `input_maps/` and `outputs/` one level
   deep, grouped by folder, and both are always shown — an `outputs/` that does
   not exist yet is listed as such rather than left out, so exports are never
   somewhere you cannot see. The divider between the list and the view is
@@ -86,13 +96,11 @@ choices:
   never to import). Loading runs in the background with a "Loading…" indicator,
   so large maps never freeze the window, and moving quickly through the list
   loads only the map you land on rather than every one you pass.
-- *Place Rocks & Paths* — scatters rocks as obstacles across a DEM while keeping
-  a connected corridor network the rover can always drive (see below).
-- *Send a Map to Unreal* — opens a dedicated export window (below). It does not
-  open the parameter studio: converting an existing DEM does not use any of
-  those controls.
-
-The `⌂ Home` button at the top of the parameter column returns here anytime.
+Each choice replaces the home screen inside the same window rather than
+opening one of its own, so the app stays a single place with a single
+taskbar entry and the window title names the view you are in. Every view
+carries a `⌂ Home` button that returns here, and its state is kept, so
+leaving and coming back does not reset it.
 
 ### Send a Map to Unreal
 
@@ -106,17 +114,24 @@ A standalone window holding only what the export reads:
   (`_classMap`, `_soilMap`, `_obstacleMap`, `_rocks`, `_roverPaths`, and the
   loader's `_converted` intermediates) are left off the list, so a class raster
   cannot be imported as a landscape by mistake.
-  *Preview* shows the chosen map in the shared Map Viewer.
+  The chosen map is rendered in the window straight away, so confirming you
+  picked the right surface takes no extra click; the divider between the
+  controls and the map is draggable.
 - **Resolution (m/px)** — the ground distance one pixel covers, which sets the
   landscape's XY scale. GeoTIFFs carry their own and ignore it.
 - **Dispatch to running Unreal Editor** — unticked, the heightmap is written but
   no editor is contacted.
 - **Writes to** — the exact folder the files will land in, updated as soon as a
-  map is picked, so there is no guessing afterwards.
+  map is picked, so there is no guessing afterwards, with a button that opens
+  it. Like the dialogs, it breaks the path at its separators and re-flows as
+  you widen the column.
 - A log and progress bar, and *Stop*, which cancels between the conversion and
   the network dispatch.
 
 When it finishes, a dialog gives the `.r16` path and the manual import steps.
+Paths in the dialogs are broken across lines at their own separators rather
+than word-wrapped, which a folder like `OneDrive - University of Luxembourg`
+would otherwise split mid-path.
 The same export is still available inside the studio, next to the generator
 controls, where it follows on from a surface you just generated; both run the
 same pipeline.
@@ -220,16 +235,30 @@ drivable and crater fractions, and whether the road network is one connected
 route. Planning runs on a grid capped at 512 px, so it stays fast on large DEMs
 and scales the results back to world metres.
 
+*Load DEM* drops down the maps already in `input_maps/` and `outputs/`, with
+the file picker aimed at either folder below the list, exactly as the export
+panels do. Loading a map also names the export after it, so the rock field is
+written into that map's own output folder rather than into whatever folder the
+base filename was last left pointing at.
+
 The parameter panel scrolls, with **⌂ Home**, **Update Preview**, **Stop**, and
-**Generate & Export** pinned in view at all times. *Stop* cancels a long plan at
+**Generate & Export** pinned in view at all times, and a drag handle sets how
+much width it takes from the plan. *Stop* cancels a long plan at
 its next checkpoint while keeping the DEM loaded, so you can retune and retry.
 
-*Generate & Export* writes, into the same `outputs/<name>/`
-folder as the DEM:
+The Export panel lists the filenames it will write, extensions included, and
+updates as you type or toggle the obstacle map. *Generate & Export* writes them
+into the same `outputs/<name>/` folder as the DEM:
+
+The panel names each file's columns on screen; the units are here. `x_m` and
+`y_m` are metres east and north of the map corner, with no Z — read the height off the DEM.
+`scale` is the uniform mesh scale, the radius in metres of a 1 m base mesh, and
+`height_m` is `scale x ROCK_HEIGHT_RATIO`. Planning runs on a grid capped at
+512 px, so `x_m`/`y_m` are exact while `row`/`col` carry that coarser step.
 
 | File | Contents |
 | --- | --- |
-| `<name>_rocks.csv` | One row per rock: `id, row, col, x_m, y_m, scale, height_m` — an instance list to spawn as static meshes in Unreal (`scale` is the uniform mesh scale). |
+| `<name>_rocks.csv` | One row per rock: `id, row, col, x_m, y_m, scale, height_m` — an instance list to spawn as static meshes in Unreal. |
 | `<name>_roverPaths.csv` | The rover corridor polylines: `path_id, x_m, y_m`. |
 | `<name>_obstacleMap.csv` | Optional full-resolution `0/1` rock-footprint raster (a mask aligned to the DEM). |
 

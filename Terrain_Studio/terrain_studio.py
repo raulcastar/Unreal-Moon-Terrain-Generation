@@ -59,9 +59,7 @@ LOADER_DIR = os.path.join(STUDIO_DIR, "Lunar_terrain_loader")
 # they are visible without digging into the code folders.
 CONFIG_DIR = os.path.join(PROJECT_ROOT, "config")
 
-# Every artefact the studio produces -- DEMs, rock fields, and Unreal .r16
-# heightmaps -- goes under one folder at the repository root, grouped per map,
-# so a surface and everything derived from it stay together.
+# All generated files go under outputs/<map name>/ at the repository root.
 OUTPUT_ROOT = os.path.join(PROJECT_ROOT, "outputs")
 GENERATOR_OUTPUT_DIR = OUTPUT_ROOT
 INPUT_MAPS_DIR = os.path.join(PROJECT_ROOT, "input_maps")
@@ -282,14 +280,11 @@ class Tooltip:
 
 class MessageDialog(tk.Toplevel):
     """
-    Modal dialog for the studio's long, pre-formatted messages.
+    Modal dialog for long, pre-formatted messages.
 
-    tkinter's messagebox hands the string to the platform dialog, which re-wraps
-    it at a width of its own choosing: indented file listings lose their
-    alignment and long output paths get clipped. This renders the text verbatim
-    in a monospace widget sized to the content, so the caller's layout survives,
-    the text can be selected and copied, and anything taller than the screen
-    scrolls instead of being cut off.
+    Replaces tkinter's messagebox, whose platform dialog re-wraps text at its own
+    width and clips long paths. Text is shown verbatim in a monospace widget
+    sized to the content, selectable, and scrollable when taller than the screen.
     """
 
     # Content bounds in character cells, so a short message stays a small dialog
@@ -356,12 +351,10 @@ class MessageDialog(tk.Toplevel):
     @staticmethod
     def _wrapped_rows(lines, width):
         """
-        Estimated rows the message occupies once wrapped to `width` columns.
+        Estimated rows the message occupies when word-wrapped to `width`.
 
-        Mirrors the widget's word wrapping, including the part that matters:
-        a word that does not fit in what is left of a row starts a new one, so
-        a row can end well short of `width`. Dividing the line length by the
-        width misses that and comes out too low.
+        Accounts for words that do not fit the remainder of a row, which
+        dividing line length by width underestimates.
         """
         rows = 0
         for line in lines:
@@ -388,12 +381,10 @@ class MessageDialog(tk.Toplevel):
 
     def _fit_to_content(self):
         """
-        Re-sizes against Tk's real layout.
+        Re-sizes against Tk's actual layout once the window is mapped.
 
-        The estimate above is close but not exact -- Tk and textwrap disagree by
-        a row on where a long unbroken path splits -- and being one row short
-        with no scrollbar is the failure this dialog exists to avoid. Once the
-        window is mapped the widget can report what it actually laid out.
+        The textwrap estimate can differ from Tk by a row on long unbroken
+        tokens; a row short without a scrollbar would hide text.
         """
         if not self.winfo_exists():
             return
@@ -466,11 +457,9 @@ SUPPORTED_DEM_EXTENSIONS = ('.npy', '.csv', '.txt', '.tif', '.tiff')
 DEM_FILETYPES = [("DEM files", "*.npy *.csv *.txt *.tif *.tiff"),
                  ("All files", "*.*")]
 
-# Rasters the pipeline writes alongside a DEM, in the same folders and with the
-# same extensions, but which are not elevation: class and soil masks, rock and
-# path tables, and the loader's own intermediates. Offering them as a map to
-# import would silently spawn a Landscape out of, say, a class raster, so they
-# are kept out of the map lists even though their extension is supported.
+# Rasters written beside a DEM with the same extensions but which are not
+# elevation. Importing one would build a Landscape out of mask values, so they
+# are excluded from the map lists.
 NON_DEM_TAGS = ('_classmap', '_soilmap', '_obstaclemap', '_rocks',
                 '_roverpaths', '_converted', '_heightmap')
 
@@ -479,8 +468,8 @@ def maximize_window(window):
     """
     Maximizes a window across platforms, kept movable rather than borderless.
 
-    Windows and some WMs take state("zoomed"); many Linux WMs only take the
-    -zoomed attribute; anything else just gets sized to the screen.
+    Windows takes state("zoomed"), many Linux WMs only the -zoomed attribute;
+    anything else falls back to filling the screen.
     """
     for attempt in (lambda: window.state("zoomed"),
                     lambda: window.attributes("-zoomed", True)):
@@ -494,11 +483,10 @@ def maximize_window(window):
 
 def dem_source_note(path):
     """
-    A warning about `path` as an elevation source, or "" when it looks right.
+    Warning about `path` as an elevation source, or "" when it looks right.
 
-    The drop-down filters the companion rasters out, but the file picker cannot,
-    and converting one yields a Landscape built from class indices or a 0/1
-    mask with no error to show for it. This is the quiet failure worth naming.
+    The file picker cannot filter companion rasters, and using one fails
+    silently, so the mismatch is reported rather than left to the output.
     """
     if not path:
         return ""
@@ -509,19 +497,15 @@ def dem_source_note(path):
     if extension not in SUPPORTED_DEM_EXTENSIONS:
         return f"{extension or 'This file'} is not a supported DEM format."
     return ("This looks like a companion raster, not an elevation map. "
-            "Converting it will build terrain out of mask values.")
+            "Its values are mask indices, not heights.")
 
 
 def build_dem_menu(parent, on_pick, on_browse):
     """
-    A drop-down of the DEMs already in the project's folders.
+    Drop-down of the DEMs in the project's folders, grouped by folder.
 
-    Nearly every export uses a map that is already in `input_maps/` or was just
-    written to `outputs/`, and walking the file picker to it each time is the
-    slow way to say so. Companion rasters (class and soil masks, rock tables)
-    share those folders and extensions but are not terrain, so they are
-    filtered out rather than offered as a trap. The picker stays on the menu
-    for anything kept elsewhere.
+    Companion rasters are filtered out. The file picker stays on the menu for
+    maps held elsewhere.
     """
     menu = tk.Menu(parent, tearoff=0)
     groups = find_dem_files()
@@ -540,9 +524,7 @@ def build_dem_menu(parent, on_pick, on_browse):
             menu.add_command(state="disabled",
                              label=f"    ... {total - len(entries)} more, use Browse below")
 
-    # Aim the file picker at a specific folder rather than guessing. The
-    # drop-down only lists one level down, so a map buried deeper in outputs/
-    # still needs the picker, and it should open where the map is.
+    # The list is one level deep; the picker covers anything further down.
     menu.add_separator()
     for root, label in ((OUTPUT_ROOT, "outputs"), (INPUT_MAPS_DIR, "input_maps")):
         if os.path.isdir(root):
@@ -567,11 +549,10 @@ def drop_dem_menu(parent, button, on_pick, on_browse):
 
 def planned_output_files(base_name, export_csv):
     """
-    The files a full-resolution generation will write, as [(filename, what it is)].
+    Files a full-resolution generation writes, as [(filename, description)].
 
-    One source of truth for the panel that previews them and the dialog that
-    confirms them, so the names shown before the run and the names written by
-    it cannot drift apart.
+    Shared by the panel that previews them and the dialog that confirms them,
+    so neither can drift from what is written.
     """
     elevation_name = f"{base_name}_elevationMap"
     files = [(f"{elevation_name}.npy",
@@ -586,6 +567,30 @@ def planned_output_files(base_name, export_csv):
     return files
 
 
+def planned_rock_files(base_name, obstacle_map):
+    """
+    Files a rock-field export writes, as [(filename, description)].
+
+    Same contract as planned_output_files.
+    """
+    files = [
+        (f"{base_name}_rocks.csv",
+         "Rock instances: id, row, col, x_m, y_m, scale, height_m."),
+        (f"{base_name}_roverPaths.csv",
+         "Rover corridor polylines: path_id, x_m, y_m."),
+    ]
+    if obstacle_map:
+        files.append((f"{base_name}_obstacleMap.csv",
+                      "Full-resolution 0/1 rock-footprint raster."))
+    return files
+
+
+def dem_group_name(path):
+    """The output folder name a DEM belongs to: its stem without '_elevationMap'."""
+    stem = os.path.splitext(os.path.basename(path))[0]
+    return stem.replace("_elevationMap", "")
+
+
 def looks_like_dem(filename):
     """True when `filename` is a supported elevation raster rather than a companion."""
     stem, extension = os.path.splitext(filename)
@@ -596,14 +601,7 @@ def looks_like_dem(filename):
 
 
 def find_dem_files(max_per_group=30):
-    """
-    DEMs sitting in the project's own folders, as [(group label, [(name, path)])].
-
-    Covers `input_maps/` and `outputs/`, each one level of subfolders deep,
-    which is how both are laid out. Anything elsewhere on disk is still
-    reachable through the file picker, so this only has to be quick and
-    unsurprising, not exhaustive.
-    """
+    """DEMs in the project folders, as [(group label, [(name, path)], total)]."""
     groups = []
     for root, label in ((INPUT_MAPS_DIR, "input_maps"), (OUTPUT_ROOT, "outputs")):
         found = scan_dem_folder(root)
@@ -616,10 +614,8 @@ def scan_dem_folder(root, include_companions=False):
     """
     Maps in `root` and one level of subfolders, as [(display name, path)].
 
-    One level is how both project folders are laid out, and keeping the walk
-    shallow keeps the menu instant even when outputs/ has grown. Set
-    `include_companions` to list the masks and tables too -- useful for looking
-    at one, never for importing it.
+    One level matches how both project folders are laid out and keeps the walk
+    cheap. `include_companions` also lists the masks and tables.
     """
     if not os.path.isdir(root):
         return []
@@ -662,11 +658,36 @@ IMPORT_STEPS = (
     "The relief is applied immediately.")
 
 
+def format_path_block(path, width=84, indent="    "):
+    """
+    Lays a long path over several lines, broken at its separators.
+
+    Word wrapping breaks a path at the spaces inside folder names, splitting it
+    mid-component and dropping the indent. Breaking at the separators keeps each
+    line a whole path component.
+    """
+    parts = path.replace("/", os.sep).split(os.sep)
+    # Keep each separator on the component before it, so no line starts with one.
+    pieces = [p + os.sep for p in parts[:-1]] + parts[-1:]
+
+    lines, current = [], indent
+    hanging = indent + "  "
+    for piece in pieces:
+        candidate = current + piece
+        if len(candidate) > width and current.strip():
+            lines.append(current)
+            current = hanging + piece
+        else:
+            current = candidate
+    lines.append(current)
+    return "\n".join(lines)
+
+
 def dem_source_problem(source_path):
     """
-    Why `source_path` cannot be sent to Unreal, as (message, level), or None
-    when it can. Kept apart from the widgets so both entry points refuse the
-    same inputs for the same reasons.
+    Why `source_path` cannot be sent to Unreal, as (message, level), or None.
+
+    Shared by both entry points so they refuse the same inputs.
     """
     if not LOADER_AVAILABLE:
         return ("Unreal loader modules are not importable.", "error")
@@ -682,11 +703,11 @@ def dem_source_problem(source_path):
 def convert_and_dispatch(source_path, resolution, dispatch, output_dir,
                          log, progress, dialog, cancelled):
     """
-    Converts a DEM into Unreal's 16-bit heightmap and, optionally, spawns the
-    Landscape in a running editor. Runs on a worker thread.
+    Converts a DEM to Unreal's 16-bit heightmap and optionally spawns the
+    Landscape actor. Runs on a worker thread.
 
-    The caller passes in how to report back, so the same pipeline drives either
-    the studio's footer or the standalone dispatch window:
+    Reporting is injected so the studio footer and the export view can share
+    one pipeline:
 
         log(text, level=None)    one line of progress text
         progress(message, frac)  status text and a 0..1 bar position
@@ -714,7 +735,7 @@ def convert_and_dispatch(source_path, resolution, dispatch, output_dir,
     # exact file path here, not only inside the editor.
     dialog("Heightmap ready for Unreal",
            "The 16-bit heightmap has been written to:\n\n"
-           f"    {heightmap_path}\n\n" + IMPORT_STEPS)
+           + format_path_block(heightmap_path) + "\n\n" + IMPORT_STEPS)
 
     if not dispatch:
         progress("Conversion complete (dispatch disabled)", 1.0)
@@ -869,15 +890,11 @@ def load_dem_array(path):
 
 class MapView(ttk.Frame):
     """
-    Embeddable DEM view: a sun-lit shaded relief with an elevation colourbar.
+    Embeddable DEM view: shaded relief with an elevation colourbar.
 
-    Loading a large map takes seconds, so it runs on a worker thread and the
-    result is drawn here on the main thread. A token discards a stale load when
-    a newer map is asked for first, which is what makes clicking down a list of
-    maps feel immediate rather than queueing up every one.
-
-    The host supplies `on_status` (a log line) and `on_title` (the map's name),
-    so the same view serves a standalone window and a browser pane.
+    Maps load on a worker thread and are drawn on the main thread; a token
+    discards stale loads when a newer map is requested. The host supplies
+    `on_status` (log line) and `on_title` (map name).
     """
 
     DISPLAY_MAX_EDGE = 1200
@@ -1019,13 +1036,29 @@ class ActivityLog(ttk.Frame):
         self.text.configure(state="disabled")
 
 
+class ViewHeader(ttk.Frame):
+    """
+    Header shared by the full-window views: Home button, title, subtitle.
+    """
+
+    def __init__(self, parent, title, on_home, subtitle=""):
+        super().__init__(parent)
+        ttk.Button(self, text="⌂ Home", width=9,
+                   command=on_home).pack(side="left")
+        ttk.Label(self, text=title,
+                  font=("Segoe UI Semibold", 11)).pack(side="left", padx=(8, 0))
+        self.subtitle_var = tk.StringVar(value=subtitle)
+        ttk.Label(self, textvariable=self.subtitle_var,
+                  style="HomeHint.TLabel").pack(side="left", padx=(10, 0))
+
+    def set_subtitle(self, text):
+        self.subtitle_var.set(text)
+
+
 class MapViewer(tk.Toplevel):
     """
-    Standalone window around a single MapView, reused across selections.
-
-    Kept for the one-off previews raised from the export panels, where the point
-    is to confirm a map that has already been chosen. Browsing a folder is what
-    MapBrowser is for.
+    Standalone window around a MapView, used for one-off previews from the
+    studio's export panel. Folder browsing is handled by MapBrowser.
     """
 
     def __init__(self, master, figure_dpi=100):
@@ -1061,40 +1094,28 @@ class MapViewer(tk.Toplevel):
         self.view.show_path(path)
 
 
-class MapBrowser(tk.Toplevel):
+class MapBrowser(ttk.Frame):
     """
-    Folder on the left, map on the right, updating as the selection moves.
+    Map list on the left, rendered map on the right, updated on selection.
 
-    Opening a file picker per map made comparing them tedious: pick, look,
-    close, pick again. Here the maps in the project's folders are listed once
-    and arrowing down the list redraws the view, so a folder can be read
-    through in one pass.
+    The selected map becomes the app's current map for the other stages.
     """
 
-    # Wide enough for a nested name like
-    # "procedural_lunar_terrain_1/procedural_lunar_terrain_1_elevationMap.npy"
-    # without truncating it; the drag handle adjusts it from there.
+    # Default list width in pixels; fits a nested "<folder>/<file>" name.
     LIST_WIDTH = 420
 
     def __init__(self, master, figure_dpi=100, initial_path=None):
-        super().__init__(master)
-        self.title("Browse Maps")
-
-        # A restored size to fall back on, then opened maximized: comparing maps
-        # is what this window is for, and that wants the whole screen.
-        screen_w, screen_h = self.winfo_screenwidth(), self.winfo_screenheight()
-        width = min(1400, int(screen_w * 0.78))
-        height = min(1000, int(screen_h * 0.88))
-        self.geometry(f"{width}x{height}+{max(0, (screen_w - width) // 2)}+"
-                      f"{max(0, (screen_h - height) // 4)}")
-        self.minsize(780, 560)
-        maximize_window(self)
+        super().__init__(master, padding=(8, 8, 8, 8))
 
         self.app = master
         self._paths = {}          # tree item id -> file path
         self._extra_folders = []  # folders added through "Add folder..."
         self._selected = None
         self._show_job = None     # pending debounced load
+
+        self.header = ViewHeader(self, "Browse Maps", self.app.show_home,
+                                 subtitle="select a map to view it")
+        self.header.pack(fill="x", pady=(0, 8))
 
         panes = ttk.PanedWindow(self, orient="horizontal")
         panes.pack(fill="both", expand=True)
@@ -1135,17 +1156,15 @@ class MapBrowser(tk.Toplevel):
         # --- right: the map itself ---
         self._log = ActivityLog(right, height=6)
         self.view = MapView(right, figure_dpi=figure_dpi, on_status=self.log,
-                            on_title=lambda name: self.title(f"Browse Maps - {name}"))
+                            on_title=self.header.set_subtitle)
         self._log.pack(side="bottom", fill="x")
         self.view.pack(side="top", fill="both", expand=True)
 
-        self.bind("<Escape>", lambda _e: self.destroy())
         self.refresh()
         if initial_path:
             self.select_path(initial_path)
 
-        # The handle can only be placed once the panes have a real width, which
-        # is after the window has been mapped and maximized.
+        # Sash position needs a realized width; placed once the view is packed.
         self.after_idle(self._place_sash)
 
     def _place_sash(self, attempt=0):
@@ -1185,9 +1204,7 @@ class MapBrowser(tk.Toplevel):
             exists = os.path.isdir(folder)
             entries = scan_dem_folder(folder, include_companions=include_all)
 
-            # Both project folders are always shown, even before anything has
-            # been generated: a missing outputs/ is a state worth seeing, not a
-            # reason to leave the user wondering where their exports went.
+            # Project folders are always listed, even before they exist.
             count = f"({len(entries)})" if exists else "(not created yet)"
             parent = self.tree.insert("", "end", text=f"{label}/  {count}", open=True)
             if not entries:
@@ -1237,15 +1254,15 @@ class MapBrowser(tk.Toplevel):
         if path:
             self.show(path)
 
-    # Arrowing down the list moves the selection once per key press. Loading on
-    # each one would start a read per map, and the folders hold DEMs of several
-    # hundred megabytes, so the selection is allowed to settle first.
+    # Debounce, so moving quickly through the list loads only the final map.
     SELECTION_DELAY_MS = 250
 
     def show(self, path):
         if path == self._selected:
             return
         self._selected = path
+        # The viewed map becomes the current map for the other stages.
+        self.app._set_unreal_source(path)
         if self._show_job is not None:
             self.after_cancel(self._show_job)
         self._show_job = self.after(self.SELECTION_DELAY_MS, self._show_now)
@@ -1256,7 +1273,7 @@ class MapBrowser(tk.Toplevel):
             self.view.show_path(self._selected)
 
 
-class RockPlannerStudio(tk.Toplevel):
+class RockPlannerStudio(ttk.Frame):
     """
     Window that turns an elevation map into a rock field with guaranteed rover
     corridors. The user picks a DEM, tunes the rover and rock parameters, previews
@@ -1269,9 +1286,7 @@ class RockPlannerStudio(tk.Toplevel):
 
     def __init__(self, master, figure_dpi=100, source_path=None, resolution=1.0):
         super().__init__(master)
-        self.title("Rock Field & Rover Paths")
-        self.geometry("1180x820")     # restored size once un-maximized
-        self.minsize(900, 640)
+        self.app = master
 
         self.figure_dpi = figure_dpi
         self.dem = None               # Loaded elevation array
@@ -1289,21 +1304,25 @@ class RockPlannerStudio(tk.Toplevel):
         self._apply_params_to_widgets()
         self.resolution_var.set(f"{resolution:g}")
 
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(80, self._drain_queue)
         self.log("Rock planner ready. Load a DEM to begin.")
 
         if source_path and os.path.exists(source_path):
             self.load_dem(source_path)
 
-        self.after(0, self._maximize)
+        self.after_idle(self._place_sash)
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
         panel_width = self.master.px(348) if hasattr(self.master, "px") else 348
-        left = ttk.Frame(self, width=panel_width, padding=(8, 8, 4, 8))
-        left.pack(side="left", fill="y")
-        left.pack_propagate(False)   # honour the fixed width; never collapse
+        self._panel_width = panel_width
+        # Labels re-wrapped on resize by _rewrap_labels.
+        self._wrapping_labels = []
+
+        # Resizable split between parameters and plot.
+        self._panes = ttk.PanedWindow(self, orient="horizontal")
+        self._panes.pack(fill="both", expand=True)
+        left = ttk.Frame(self._panes, padding=(8, 8, 4, 8))
 
         # Top bar: Home + title, always visible above the scroll area.
         top_bar = ttk.Frame(left)
@@ -1334,24 +1353,31 @@ class RockPlannerStudio(tk.Toplevel):
         # Scrollable parameter area between the top bar and the action bar.
         scroll_host = ttk.Frame(left)
         scroll_host.pack(side="top", fill="both", expand=True, pady=(8, 0))
+        # A ttk.Frame has no -background of its own, so take the window's.
         canvas = tk.Canvas(scroll_host, highlightthickness=0, borderwidth=0,
-                           background=self.cget("background"))
+                           background=self.app.cget("background"))
         scrollbar = ttk.Scrollbar(scroll_host, orient="vertical", command=canvas.yview)
         inner = ttk.Frame(canvas)
         inner.bind("<Configure>",
                    lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         window = canvas.create_window((0, 0), window=inner, anchor="nw")
-        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(window, width=e.width))
+
+        def on_canvas_resize(event):
+            canvas.itemconfigure(window, width=event.width)
+            # During <Configure>, winfo_width() still reports the old width.
+            self._rewrap_labels(event.width)
+
+        canvas.bind("<Configure>", on_canvas_resize)
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        ttk.Label(inner, wraplength=panel_width - self.master.px(40)
-                  if hasattr(self.master, "px") else panel_width - 40,
-                  justify="left", font=("Segoe UI", 8), foreground="#555555",
-                  text="Scatters rocks as obstacles across the drivable terrain while "
-                       "keeping a connected corridor network the rover can always "
-                       "traverse.").pack(anchor="w", pady=(0, 8), fill="x")
+        self._wrapping_labels.append(ttk.Label(
+            inner, justify="left", font=("Segoe UI", 8), foreground="#555555",
+            text="Scatters rocks as obstacles across the drivable terrain while "
+                 "keeping a connected corridor network the rover can always "
+                 "traverse."))
+        self._wrapping_labels[-1].pack(anchor="w", pady=(0, 8), fill="x")
 
         # Source DEM
         source_group = ttk.Labelframe(inner, text="Source DEM", padding=(8, 4, 8, 8),
@@ -1362,8 +1388,12 @@ class RockPlannerStudio(tk.Toplevel):
                   font=("Consolas", 8)).pack(fill="x")
         res_row = ttk.Frame(source_group)
         res_row.pack(fill="x", pady=(6, 0))
-        ttk.Button(res_row, text="Load DEM...", command=self.browse_dem).pack(
-            side="left", fill="x", expand=True)
+        self.load_button = ttk.Button(res_row, text="Load DEM  ▾",
+                                      command=self.open_dem_menu)
+        self.load_button.pack(side="left", fill="x", expand=True)
+        Tooltip(self.load_button,
+                "Lists the DEMs already in input_maps/ and outputs/, or opens\n"
+                "the file picker for a map kept anywhere else.")
         ttk.Label(res_row, text="  Resolution (m/px)", font=("Segoe UI", 8)).pack(side="left")
         self.resolution_var = tk.StringVar(value="1")
         res_entry = ttk.Entry(res_row, textvariable=self.resolution_var, width=7,
@@ -1375,6 +1405,13 @@ class RockPlannerStudio(tk.Toplevel):
                 "Ground metres per DEM pixel. Sets the real-world scale, so the path\n"
                 "width, crater depth and rock scale are all interpreted in metres.\n"
                 "Defaults to the studio's Map Geometry resolution.")
+
+        # Warns when the loaded file looks like a mask rather than a DEM.
+        self.source_note_var = tk.StringVar()
+        self._wrapping_labels.append(ttk.Label(
+            source_group, textvariable=self.source_note_var, justify="left",
+            style="Readout.TLabel", foreground="#b8860b"))
+        self._wrapping_labels[-1].pack(anchor="w", pady=(4, 0))
 
         # Parameters
         for group_name, specs in ROCK_PARAM_GROUPS:
@@ -1408,15 +1445,39 @@ class RockPlannerStudio(tk.Toplevel):
         ttk.Label(export_group, text="Base filename", font=("Segoe UI", 8)).pack(anchor="w")
         self.export_name_var = tk.StringVar(value="procedural_lunar_terrain")
         ttk.Entry(export_group, textvariable=self.export_name_var,
-                  font=("Consolas", 9)).pack(fill="x", pady=(2, 6))
+                  font=("Consolas", 9)).pack(fill="x", pady=(2, 4))
+
         self.obstacle_map_var = tk.BooleanVar(value=False)
         obstacle_check = ttk.Checkbutton(
             export_group, text="Also write full-res obstacle map (large)",
-            variable=self.obstacle_map_var)
+            variable=self.obstacle_map_var, command=self._refresh_output_preview)
         obstacle_check.pack(anchor="w")
         Tooltip(obstacle_check,
                 "Writes a full-resolution 0/1 rock-footprint raster alongside the\n"
                 "instance list. Useful as a mask, but large for big DEMs.")
+
+        # Lists the files that will be written, derived from the base filename.
+        self.output_preview_var = tk.StringVar()
+        preview_label = ttk.Label(export_group, textvariable=self.output_preview_var,
+                                  justify="left", style="Readout.TLabel")
+        preview_label.pack(anchor="w", pady=(6, 0))
+        Tooltip(preview_label,
+                "The files Generate & Export writes, derived from the base filename.\n"
+                "Loading a DEM sets the name to that map's, so its rocks land in the\n"
+                "same output folder as the map itself.")
+        self.export_name_var.trace_add("write", self._refresh_output_preview)
+        self._refresh_output_preview()
+
+        # Column summary for each output file; units are documented in the README.
+        self._wrapping_labels.append(ttk.Label(
+            export_group, justify="left", style="HomeHint.TLabel",
+            text="_rocks.csv   one row per rock: id, row, col, x_m, y_m, "
+                 "scale, height_m.\n"
+                 "_roverPaths.csv   corridor polylines: path_id, x_m, y_m, "
+                 "in order.\n"
+                 "_obstacleMap.csv   0/1 rock-footprint raster at full DEM "
+                 "resolution."))
+        self._wrapping_labels[-1].pack(anchor="w", pady=(8, 0))
 
         # Mouse-wheel scrolling over the panel, bound locally (not app-wide) so it
         # never fights the main studio's own wheel scrolling.
@@ -1424,8 +1485,10 @@ class RockPlannerStudio(tk.Toplevel):
         self._bind_mousewheel(canvas, canvas)
 
         # Right: plot on top, log at bottom.
-        right = ttk.Frame(self)
-        right.pack(side="right", fill="both", expand=True)
+        right = ttk.Frame(self._panes)
+        # Only the plot absorbs a resize; the parameter column keeps its width.
+        self._panes.add(left, weight=0)
+        self._panes.add(right, weight=1)
 
         log_frame = ttk.Frame(right, padding=(8, 4, 8, 8))
         ttk.Label(log_frame, text="Activity log",
@@ -1451,8 +1514,18 @@ class RockPlannerStudio(tk.Toplevel):
         plot_frame.pack(side="top", fill="both", expand=True)
         self._show_message("Load a DEM to plan a rock field.")
 
-    def _maximize(self):
-        maximize_window(self)
+    def _place_sash(self, attempt=0):
+        """Gives the parameter column its width once the panes have a real size."""
+        if not self.winfo_exists():
+            return
+        self.update_idletasks()
+        if self._panes.winfo_width() > self._panel_width * 2:
+            self._panes.sashpos(0, self._panel_width)
+            self.update_idletasks()
+            if abs(self._panes.sashpos(0) - self._panel_width) <= 2:
+                return
+        if attempt < 6:
+            self.after(60, lambda: self._place_sash(attempt + 1))
 
     def _bind_mousewheel(self, widget, canvas):
         """Binds vertical wheel scrolling on `widget` and all its descendants."""
@@ -1461,17 +1534,17 @@ class RockPlannerStudio(tk.Toplevel):
         for child in widget.winfo_children():
             self._bind_mousewheel(child, canvas)
 
+    def _rewrap_labels(self, width):
+        """Retunes the column's wrapped text to the width the drag handle gave it."""
+        wrap = max(160, width - 24)
+        for label in self._wrapping_labels:
+            if label.winfo_exists():
+                label.configure(wraplength=wrap)
+
     def go_home(self):
-        """Closes the planner and returns to the studio's home screen."""
+        """Back to the home screen, stopping any plan still running."""
         self._cancel.set()
-        master = self.master
-        self.destroy()
-        try:
-            master.show_home()
-            master.deiconify()
-            master.lift()
-        except Exception:
-            pass
+        self.app.show_home()
 
     def stop_job(self):
         """Requests cooperative cancellation of the running plan/export."""
@@ -1512,12 +1585,22 @@ class RockPlannerStudio(tk.Toplevel):
             return 1.0
 
     # --------------------------------------------------------------- I/O
-    def browse_dem(self):
+    def _refresh_output_preview(self, *_trace_args):
+        """Lists the filenames an export will write, under the base filename field."""
+        base_name = self.export_name_var.get().strip() or "procedural_lunar_terrain"
+        files = planned_rock_files(base_name, self.obstacle_map_var.get())
+        self.output_preview_var.set(
+            f"outputs/{base_name}/\n"
+            + "\n".join(f"  {name}" for name, _ in files))
+
+    def open_dem_menu(self):
+        """Drops the list of project DEMs under the Load button."""
+        drop_dem_menu(self, self.load_button, self.load_dem, self.browse_dem)
+
+    def browse_dem(self, initialdir=None):
         path = filedialog.askopenfilename(
             parent=self, title="Select a DEM for rock planning",
-            initialdir=map_browse_dir(),
-            filetypes=[("DEM files", "*.npy *.csv *.txt *.tif *.tiff"),
-                       ("All files", "*.*")])
+            initialdir=initialdir or map_browse_dir(), filetypes=DEM_FILETYPES)
         if path:
             self.load_dem(path)
 
@@ -1525,6 +1608,11 @@ class RockPlannerStudio(tk.Toplevel):
         """Loads the DEM off-thread, then triggers a preview."""
         self.source_var.set(os.path.basename(path))
         self.dem_path = path
+        self.source_note_var.set(dem_source_note(path))
+
+        # Name the export after the map so the rocks land in its output folder.
+        self.export_name_var.set(dem_group_name(path))
+
         self.log(f"Loading DEM: {os.path.basename(path)} ...")
         self._show_message(f"Loading {os.path.basename(path)} ...")
 
@@ -1605,12 +1693,11 @@ class RockPlannerStudio(tk.Toplevel):
         self._collect_params()
         base_name = self.export_name_var.get().strip() or "procedural_lunar_terrain"
         group_dir = os.path.join(GENERATOR_OUTPUT_DIR, base_name)
-        files = [f"{base_name}_rocks.csv    - rock instances (id, row, col, x_m, y_m, scale, height_m)",
-                 f"{base_name}_roverPaths.csv - rover corridor polylines (path_id, x_m, y_m)"]
-        if self.obstacle_map_var.get():
-            files.append(f"{base_name}_obstacleMap.csv - full-resolution 0/1 rock mask")
-        message = ("Plan the rock field and write:\n\n    " + "\n    ".join(files)
-                   + f"\n\nInto:\n    {group_dir}\n\nContinue?")
+        files = planned_rock_files(base_name, self.obstacle_map_var.get())
+        file_list = "\n".join(f"    {name}\n        {desc}" for name, desc in files)
+        message = (f"Plan the rock field on {os.path.basename(self.dem_path)} "
+                   f"and write:\n\n{file_list}\n\nInto:\n"
+                   + format_path_block(group_dir) + "\n\nContinue?")
         if not ask_confirmation(self, "Generate & export rock field", message,
                                 ok_label="Generate"):
             return
@@ -1763,44 +1850,32 @@ class RockPlannerStudio(tk.Toplevel):
                     framealpha=0.9)
         self.canvas.draw_idle()
 
-    # --------------------------------------------------------- shutdown
-    def _on_close(self):
-        self._cancel.set()
-        self.destroy()
-
 
 # =========================================================================
 # MAIN APPLICATION
 # =========================================================================
 
 
-class UnrealDispatchWindow(tk.Toplevel):
+class UnrealDispatchWindow(ttk.Frame):
     """
-    Standalone window for the single job of turning an existing DEM into an
-    Unreal Landscape.
+    View that converts an existing DEM to an Unreal Landscape.
 
-    The studio's own Send to Unreal button sits beside the generator controls,
-    which is where it belongs right after generating a surface. Arriving from
-    the home screen with a map already on disk, none of those controls apply,
-    so this window offers only what the export actually reads: the map, its
-    resolution, and whether to dispatch to a running editor.
+    Offers only the inputs the export reads: the map, its resolution, and
+    whether to dispatch to a running editor.
     """
 
-    def __init__(self, parent, source_path=None, resolution=1.0):
-        super().__init__(parent)
+    def __init__(self, parent, source_path=None, resolution=1.0, figure_dpi=100):
+        super().__init__(parent, padding=(8, 8, 8, 8))
         self.app = parent
-        self.title("Send a Map to Unreal")
-        self.transient(parent)
-        self.minsize(620, 470)
 
         self.source_path = None
+        self.destination_path = None
         self.worker = None
         self._cancel_event = threading.Event()
         self._queue = queue.Queue()
 
-        self._build(resolution)
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.bind("<Escape>", lambda _e: self._on_close())
+        self._build(resolution, figure_dpi=figure_dpi)
+        self.after_idle(self._place_sash)
 
         if source_path:
             self.set_source(source_path, announce=False)
@@ -1814,15 +1889,23 @@ class UnrealDispatchWindow(tk.Toplevel):
         self._drain()
 
     # ------------------------------------------------------------- layout
-    def _build(self, resolution):
-        outer = ttk.Frame(self, padding=10)
-        outer.pack(fill="both", expand=True)
+    # Controls column width in pixels; the drag handle adjusts it from there.
+    CONTROLS_WIDTH = 400
 
-        ttk.Label(outer, text="Send a Map to Unreal",
-                  style="Header.TLabel").pack(anchor="w")
-        ttk.Label(outer, style="HomeHint.TLabel",
-                  text="Converts a DEM to Unreal's 16-bit heightmap and spawns "
-                       "the Landscape actor.").pack(anchor="w", pady=(0, 10))
+    def _build(self, resolution, figure_dpi=100):
+        self.header = ViewHeader(
+            self, "Send a Map to Unreal", self._on_close,
+            subtitle="DEM to 16-bit heightmap, then the Landscape actor")
+        self.header.pack(fill="x", pady=(0, 8))
+
+        # Controls on the left, map preview on the right.
+        self._panes = ttk.PanedWindow(self, orient="horizontal")
+        self._panes.pack(fill="both", expand=True)
+
+        outer = ttk.Frame(self._panes, padding=(2, 0, 6, 0))
+        right = ttk.Frame(self._panes, padding=(6, 0, 2, 0))
+        self._panes.add(outer, weight=0)
+        self._panes.add(right, weight=1)
 
         # --- source map ---
         source_group = ttk.Labelframe(outer, text="Source map",
@@ -1839,15 +1922,12 @@ class UnrealDispatchWindow(tk.Toplevel):
 
         source_buttons = ttk.Frame(source_group)
         source_buttons.pack(fill="x", pady=(6, 0))
-        self.browse_button = ttk.Button(source_buttons, text="Browse  ▾",
+        self.browse_button = ttk.Button(source_buttons, text="Browse  \u25be",
                                         command=self.open_source_menu)
         self.browse_button.pack(side="left")
         Tooltip(self.browse_button,
                 "Lists the DEMs already in input_maps/ and outputs/, or opens\n"
                 "the file picker for a map kept anywhere else.")
-        self.preview_button = ttk.Button(source_buttons, text="Preview",
-                                         command=self.preview, state="disabled")
-        self.preview_button.pack(side="left", padx=(6, 0))
 
         ttk.Label(source_group, style="HomeHint.TLabel", justify="left",
                   text="An elevation map in metres "
@@ -1859,7 +1939,7 @@ class UnrealDispatchWindow(tk.Toplevel):
         self.source_note_var = tk.StringVar()
         ttk.Label(source_group, textvariable=self.source_note_var, justify="left",
                   style="Readout.TLabel", foreground="#b8860b",
-                  wraplength=560).pack(anchor="w")
+                  wraplength=self.CONTROLS_WIDTH - 60).pack(anchor="w")
 
         # --- settings ---
         settings = ttk.Labelframe(outer, text="Conversion",
@@ -1892,40 +1972,42 @@ class UnrealDispatchWindow(tk.Toplevel):
         destination.pack(fill="x", pady=(8, 0))
         ttk.Label(destination, text="Writes to", font=("Segoe UI", 8)).pack(anchor="w")
         self.destination_var = tk.StringVar(value="-")
-        ttk.Label(destination, textvariable=self.destination_var,
-                  style="Readout.TLabel", wraplength=560,
-                  justify="left").pack(anchor="w")
+        # No wraplength: the path is pre-broken at its separators.
+        self.destination_label = ttk.Label(destination,
+                                           textvariable=self.destination_var,
+                                           style="Readout.TLabel", justify="left")
+        self.destination_label.pack(anchor="w", fill="x")
+        destination.bind("<Configure>", self._reflow_destination)
+        self.open_folder_button = ttk.Button(destination, text="Open output folder",
+                                             command=self.open_output_folder,
+                                             state="disabled")
+        self.open_folder_button.pack(anchor="w", pady=(4, 0))
 
-        # --- log ---
-        log_group = ttk.Labelframe(outer, text="Log", style="Group.TLabelframe",
-                                   padding=8)
-        log_group.pack(fill="both", expand=True, pady=(8, 0))
-
+        # --- progress ---
+        progress_frame = ttk.Frame(outer)
+        progress_frame.pack(fill="x", pady=(10, 0))
         self.status_var = tk.StringVar(value="Idle")
-        ttk.Label(log_group, textvariable=self.status_var,
+        ttk.Label(progress_frame, textvariable=self.status_var,
                   style="Readout.TLabel").pack(anchor="w")
-        self.progress = ttk.Progressbar(log_group, mode="determinate", maximum=1.0)
-        self.progress.pack(fill="x", pady=(4, 4))
-
-        self.log_text = tk.Text(log_group, height=9, font=("Consolas", 8), wrap="word",
-                                relief="solid", borderwidth=1, background="#1e1e1e",
-                                foreground="#d4d4d4", insertbackground="#d4d4d4",
-                                state="disabled")
-        self.log_text.pack(fill="both", expand=True)
-        self.log_text.tag_configure("warn", foreground="#e6c07b")
-        self.log_text.tag_configure("error", foreground="#e06c75")
-        self.log_text.tag_configure("ok", foreground="#98c379")
+        self.progress = ttk.Progressbar(progress_frame, mode="determinate", maximum=1.0)
+        self.progress.pack(fill="x", pady=(4, 0))
 
         # --- actions ---
         actions = ttk.Frame(outer)
-        actions.pack(fill="x", pady=(10, 0))
+        actions.pack(side="bottom", fill="x", pady=(10, 0))
         self.send_button = ttk.Button(actions, text="Send to Unreal",
                                       style="Accent.TButton", command=self.send)
         self.send_button.pack(side="right")
         self.stop_button = ttk.Button(actions, text="Stop", command=self.stop,
                                       state="disabled")
         self.stop_button.pack(side="right", padx=(0, 6))
-        ttk.Button(actions, text="Close", command=self._on_close).pack(side="left")
+        # Home lives in the view header.
+
+        # --- right: the map, with the log beneath it ---
+        self._log = ActivityLog(right, height=6)
+        self.view = MapView(right, figure_dpi=figure_dpi, on_status=self.log)
+        self._log.pack(side="bottom", fill="x")
+        self.view.pack(side="top", fill="both", expand=True)
 
     # -------------------------------------------------------------- input
     def set_source(self, path, announce=True):
@@ -1935,11 +2017,43 @@ class UnrealDispatchWindow(tk.Toplevel):
         # Scroll to the end: a full path overflows the field, and the filename
         # is the half worth reading, not the drive letter.
         self.source_entry.after_idle(self.source_entry.xview_moveto, 1.0)
-        self.destination_var.set(output_group_dir(path))
-        self.preview_button.state(["!disabled"])
+        self.destination_path = output_group_dir(path)
+        self._reflow_destination()
         self.source_note_var.set(dem_source_note(path))
+        self.open_folder_button.state(["!disabled"])
+        # Preview the map as soon as it is selected.
+        self.view.show_path(path)
         if announce:
             self.log(f"Source map: {path}")
+
+    def _reflow_destination(self, event=None):
+        """
+        Re-lays the destination path for the column's current width.
+        """
+        if not self.destination_path:
+            self.destination_var.set("-")
+            return
+        # During <Configure>, winfo_width() still reports the old width.
+        available = event.width if event is not None else \
+            self.destination_label.winfo_width()
+        available = max(available, self.CONTROLS_WIDTH - 40)
+        # Consolas 8 is about 6.6 px per character; leave a margin for padding.
+        columns = max(24, int(available / 6.6) - 2)
+        self.destination_var.set(format_path_block(self.destination_path,
+                                                   width=columns, indent=""))
+
+    def _place_sash(self, attempt=0):
+        """Gives the controls column its width once the panes have a real size."""
+        if not self.winfo_exists():
+            return
+        self.update_idletasks()
+        if self._panes.winfo_width() > self.CONTROLS_WIDTH * 2:
+            self._panes.sashpos(0, self.CONTROLS_WIDTH)
+            self.update_idletasks()
+            if abs(self._panes.sashpos(0) - self.CONTROLS_WIDTH) <= 2:
+                return
+        if attempt < 6:
+            self.after(60, lambda: self._place_sash(attempt + 1))
 
     def open_source_menu(self):
         """Drops the map list under the Browse button, rebuilt so it stays current."""
@@ -1952,10 +2066,14 @@ class UnrealDispatchWindow(tk.Toplevel):
         if path:
             self.set_source(path)
 
-    def preview(self):
-        """Shows the chosen map in the app's shared viewer window."""
-        if self.source_path:
-            self.app._open_viewer(self.source_path)
+    def open_output_folder(self):
+        """Opens the folder the heightmap is written to."""
+        target = output_group_dir(self.source_path) if self.source_path else OUTPUT_ROOT
+        os.makedirs(target, exist_ok=True)
+        try:
+            os.startfile(target)  # noqa: S606 - Windows shell open
+        except AttributeError:  # pragma: no cover - non-Windows fallback
+            subprocess.Popen(["xdg-open", target])
 
     def _read_resolution(self):
         """The resolution entry as a positive float, or None if it is unusable."""
@@ -2063,22 +2181,19 @@ class UnrealDispatchWindow(tk.Toplevel):
             self.after(100, self._drain)
 
     def log(self, text, level=None):
-        self.log_text.configure(state="normal")
-        self.log_text.insert("end", text.rstrip() + "\n", level or ())
-        self.log_text.see("end")
-        self.log_text.configure(state="disabled")
+        self._log.log(text, level)
 
     def _on_close(self):
+        """Back to the home screen, asking first if a conversion is in flight."""
         if self._busy():
             if not ask_confirmation(
                     self, "Conversion running",
-                    "A conversion is still running.\n\nClose anyway?",
-                    ok_label="Close"):
+                    "A conversion is still running.\n\nLeave anyway?",
+                    ok_label="Leave"):
                 return
-            # The worker is a daemon thread and its remaining work only writes
-            # files, so asking it to stop and letting the window go is safe.
+            # Daemon worker; its remaining work only writes files.
             self._cancel_event.set()
-        self.destroy()
+        self.app.show_home()
 
 
 class TerrainStudio(tk.Tk):
@@ -2242,6 +2357,12 @@ class TerrainStudio(tk.Tk):
         self.stale_axes = {key: True for key in self.stale_axes}
         self.home_frame.destroy()
         self.studio_frame.destroy()
+        # Views are rebuilt lazily at the new scale on their next visit.
+        for attribute in ("map_browser", "rock_planner", "unreal_window"):
+            view = getattr(self, attribute)
+            if view is not None and view.winfo_exists():
+                view.destroy()
+            setattr(self, attribute, None)
         self._build_layout()
 
         self._apply_params_to_widgets()
@@ -2295,6 +2416,11 @@ class TerrainStudio(tk.Tk):
         style.configure("HomeTitle.TLabel", font=("Segoe UI Semibold", 22))
         style.configure("HomeSub.TLabel", font=("Segoe UI", 10), foreground="#666666")
         style.configure("HomeHint.TLabel", font=("Segoe UI", 8), foreground="#777777")
+        # Section captions and the step numbers on the landing screen.
+        style.configure("HomeSection.TLabel", font=("Segoe UI Semibold", 8),
+                        foreground="#8a8a8a")
+        style.configure("HomeStep.TLabel", font=("Segoe UI Semibold", 15),
+                        foreground="#b0b0b0")
 
     def _build_layout(self):
         # Two top-level views swapped by show_home / show_studio.
@@ -2302,9 +2428,7 @@ class TerrainStudio(tk.Tk):
 
         self.studio_frame = ttk.Frame(self)
 
-        # The three columns are split by drag handles rather than fixed widths:
-        # how much room the parameters, the preview, and the readouts deserve
-        # depends on the map and the screen, and only the user knows which.
+        # Resizable split between the parameter column and the rest.
         self.studio_panes = ttk.PanedWindow(self.studio_frame, orient="horizontal")
         self.studio_panes.pack(fill="both", expand=True)
 
@@ -2335,40 +2459,114 @@ class TerrainStudio(tk.Tk):
 
     # ---------------------------------------------------------------- home
     def _build_home(self):
-        """Landing screen with the app's top-level actions."""
+        """
+        Landing screen: numbered workflow stages, the map library, and a
+        status line reporting the maps on disk and the current map.
+        """
         self.home_frame = ttk.Frame(self)
 
         center = ttk.Frame(self.home_frame)
-        center.place(relx=0.5, rely=0.44, anchor="center")
+        center.place(relx=0.5, rely=0.5, anchor="center")
 
         ttk.Label(center, text="Lunar Terrain Studio",
-                  style="HomeTitle.TLabel").pack()
-        ttk.Label(center, text="Procedural lunar DEM generation, preview, and Unreal import",
-                  style="HomeSub.TLabel").pack(pady=(2, 26))
+                  style="HomeTitle.TLabel").pack(anchor="w")
+        ttk.Label(center, text="From a lunar elevation map to an Unreal Landscape",
+                  style="HomeSub.TLabel").pack(anchor="w", pady=(2, 22))
 
-        actions = [
-            ("Generate New Terrain",
-             "Set parameters, preview, and export a new DEM.",
-             self.enter_generate),
-            ("View an Existing Map",
-             "Browse the project's maps and see each one as you select it.",
-             self.browse_maps),
-            ("Place Rocks & Paths",
-             "Scatter rocks on a DEM while keeping drivable rover corridors.",
-             self.enter_rock_planner),
-            ("Send a Map to Unreal",
-             "Pick a DEM and build its Unreal Landscape heightmap.",
-             self.enter_send_to_unreal),
+        stages = [
+            ("1", "Create a Terrain",
+             "Generate a procedural lunar DEM: craters, erosion, roughness. "
+             "Writes the elevation map that the next stages read.",
+             self.enter_generate, False),
+            ("2", "Add Rocks & Rover Paths",
+             "Scatter rocks across the drivable ground while keeping a connected "
+             "corridor network. Writes an instance list, not a new DEM.",
+             self.enter_rock_planner, True),
+            ("3", "Send to Unreal",
+             "Convert an elevation map to a 16-bit .r16 heightmap and spawn the "
+             "Landscape actor in a running editor.",
+             self.enter_send_to_unreal, False),
         ]
-        for label, hint, command in actions:
-            ttk.Button(center, text=label, style="Home.TButton", width=30,
-                       command=command).pack(fill="x", ipady=8)
-            ttk.Label(center, text=hint, style="HomeHint.TLabel").pack(pady=(3, 16))
+
+        ttk.Label(center, text="WORKFLOW", style="HomeSection.TLabel").pack(
+            anchor="w", pady=(0, 6))
+        self._build_home_rows(center, stages)
+
+        ttk.Separator(center, orient="horizontal").pack(fill="x", pady=(18, 14))
+
+        ttk.Label(center, text="LIBRARY", style="HomeSection.TLabel").pack(
+            anchor="w", pady=(0, 6))
+        self._build_home_rows(center, [
+            ("", "Browse Maps",
+             "Look through every map in the project and see each one as you "
+             "select it. Whatever you leave selected becomes the current map "
+             "for stages 2 and 3.",
+             self.browse_maps, False),
+        ])
+
+        # Maps on disk and the current map; refreshed by show_home.
+        self.home_status_var = tk.StringVar()
+        ttk.Label(center, textvariable=self.home_status_var,
+                  style="HomeHint.TLabel", justify="left").pack(
+            anchor="w", pady=(20, 0))
+
+    def _build_home_rows(self, parent, rows):
+        """Renders one block of home-screen entries: step number, button, blurb."""
+        block = ttk.Frame(parent)
+        block.pack(fill="x")
+        block.columnconfigure(2, weight=1)
+
+        for index, (number, label, blurb, command, optional) in enumerate(rows):
+            ttk.Label(block, text=number, style="HomeStep.TLabel",
+                      width=2, anchor="e").grid(row=index, column=0, sticky="n",
+                                                padx=(0, 10), pady=(0, 12))
+            button = ttk.Button(block, text=label, style="Home.TButton", width=26,
+                                command=command)
+            button.grid(row=index, column=1, sticky="w", pady=(0, 12), ipady=6)
+
+            text = blurb + ("  (optional)" if optional else "")
+            ttk.Label(block, text=text, style="HomeHint.TLabel", justify="left",
+                      wraplength=self.px(430)).grid(
+                row=index, column=2, sticky="w", padx=(14, 0), pady=(0, 12))
+
+    def refresh_home_status(self):
+        """Summarises what is on disk and which map the stages would act on."""
+        counts = []
+        for label, folder in (("input_maps", INPUT_MAPS_DIR),
+                              ("outputs", OUTPUT_ROOT)):
+            if os.path.isdir(folder):
+                counts.append(f"{len(scan_dem_folder(folder))} in {label}/")
+            else:
+                counts.append(f"no {label}/ yet")
+
+        current = (self.exported_paths.get('elevation_npy')
+                   or self.unreal_source_path)
+        in_hand = os.path.basename(current) if current else "none yet"
+        self.home_status_var.set(
+            f"Maps on disk: {', '.join(counts)}\n"
+            f"Current map: {in_hand}")
+
+    BASE_TITLE = "Lunar Terrain Studio"
+
+    def _all_views(self):
+        """Every frame that can occupy the window, home and studio included."""
+        return [self.home_frame, self.studio_frame, self.map_browser,
+                self.rock_planner, self.unreal_window]
+
+    def show_view(self, view, title=None):
+        """
+        Shows `view` in the window and hides the others.
+        """
+        for other in self._all_views():
+            if other is not None and other is not view and other.winfo_exists():
+                other.pack_forget()
+        view.pack(fill="both", expand=True)
+        self.title(f"{self.BASE_TITLE} - {title}" if title else self.BASE_TITLE)
 
     def show_home(self):
-        """Switches to the landing screen."""
-        self.studio_frame.pack_forget()
-        self.home_frame.pack(fill="both", expand=True)
+        """Switches to the landing screen, refreshing what it reports."""
+        self.refresh_home_status()
+        self.show_view(self.home_frame)
 
     # Column widths in 96-DPI design pixels, used until the user drags a handle.
     DEFAULT_PARAM_WIDTH = 300
@@ -2377,8 +2575,7 @@ class TerrainStudio(tk.Tk):
 
     def show_studio(self):
         """Switches to the main studio, starting the preview on first entry."""
-        self.home_frame.pack_forget()
-        self.studio_frame.pack(fill="both", expand=True)
+        self.show_view(self.studio_frame, "Generate Terrain")
         if not self._sash_placed:
             self.after_idle(self._apply_sash_positions)
         if not self._preview_started:
@@ -2389,11 +2586,8 @@ class TerrainStudio(tk.Tk):
         """
         Places the two drag handles, on first show and after a DPI rebuild.
 
-        A sash position is measured in pixels from the left of its own paned
-        window and only takes effect once that window has a real width. While
-        the panes are still settling into their first layout Tk quietly snaps
-        the sash back to each pane's requested width, so the placement is
-        verified and retried briefly rather than assumed.
+        Tk may snap a sash back to the pane's requested width while the layout
+        settles, so the placement is verified and retried.
         """
         if not self.studio_frame.winfo_exists():
             return
@@ -2458,13 +2652,11 @@ class TerrainStudio(tk.Tk):
         source = self.exported_paths.get('elevation_npy') or self.unreal_source_path
         if self.unreal_window is None or not self.unreal_window.winfo_exists():
             self.unreal_window = UnrealDispatchWindow(
-                self, source_path=source,
+                self, source_path=source, figure_dpi=self.figure_dpi,
                 resolution=self.params.get('RESOLUTION_M_PER_PX', 1.0))
-        else:
-            self.unreal_window.deiconify()
-            if source:
-                self.unreal_window.set_source(source)
-        self.unreal_window.lift()
+        elif source:
+            self.unreal_window.set_source(source)
+        self.show_view(self.unreal_window, "Send a Map to Unreal")
 
     def enter_rock_planner(self):
         """Opens the rock-field planner, seeded with the last generated / chosen DEM."""
@@ -2477,11 +2669,9 @@ class TerrainStudio(tk.Tk):
             self.rock_planner = RockPlannerStudio(
                 self, figure_dpi=self.figure_dpi, source_path=source,
                 resolution=self.params.get('RESOLUTION_M_PER_PX', 1.0))
-        else:
-            self.rock_planner.deiconify()
-            if source:
-                self.rock_planner.load_dem(source)
-        self.rock_planner.lift()
+        elif source:
+            self.rock_planner.load_dem(source)
+        self.show_view(self.rock_planner, "Rock Field & Rover Paths")
 
     def browse_maps(self):
         """Opens the map browser, seeded with whatever map is already in hand."""
@@ -2491,26 +2681,19 @@ class TerrainStudio(tk.Tk):
             self.map_browser = MapBrowser(self, figure_dpi=self.figure_dpi,
                                           initial_path=source)
         else:
-            self.map_browser.deiconify()
             self.map_browser.refresh()
             if source:
                 self.map_browser.select_path(source)
-        self.map_browser.lift()
+        self.show_view(self.map_browser, "Browse Maps")
 
 
     # ---------------------------------------------------------------- left
     def _scrollable_column(self, parent, width=None):
         """
-        A vertically scrolling column; returns the frame to fill with content.
+        A vertically scrolling column; returns the frame to fill.
 
-        Both side columns can outgrow the window -- the parameter list always
-        has, and the export panel does now that it explains itself -- and a
-        column that simply drops the widgets that do not fit is worse than one
-        that scrolls.
-
-        The wheel is bound only while the pointer is over this column. Binding
-        it globally, as the parameter panel did, meant the wheel scrolled that
-        panel wherever the pointer was, including over the log and the preview.
+        The mouse wheel is bound only while the pointer is over the column, so
+        it does not scroll the column from elsewhere in the window.
         """
         container = ttk.Frame(parent)
         container.pack(fill="both", expand=True)
@@ -2537,10 +2720,8 @@ class TerrainStudio(tk.Tk):
             canvas.bind_all("<MouseWheel>", on_wheel)
 
         def leave(_event):
-            # Moving onto a widget inside the column still counts as inside.
-            # Tk signals that through the event's detail field, but tkinter does
-            # not always populate it, so compare the pointer against the
-            # canvas bounds instead.
+            # Leave also fires when moving onto a child widget; tkinter does not
+            # reliably expose event.detail, so check the pointer position.
             x, y = canvas.winfo_pointerxy()
             left, top = canvas.winfo_rootx(), canvas.winfo_rooty()
             inside = (left <= x < left + canvas.winfo_width()
@@ -2690,10 +2871,8 @@ class TerrainStudio(tk.Tk):
         top = ttk.Frame(parent)
         top.pack(side="top", fill="both", expand=True)
 
-        # A drag handle between the preview and the readout/export column, so
-        # the split can be set per map: a wide DEM wants the preview, a long
-        # statistics read wants the column. The preview carries all the weight
-        # so growing the window grows the map, not the fixed-width readouts.
+        # Resizable split between preview and side column; window growth goes
+        # to the preview.
         self.preview_panes = ttk.PanedWindow(top, orient="horizontal")
         self.preview_panes.pack(fill="both", expand=True)
 
@@ -2756,9 +2935,7 @@ class TerrainStudio(tk.Tk):
             text="Step 1 - generate the full-resolution DEM."))
         self._wrapping_labels[-1].pack(anchor="w", pady=(0, 2))
 
-        # The base filename is a stem several files are derived from, so show the
-        # names that will actually appear on disk, extensions and all, rather
-        # than leaving the user to infer them.
+        # Lists the files that will be written, derived from the base filename.
         self.output_preview_var = tk.StringVar()
         output_preview = ttk.Label(export_group, textvariable=self.output_preview_var,
                                    justify="left", style="Readout.TLabel")
@@ -2792,9 +2969,7 @@ class TerrainStudio(tk.Tk):
                  "the Landscape actor."))
         self._wrapping_labels[-1].pack(anchor="w", pady=(0, 2))
 
-        # Says what the input is without listing what it is not: the drop-down
-        # already filters the companion rasters out, and picking one by hand
-        # raises a warning under the field.
+        # Expected input; companion rasters are filtered or flagged elsewhere.
         self._wrapping_labels.append(ttk.Label(
             export_group, wraplength=wrap, justify="left",
             style="HomeHint.TLabel",
@@ -3186,11 +3361,8 @@ class TerrainStudio(tk.Tk):
                     self.progress.configure(value=0)
         except queue.Empty:
             pass
-        # Re-arming unconditionally leaves a timer pointing at a destroyed
-        # widget when the window closes, which Tk reports as an "invalid command
-        # name" on the way out. The id is kept so the pending one can be
-        # cancelled too; skipping the re-arm alone is not enough, because the
-        # timer already in flight still fires after destroy().
+        # Keep the id so _cancel_drain can stop the pending timer on destroy;
+        # otherwise Tk reports "invalid command name" on exit.
         if self.winfo_exists():
             self._drain_job = self.after(100, self._drain_queue)
 
@@ -3277,7 +3449,8 @@ class TerrainStudio(tk.Tk):
         message = (
             f"Generate a {params['COLS']} x {params['ROWS']} px DEM "
             f"({pixels / 1e6:.1f} megapixels) with seed {seed}.\n\n"
-            f"Files will be written to:\n    {target_dir}\n\n{file_list}"
+            "Files will be written to:\n"
+            + format_path_block(target_dir) + f"\n\n{file_list}"
         )
         if pixels > 25_000_000:
             message += (
