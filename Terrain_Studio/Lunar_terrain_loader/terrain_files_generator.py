@@ -21,8 +21,8 @@ except ImportError:
     print("[-] 'tifffile' not found. Processing .tif files will not be supported.")
 
 # --- Global Engine Constants ---
-UNREAL_SEA_LEVEL = 32767             # 16-bit midpoint (0-65535) used as the Z-axis baseline (sea level)
-UNREAL_Z_SCALE_DIVISOR = 256.0       # Engine-hardcoded divisor for Landscape Z-scale calculations
+UNREAL_SEA_LEVEL = 32768             # 16-bit value Unreal places at the Landscape actor's Z location
+UNREAL_HEIGHT_UNITS_PER_SCALE = 128.0  # Engine-hardcoded: one Z-scale unit equals 128 height steps (LANDSCAPE_ZSCALE = 1/128)
 MAX_COMPONENT_GRID_SIZE = 50         # Maximum recommended components to prevent Engine instability
 UINT16_MAX = 65535                   # Maximum theoretical value for a 16-bit unsigned integer
 CM_PER_METER = 100.0                 # Unreal Engine operates strictly in Centimeters
@@ -94,45 +94,48 @@ def terrain_file_reading(input_filepath, spatial_resolution):
 def convert_to_unreal_format(elevation_data, interpolation_resolution=1.0):
     """
     Translates metric elevation data into Unreal Engine's native 16-bit scalar space.
-    
+
     Args:
-        elevation_data (np.ndarray): The raw elevation matrix.
+        elevation_data (np.ndarray): The raw elevation matrix in meters.
         interpolation_resolution (float): Meters per pixel.
-        
+
     Returns:
-        tuple: (file_header string, correctly scaled integer ndarray)
+        tuple: (file_header string "width height resolution z_scale z_offset_m",
+                integer ndarray in the 0-65535 range)
     """
     # Float copy: integer DEMs cannot hold NaN, and the caller's array must not
     # be modified.
     elevation_data = np.array(elevation_data, dtype=float)
 
-    # Isolate missing data to prevent it from skewing the global Z-scale maximums
-    elevation_data[elevation_data == 0] = np.nan
-    
+    # Isolate missing data (0 or non-finite) so it cannot skew the height range
+    elevation_data[(elevation_data == 0) | ~np.isfinite(elevation_data)] = np.nan
+
     # Convert real-world metric data to Unreal's native centimeter scale
     elevation_cm = elevation_data * CM_PER_METER
 
-    max_elevation_cm = np.nanmax(elevation_cm)
-    if max_elevation_cm == 0 or np.isnan(max_elevation_cm): 
-        max_elevation_cm = 1.0 
+    if np.all(np.isnan(elevation_cm)):
+        min_elevation_cm = max_elevation_cm = 0.0
+    else:
+        min_elevation_cm = float(np.nanmin(elevation_cm))
+        max_elevation_cm = float(np.nanmax(elevation_cm))
 
-    # Calculate exact engine multipliers required to recreate the real-world height
-    z_axis_scale = max_elevation_cm / UNREAL_Z_SCALE_DIVISOR
-    height_scaling_factor = UNREAL_SEA_LEVEL / max_elevation_cm   
-    
-    # Scale geometry against the 16-bit midpoint (Unreal's defined Z=0)
-    scaled_elevation = (elevation_cm * height_scaling_factor) + UNREAL_SEA_LEVEL
-    
-    # Flatten anomalous/missing data strictly to the sea-level baseline
-    sanitized_elevation = np.nan_to_num(
-        scaled_elevation,
-        nan=UNREAL_SEA_LEVEL,
-        posinf=UNREAL_SEA_LEVEL,
-        neginf=UNREAL_SEA_LEVEL
-    )
+    # Guard against flat maps: a zero Z-scale would collapse the Landscape
+    elevation_span_cm = max(max_elevation_cm - min_elevation_cm, 1.0)
 
-    unreal_elevation_data = np.floor(sanitized_elevation).astype(int)
-    file_header = f"{elevation_data.shape[1]} {elevation_data.shape[0]} {interpolation_resolution} {z_axis_scale}"
+    # The full 16-bit range spans 512 * ScaleZ cm, so one step is ScaleZ / 128 cm
+    z_axis_scale = elevation_span_cm * UNREAL_HEIGHT_UNITS_PER_SCALE / UINT16_MAX
+
+    # Value 0 sits 256 * ScaleZ cm below the actor; place it at the lowest elevation
+    z_offset_m = (min_elevation_cm + UNREAL_SEA_LEVEL / UNREAL_HEIGHT_UNITS_PER_SCALE * z_axis_scale) / CM_PER_METER
+
+    # Missing data is flattened to the lowest valid elevation
+    elevation_cm = np.nan_to_num(elevation_cm, nan=min_elevation_cm)
+
+    normalized_elevation = (elevation_cm - min_elevation_cm) / elevation_span_cm * UINT16_MAX
+    unreal_elevation_data = np.clip(np.rint(normalized_elevation), 0, UINT16_MAX).astype(int)
+
+    file_header = (f"{elevation_data.shape[1]} {elevation_data.shape[0]} "
+                   f"{interpolation_resolution} {z_axis_scale} {z_offset_m}")
 
     return file_header, unreal_elevation_data
 
@@ -182,8 +185,7 @@ def calculate_optimal_landscape_config(dem_width, dem_height):
 
 def create_unreal_heightmap(unreal_elevation_data, dem_width, dem_height, landscape_config, output_map_directory, base_filename="lunar_terrain"):
     """
-    Pads the data matrix to match the final Landscape components, normalizes
-    for maximum 16-bit precision, and exports the native Little-Endian .r16 binary file.
+    Pads the data matrix to match the final Landscape components and exports the native Little-Endian .r16 binary file.
 
     Raises:
         ValueError: if no Landscape topology fits the DEM (more than 50x50
@@ -205,21 +207,16 @@ def create_unreal_heightmap(unreal_elevation_data, dem_width, dem_height, landsc
     # =========================================================================
     # 4. PREPARE ELEVATION DATA FOR 16-BIT EXPORT
     # =========================================================================
-    print("[*] Padding, normalizing, and casting elevation data to 16-bit format...")
+    print("[*] Padding and casting elevation data to 16-bit format...")
     
     # Pad the array edges to prevent "cliff" artifacts and align exactly with the Landscape vertices
     pad_y = max(0, final_height - dem_height)
     pad_x = max(0, final_width - dem_width)
     padded_grid = np.pad(unreal_elevation_data, ((0, pad_y), (0, pad_x)), mode='edge')
 
-    # Normalize data across the full 0-65535 spectrum to maximize 16-bit bit-depth precision, 
-    # preventing "terracing" or step artifacts in the final Unreal Engine material.
-    min_elevation = np.min(unreal_elevation_data)
-    max_elevation = np.max(unreal_elevation_data)
-    elevation_range = max(1.0, max_elevation - min_elevation)
-    
-    normalized_grid = ((padded_grid - min_elevation) / elevation_range) * UINT16_MAX
-    heightmap_data = np.clip(normalized_grid, 0, UINT16_MAX).astype('<u2')
+    # convert_to_unreal_format already spans the full 0-65535 range, and the
+    # Landscape Z-scale is derived from it, so the values must not be rescaled here.
+    heightmap_data = np.clip(padded_grid, 0, UINT16_MAX).astype('<u2')
     print("[*] Applying Left-Right flip (fliplr) to heightmap data...")
     
     # np.fliplr returns a view, so we use np.ascontiguousarray to ensure 

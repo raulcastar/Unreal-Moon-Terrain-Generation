@@ -5,25 +5,25 @@
 # --- Spatial Dimensions & Base Level ---
 ROWS: 1000
 COLS: 1000
-BASE_ELEVATION: 40.0
+BASE_ELEVATION: 200.0
 RANDOM_SEED: null           # Set to an integer to enforce deterministic generation
 
 # --- Macro-Terrain (Low-Frequency Noise) ---
-MACRO_ELEVATION_MIN: 0.5    # Minimum elevation variance (meters)
-MACRO_ELEVATION_MAX: 1.0    # Maximum elevation variance (meters)
+MACRO_ELEVATION_MIN: 30.0    # Minimum elevation variance (meters)
+MACRO_ELEVATION_MAX: 80.0    # Maximum elevation variance (meters)
 
 # --- Micro-Terrain (High-Frequency Noise / Dithering) ---
-MICRO_ROUGHNESS: 0.001      # Amplitude of Gaussian noise applied to prevent banding
+MICRO_ROUGHNESS: 0.02      # Amplitude of Gaussian noise applied to prevent banding
 
 # --- Crater Morphology ---
-CRATER_DENSITY: 0.00001     # Area multiplier determining total crater count
-CRATER_MIN_RADIUS_PCT: 0.01 # Minimum radius bounds (percentage of max map dimension)
-CRATER_MAX_RADIUS_PCT: 0.12 # Maximum radius bounds (percentage of max map dimension)
-CRATER_DEPTH_RATIO: 0.01    # Depth calculation ratio relative to crater radius
-CRATER_RIM_HEIGHT_RATIO: 0.2 # Ejecta rim height relative to internal crater depth
+CRATER_DENSITY: 0.0004     # Area multiplier determining total crater count
+CRATER_MIN_RADIUS_PCT: 0.005 # Minimum radius bounds (percentage of max map dimension)
+CRATER_MAX_RADIUS_PCT: 0.2 # Maximum radius bounds (percentage of max map dimension)
+CRATER_DEPTH_RATIO: 0.25    # Depth calculation ratio relative to crater radius
+CRATER_RIM_HEIGHT_RATIO: 0.3 # Ejecta rim height relative to internal crater depth
 
 # --- Post-Processing ---
-EROSION_BLUR_DIVISOR: 50.0  # Dynamic blur scaling. Lower values = stronger erosion smoothing.
+EROSION_BLUR_DIVISOR: 80.0  # Dynamic blur scaling. Lower values = stronger erosion smoothing.
 
 # --- I/O Serialization ---
 EXPORT_CSV: true

@@ -69,6 +69,14 @@ def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, h
     
     landscape_actor.set_actor_label(actor_label)
 
+    # Read the transform back so the Output Log shows what the Editor applied
+    applied_scale = landscape_actor.get_actor_scale3d()
+    applied_location = landscape_actor.get_actor_location()
+    relief_m = z_axis_scale * 512.0 / CM_PER_METER
+    unreal.log(f"[*] Landscape scale applied: X={applied_scale.x:.4f} Y={applied_scale.y:.4f} Z={applied_scale.z:.4f} "
+               f"(requested Z={z_axis_scale:.4f}); location Z={applied_location.z:.2f} cm; "
+               f"full 16-bit range spans {relief_m:.2f} m")
+
     # Enable Nanite on the Landscape (Requires UE 5.3+)
     try:
         landscape_actor.set_editor_property("bEnableNanite", True)

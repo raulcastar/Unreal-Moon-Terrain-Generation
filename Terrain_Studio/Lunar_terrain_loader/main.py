@@ -53,14 +53,11 @@ def generate_lunar_terrain(input_map_filepath, output_map_directory, input_resol
     # 1. READ ORIGINAL DEM
     # =========================================================================
     raw_elevation_data = terrain_files_generator.terrain_file_reading(input_map_filepath, input_resolution)
-    lowest_elevation = np.min(raw_elevation_data)
-    z_offset = lowest_elevation
-    print(f"Lowest elevation: {z_offset}")
 
     # =========================================================================
     # 2. UNREAL FORMAT CONVERSION
     # =========================================================================
-    # Translate metric data to Unreal Engine scalar space and baseline (Z=32767)
+    # Translate metric data to Unreal Engine's 16-bit range, Z-scale and actor height
     file_header, unreal_elevation_data = terrain_files_generator.convert_to_unreal_format(
         elevation_data=raw_elevation_data, 
         interpolation_resolution=input_resolution
@@ -89,7 +86,8 @@ def generate_lunar_terrain(input_map_filepath, output_map_directory, input_resol
     # =========================================================================
     # Extract dimensions from the cached header
     header_values = [float(val) for val in file_header.split()]
-    dem_width, dem_height, interpolation_resolution, z_axis_scale = header_values
+    dem_width, dem_height, interpolation_resolution, z_axis_scale, z_offset = header_values
+    print(f"[*] Landscape Z-scale: {z_axis_scale:.4f}, actor Z: {z_offset:.2f} m")
 
     # Determine the most memory-efficient landscape component grid
     landscape_config = terrain_files_generator.calculate_optimal_landscape_config(dem_width, dem_height)

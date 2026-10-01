@@ -144,7 +144,9 @@ PARAM_GROUPS = [
          "Largest crater radius as a fraction of the largest map dimension.\n"
          "Radii are cubically biased towards the minimum, as on real surfaces."),
         ("CRATER_DEPTH_RATIO", "Depth ratio", 0.001, 1.0, 'log',
-         "Bowl depth relative to crater radius. Real lunar craters sit near 0.2."),
+         "Floor depth below the surrounding ground, relative to crater radius.\n"
+         "Rim-to-floor depth is this x (1 + rim ratio). Mature mare craters sit\n"
+         "near 0.15, fresh craters up to about 0.3."),
         ("CRATER_RIM_HEIGHT_RATIO", "Rim height ratio", 0.0, 1.0, 'float',
          "Ejecta rim height relative to the bowl depth. 1.0 raises the rim as far\n"
          "as the bowl digs down."),

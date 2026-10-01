@@ -36,28 +36,28 @@ DEFAULTS = {
     # --- Spatial Dimensions & Base Level ---
     'ROWS': 1000,
     'COLS': 1000,
-    'BASE_ELEVATION': 40.0,
+    'BASE_ELEVATION': 200.0,
     'RANDOM_SEED': None,            # Integer enforces deterministic generation
 
     # --- Spatial scale (consumed by the Unreal loader, not by the generator) ---
     'RESOLUTION_M_PER_PX': 1.0,     # Meters per pixel of the generated DEM
 
     # --- Macro-Terrain (Low-Frequency Noise) ---
-    'MACRO_ELEVATION_MIN': 0.5,
-    'MACRO_ELEVATION_MAX': 1.0,
+    'MACRO_ELEVATION_MIN': 30.0,
+    'MACRO_ELEVATION_MAX': 80.0,
 
     # --- Micro-Terrain (High-Frequency Noise / Dithering) ---
-    'MICRO_ROUGHNESS': 0.001,
+    'MICRO_ROUGHNESS': 0.02,
 
     # --- Crater Morphology ---
-    'CRATER_DENSITY': 0.0001,
-    'CRATER_MIN_RADIUS_PCT': 0.01,
-    'CRATER_MAX_RADIUS_PCT': 0.12,
-    'CRATER_DEPTH_RATIO': 0.01,
-    'CRATER_RIM_HEIGHT_RATIO': 0.2,
+    'CRATER_DENSITY': 0.0004,
+    'CRATER_MIN_RADIUS_PCT': 0.005,
+    'CRATER_MAX_RADIUS_PCT': 0.2,
+    'CRATER_DEPTH_RATIO': 0.25,
+    'CRATER_RIM_HEIGHT_RATIO': 0.3,
 
     # --- Post-Processing ---
-    'EROSION_BLUR_DIVISOR': 50.0,
+    'EROSION_BLUR_DIVISOR': 80.0,
 
     # --- I/O Serialization ---
     'EXPORT_CSV': True,
@@ -134,28 +134,28 @@ def write_default_config(config_path):
 # --- Spatial Dimensions & Base Level ---
 ROWS: 1000
 COLS: 1000
-BASE_ELEVATION: 40.0
+BASE_ELEVATION: 200.0
 RANDOM_SEED: null           # Set to an integer to enforce deterministic generation
 
 # --- Spatial Scale (used by the Unreal loader) ---
 RESOLUTION_M_PER_PX: 1.0    # Meters covered by a single DEM pixel
 
 # --- Macro-Terrain (Low-Frequency Noise) ---
-MACRO_ELEVATION_MIN: 0.5    # Minimum elevation variance (meters)
-MACRO_ELEVATION_MAX: 1.0    # Maximum elevation variance (meters)
+MACRO_ELEVATION_MIN: 30.0    # Minimum elevation variance (meters)
+MACRO_ELEVATION_MAX: 80.0    # Maximum elevation variance (meters)
 
 # --- Micro-Terrain (High-Frequency Noise / Dithering) ---
-MICRO_ROUGHNESS: 0.001      # Amplitude of Gaussian noise applied to prevent banding
+MICRO_ROUGHNESS: 0.02      # Amplitude of Gaussian noise applied to prevent banding
 
 # --- Crater Morphology ---
-CRATER_DENSITY: 0.0001      # Area multiplier determining total crater count
-CRATER_MIN_RADIUS_PCT: 0.01 # Minimum radius bounds (percentage of max map dimension)
-CRATER_MAX_RADIUS_PCT: 0.12 # Maximum radius bounds (percentage of max map dimension)
-CRATER_DEPTH_RATIO: 0.01    # Depth calculation ratio relative to crater radius
-CRATER_RIM_HEIGHT_RATIO: 0.2 # Ejecta rim height relative to internal crater depth
+CRATER_DENSITY: 0.0004      # Area multiplier determining total crater count
+CRATER_MIN_RADIUS_PCT: 0.005 # Minimum radius bounds (percentage of max map dimension)
+CRATER_MAX_RADIUS_PCT: 0.2 # Maximum radius bounds (percentage of max map dimension)
+CRATER_DEPTH_RATIO: 0.25    # Depth calculation ratio relative to crater radius
+CRATER_RIM_HEIGHT_RATIO: 0.3 # Ejecta rim height relative to internal crater depth
 
 # --- Post-Processing ---
-EROSION_BLUR_DIVISOR: 50.0  # Dynamic blur scaling. Lower values = stronger erosion smoothing.
+EROSION_BLUR_DIVISOR: 80.0  # Dynamic blur scaling. Lower values = stronger erosion smoothing.
 
 # --- I/O Serialization ---
 EXPORT_CSV: true
@@ -203,12 +203,15 @@ def add_crater(matrix, center_row, center_col, radius, depth, rim_height_ratio):
 
     local_matrix = matrix[r_min:r_max, c_min:c_max]
 
-    # Parabolic depression inside the bowl.
-    local_matrix[bowl_mask] -= depth * (1 - (dist[bowl_mask] / radius) ** 2)
+    rim_peak = depth * rim_height_ratio
+
+    # Parabolic bowl whose wall climbs from the floor up to the rim crest, so
+    # the profile has no vertical step at the crater edge.
+    local_matrix[bowl_mask] += -depth + (depth + rim_peak) * (dist[bowl_mask] / radius) ** 2
 
     # Ejecta rim with quadratic falloff.
     rim_dist_normalized = (dist[rim_mask] - radius) / (radius * 0.5)
-    rim_height = (depth * rim_height_ratio) * (1 - rim_dist_normalized) ** 2
+    rim_height = rim_peak * (1 - rim_dist_normalized) ** 2
     local_matrix[rim_mask] += rim_height
 
 
