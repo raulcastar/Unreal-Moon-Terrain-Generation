@@ -92,6 +92,8 @@ import rock_field     # noqa: E402
 try:
     import terrain_files_generator  # noqa: E402
     import main as lunar_loader     # noqa: E402
+    import rocks_to_unreal          # noqa: E402
+    import rock_models              # noqa: E402
     LOADER_AVAILABLE = True
     LOADER_IMPORT_ERROR = None
 except Exception as exc:  # pragma: no cover - environment dependent
@@ -164,6 +166,15 @@ SURFACE_MESH_DETAIL = 100
 SURFACE_DRAG_DETAIL = 36
 
 
+# Planned radius / model radius beyond which the planner warns that rocks will
+# be visibly stretched or shrunk in Unreal.
+MODEL_SCALE_WARN = 3.0
+# Placing in Unreal measured ~15 ms per rock (10,338 rocks in 158 s); above this
+# count the estimate also gives the expected time.
+UNREAL_SECONDS_PER_ROCK = 0.015
+UNREAL_ROCKS_WARN = 20_000
+
+
 # Parameter schema for the Rock Field & Rover Paths window (same tuple layout as
 # PARAM_GROUPS). Keys map directly onto rock_field.DEFAULTS.
 ROCK_PARAM_GROUPS = [
@@ -182,15 +193,20 @@ ROCK_PARAM_GROUPS = [
     ("Rock Population", [
         ("ROCK_COVERAGE", "Coverage (fraction)", 0.0, 0.05, 'float',
          "Target fraction of the drivable ground covered by rock footprints.\n"
-         "The resulting rock count is reported after each preview."),
-        ("ROCK_MIN_SCALE", "Min scale", 0.05, 10.0, 'log',
-         "Smallest rock scale: the uniform mesh scale, i.e. the metre radius of a\n"
-         "1 m base mesh."),
-        ("ROCK_MAX_SCALE", "Max scale", 0.1, 30.0, 'log',
-         "Largest rock scale. Scales are cubically biased towards the minimum."),
-        ("ROCK_HEIGHT_RATIO", "Height / scale", 0.1, 2.0, 'float',
-         "Rock height as a fraction of its radius, written to the instance list\n"
-         "for scaling the mesh in Unreal."),
+         "Small rocks need many more instances for the same coverage: the\n"
+         "estimate below shows the count before you preview."),
+        ("ROCK_MIN_SCALE", "Min radius (m)", 0.01, 10.0, 'log',
+         "Smallest rock footprint radius, in metres. In Unreal each model is\n"
+         "scaled uniformly so its footprint matches the planned radius, so plan\n"
+         "near the models' own size (Place in Unreal > Match Rock Sizes to\n"
+         "Models) to avoid stretching them."),
+        ("ROCK_MAX_SCALE", "Max radius (m)", 0.01, 30.0, 'log',
+         "Largest rock footprint radius, in metres. Radii are cubically biased\n"
+         "towards the minimum."),
+        ("ROCK_HEIGHT_RATIO", "Height / radius", 0.1, 3.0, 'float',
+         "Rock height as a multiple of its footprint radius, written to the\n"
+         "instance list as height_m. Unreal keeps each model's own proportions,\n"
+         "so set this to the models' ratio for height_m to match what is placed."),
     ]),
 ]
 
@@ -703,7 +719,7 @@ def dem_source_problem(source_path):
 
 
 def convert_and_dispatch(source_path, resolution, dispatch, output_dir,
-                         log, progress, dialog, cancelled):
+                         log, progress, dialog, cancelled, save_level=True):
     """
     Converts a DEM to Unreal's 16-bit heightmap and optionally spawns the
     Landscape actor. Runs on a worker thread.
@@ -752,7 +768,8 @@ def convert_and_dispatch(source_path, resolution, dispatch, output_dir,
     buffer = io.StringIO()
     with redirect_stdout(buffer):
         lunar_loader.send_to_unreal(config, interp_resolution, z_scale, heightmap,
-                                    z_offset=z_offset, output_directory=output_dir)
+                                    z_offset=z_offset, output_directory=output_dir,
+                                    save_level=save_level)
     output = buffer.getvalue()
     for line in output.splitlines():
         if line.strip():
@@ -1429,6 +1446,7 @@ class RockPlannerStudio(ttk.Frame):
         self._build_ui()
         self._apply_params_to_widgets()
         self.resolution_var.set(f"{resolution:g}")
+        self._refresh_rock_estimate()
 
         self.after(80, self._drain_queue)
         self.log("Rock planner ready. Load a DEM to begin.")
@@ -1546,6 +1564,14 @@ class RockPlannerStudio(ttk.Frame):
             group.pack(fill="x", pady=(0, 8))
             for spec in specs:
                 self.rows_widgets[spec[0]] = ParamRow(group, spec, self._on_param_change)
+            if group_name == "Rock Population":
+                # Rock count the coverage asks for, so a small radius that would
+                # need hundreds of thousands of rocks shows up before planning.
+                self.rock_estimate_var = tk.StringVar()
+                self._wrapping_labels.append(ttk.Label(
+                    group, textvariable=self.rock_estimate_var, justify="left",
+                    style="Readout.TLabel"))
+                self._wrapping_labels[-1].pack(anchor="w", pady=(4, 0))
 
         seed_group = ttk.Labelframe(inner, text="Determinism", padding=(8, 4, 8, 8),
                                     style="Group.TLabelframe")
@@ -1604,6 +1630,113 @@ class RockPlannerStudio(ttk.Frame):
                  "_obstacleMap.csv   0/1 rock-footprint raster at full DEM "
                  "resolution."))
         self._wrapping_labels[-1].pack(anchor="w", pady=(8, 0))
+
+        # Place the exported rock field in a running Unreal Editor.
+        unreal_group = ttk.Labelframe(inner, text="Place in Unreal", padding=(8, 4, 8, 8),
+                                      style="Group.TLabelframe")
+        unreal_group.pack(fill="x", pady=(4, 4))
+        ttk.Label(unreal_group, text="Rock models folder",
+                  font=("Segoe UI", 8)).pack(anchor="w")
+        models_row = ttk.Frame(unreal_group)
+        models_row.pack(fill="x", pady=(2, 2))
+        self.models_folder_var = tk.StringVar(value="(none selected)")
+        self.models_folder = None
+        ttk.Entry(models_row, textvariable=self.models_folder_var, state="readonly",
+                  font=("Consolas", 8)).pack(side="left", fill="x", expand=True)
+        ttk.Button(models_row, text="Browse...", width=9,
+                   command=self.browse_models_folder).pack(side="left", padx=(4, 0))
+        self._wrapping_labels.append(ttk.Label(
+            unreal_group, justify="left", style="HomeHint.TLabel",
+            text=".gltf, .glb, .obj or .fbx, in subfolders too. glTF keeps its own "
+                 "materials; .obj/.fbx take the texture with the same name. "
+                 "Import the heightmap into the Landscape first: rocks are "
+                 "dropped onto its surface."))
+        self._wrapping_labels[-1].pack(anchor="w", pady=(0, 4))
+
+        # Real size of the chosen models next to the planned sizes, so a field
+        # planned in metres for centimetre models is caught before placing.
+        self.model_sizes = None       # rock_models.size_summary() of the folder
+        self.model_radii = []         # Footprint radius (m) of each sized model
+        self.model_info_var = tk.StringVar()
+        self._wrapping_labels.append(ttk.Label(
+            unreal_group, textvariable=self.model_info_var, justify="left",
+            style="Readout.TLabel"))
+        self._wrapping_labels[-1].pack(anchor="w", pady=(0, 4))
+        self.match_button = ttk.Button(unreal_group, text="Match Rock Sizes to Models",
+                                       command=self.match_sizes_to_models)
+        self.match_button.pack(fill="x", pady=(0, 6))
+        self.match_button.state(["disabled"])
+        Tooltip(self.match_button,
+                "Sets Min/Max radius to the smallest and largest model footprint\n"
+                "and Height / radius to the models' median, so rocks are placed\n"
+                "at their real size. Re-export before placing.")
+
+        self.physics_var = tk.BooleanVar(value=False)
+        physics_check = ttk.Checkbutton(unreal_group, text="Simulate physics",
+                                        variable=self.physics_var)
+        physics_check.pack(anchor="w")
+
+        self.rock_save_level_var = tk.BooleanVar(value=True)
+        rock_save_check = ttk.Checkbutton(unreal_group, text="Save the level afterwards",
+                                          variable=self.rock_save_level_var)
+        rock_save_check.pack(anchor="w")
+        Tooltip(rock_save_check,
+                "Saves the open Unreal level, and the imported rock assets, once the\n"
+                "rocks are placed or their stencils updated.")
+        Tooltip(physics_check,
+                "Off: rocks are static obstacles at their planned positions.\n"
+                "On: rocks are movable rigid bodies and may settle or roll.")
+
+        # Custom Depth-Stencil ids for the GNC object mask. They must match
+        # mask_labels in GNC-Moon-Simulator/component_stereo_depth/config/params.yaml.
+        ttk.Label(unreal_group, text="Object mask (Custom Depth Stencil)",
+                  font=("Segoe UI Semibold", 8)).pack(anchor="w", pady=(8, 2))
+        stencil_grid = ttk.Frame(unreal_group)
+        stencil_grid.pack(fill="x")
+        stencil_grid.columnconfigure(0, weight=1)
+        self.boulder_stencil_var = tk.StringVar(value="20")
+        self.small_rock_stencil_var = tk.StringVar(value="21")
+        self.boulder_radius_var = tk.StringVar(value="0.15")
+        for row, (label, var, tip) in enumerate((
+                ("Boulder stencil id", self.boulder_stencil_var,
+                 "Stencil id (1-255) for boulders; 20 is 'boulder' in the GNC mask labels."),
+                ("Small rock stencil id", self.small_rock_stencil_var,
+                 "Stencil id (1-255) for small rocks; 21 is 'small_rock' in the GNC\n"
+                 "mask labels. Use the boulder id here too for a single rock class."),
+                ("Boulder if radius >= (m)", self.boulder_radius_var,
+                 "Rocks whose planned footprint radius is at least this are boulders;\n"
+                 "the rest are small rocks."))):
+            name = ttk.Label(stencil_grid, text=label, font=("Segoe UI", 8))
+            name.grid(row=row, column=0, sticky="w", pady=1)
+            entry = ttk.Entry(stencil_grid, textvariable=var, width=8, justify="right",
+                              font=("Consolas", 9))
+            entry.grid(row=row, column=1, sticky="e", pady=1)
+            Tooltip(name, tip)
+            var.trace_add("write", self._refresh_stencil_preview)
+
+        # How the current rock field splits, so an empty class shows up here
+        # rather than in the simulator's mask.
+        self.stencil_preview_var = tk.StringVar()
+        self._wrapping_labels.append(ttk.Label(
+            unreal_group, textvariable=self.stencil_preview_var, justify="left",
+            style="Readout.TLabel"))
+        self._wrapping_labels[-1].pack(anchor="w", pady=(4, 0))
+        self.export_name_var.trace_add("write", self._refresh_stencil_preview)
+
+        self.place_button = ttk.Button(unreal_group, text="Place Rocks in Unreal",
+                                       command=self.place_in_unreal)
+        self.place_button.pack(fill="x", pady=(6, 0))
+        self.stencil_button = ttk.Button(unreal_group, text="Update Stencils Only",
+                                         command=self.update_stencils_in_unreal)
+        self.stencil_button.pack(fill="x", pady=(4, 0))
+        Tooltip(self.stencil_button,
+                "Re-tags rocks already placed in Unreal with the ids above,\n"
+                "without moving or re-importing them.")
+        if not LOADER_AVAILABLE:
+            self.place_button.state(["disabled"])
+            self.stencil_button.state(["disabled"])
+        self._refresh_stencil_preview()
+        self._refresh_model_info()
 
         # Mouse-wheel scrolling over the panel, bound locally (not app-wide) so it
         # never fights the main studio's own wheel scrolling.
@@ -1694,6 +1827,8 @@ class RockPlannerStudio(ttk.Frame):
         return self.params
 
     def _on_param_change(self):
+        self._refresh_rock_estimate()
+        self._refresh_model_info()
         if self.auto_var.get():
             self.request_preview(debounce_ms=500)
 
@@ -1752,6 +1887,7 @@ class RockPlannerStudio(ttk.Frame):
 
     # ---------------------------------------------------------- preview
     def request_preview(self, debounce_ms=0):
+        self._refresh_rock_estimate()
         if self.dem is None:
             return
         if self._preview_job:
@@ -1829,6 +1965,250 @@ class RockPlannerStudio(ttk.Frame):
             return
         self._launch(export=True)
 
+    # ------------------------------------------------------------ unreal
+    def browse_models_folder(self):
+        folder = filedialog.askdirectory(parent=self, title="Folder with rock models",
+                                         initialdir=self.models_folder or PROJECT_ROOT)
+        if folder:
+            self.models_folder = os.path.normpath(folder)
+            self.models_folder_var.set(self.models_folder)
+            self._read_model_sizes()
+
+    def _read_model_sizes(self):
+        """Reads the real size of every model in the chosen folder."""
+        self.model_sizes = None
+        rows = rock_models.folder_dimensions(self.models_folder) if self.models_folder else []
+        self.model_radii = [radius for _name, radius, _h in rows if radius]
+        if rows:
+            self.model_sizes = rock_models.size_summary(rows)
+            unknown = sum(1 for _name, radius, _h in rows if not radius)
+            if self.model_sizes:
+                low, high, ratio = self.model_sizes
+                self.log(f"{len(rows)} rock models: footprint radius {low:.3f}-{high:.3f} m, "
+                         f"height {ratio:.2f} x radius (median).")
+            if unknown:
+                self.log(f"{unknown} model(s) have no size readable outside Unreal "
+                         "(.fbx); they are left out of the size match.", level="warn")
+        elif self.models_folder:
+            self.log("No .gltf, .glb, .obj or .fbx models in that folder.", level="warn")
+        self._refresh_model_info()
+
+    def _model_scale_range(self):
+        """
+        (smallest, largest) uniform scale Unreal applies to a model over the
+        planned radii (each rock takes a model close to its size), or None
+        without model sizes.
+        """
+        if not self.model_radii:
+            return None
+        return rock_models.scale_range(self.model_radii,
+                                       self.rows_widgets['ROCK_MIN_SCALE'].get(),
+                                       self.rows_widgets['ROCK_MAX_SCALE'].get())
+
+    def _refresh_model_info(self, *_trace_args):
+        """Compares the planned rock sizes with the chosen models' real sizes."""
+        if not hasattr(self, "model_info_var"):
+            return
+        if not self.models_folder:
+            self.model_info_var.set("")
+            self.match_button.state(["disabled"])
+            return
+        if not self.model_sizes:
+            self.model_info_var.set("Model sizes unknown (only .fbx, or none found): "
+                                    "rocks are scaled to the planned radius.")
+            self.match_button.state(["disabled"])
+            return
+        low, high, ratio = self.model_sizes
+        smallest, largest = self._model_scale_range()
+        text = (f"Models: radius {low:.3f}-{high:.3f} m, height {ratio:.2f} x radius.\n"
+                f"Planned radii scale them {smallest:.2g}x-{largest:.2g}x.")
+        planned_ratio = self.rows_widgets['ROCK_HEIGHT_RATIO'].get()
+        stretched = largest > MODEL_SCALE_WARN or smallest < 1.0 / MODEL_SCALE_WARN
+        if stretched:
+            text += (" Rocks will look much larger or smaller than modelled: "
+                     "use Match Rock Sizes to Models.")
+        if abs(planned_ratio - ratio) > 0.25 * ratio:
+            text += (f"\nHeight / radius is {planned_ratio:.2f}, the models are {ratio:.2f}: "
+                     "height_m in the CSV will not match the placed rocks.")
+        self.model_info_var.set(text)
+        self.match_button.state(["!disabled"] if LOADER_AVAILABLE else ["disabled"])
+
+    def match_sizes_to_models(self):
+        """Plans the rock field at the chosen models' real size."""
+        if not self.model_sizes:
+            return
+        low, high, ratio = self.model_sizes
+        self.rows_widgets['ROCK_MIN_SCALE'].set(low)
+        self.rows_widgets['ROCK_MAX_SCALE'].set(high)
+        self.rows_widgets['ROCK_HEIGHT_RATIO'].set(ratio)
+        self._collect_params()
+        self.log(f"Rock radii set to the models: {low:.3f}-{high:.3f} m, "
+                 f"height {ratio:.2f} x radius. Generate & Export again before placing.",
+                 level="ok")
+        self._on_param_change()
+
+    def _refresh_rock_estimate(self, *_trace_args):
+        """Shows how many rocks the coverage asks for on the loaded map."""
+        if not hasattr(self, "rock_estimate_var"):
+            return
+        if self.dem is None:
+            self.rock_estimate_var.set("Load a DEM to estimate the rock count.")
+            return
+        params = rock_field.coerce_params(
+            {key: row.get() for key, row in self.rows_widgets.items()})
+        area = self.dem.shape[0] * self.dem.shape[1] * self._resolution() ** 2
+        if self.result:
+            area *= self.result['drivable_frac']
+            where = "the drivable ground"
+        else:
+            where = "the whole map (before craters are excluded)"
+        count = rock_field.estimate_rock_count(params, area)
+        text = f"About {count:,} rocks on {where}."
+        if count > rock_field.MAX_ROCKS:
+            text += (f"\nOver the {rock_field.MAX_ROCKS:,} limit: the plan stops there and "
+                     "covers less than asked. Lower the coverage or raise the radii.")
+        placed = min(count, rock_field.MAX_ROCKS)
+        if placed > UNREAL_ROCKS_WARN:
+            minutes = placed * UNREAL_SECONDS_PER_ROCK / 60.0
+            text += (f"\nPlacing them in Unreal takes roughly {minutes:.0f} min "
+                     "(one actor per rock).")
+        self.rock_estimate_var.set(text)
+
+    def _rocks_csv_path(self):
+        base_name = self.export_name_var.get().strip() or "procedural_lunar_terrain"
+        return base_name, os.path.join(GENERATOR_OUTPUT_DIR, base_name,
+                                       f"{base_name}_rocks.csv")
+
+    def _stencil_settings(self):
+        """(boulder_id, small_rock_id, boulder_min_radius_m), or None if invalid."""
+        try:
+            boulder = int(self.boulder_stencil_var.get())
+            small = int(self.small_rock_stencil_var.get())
+            radius = float(self.boulder_radius_var.get())
+        except ValueError:
+            return None
+        if not (1 <= boulder <= 255 and 1 <= small <= 255 and radius >= 0):
+            return None
+        return boulder, small, radius
+
+    def _refresh_stencil_preview(self, *_trace_args):
+        """Shows how the exported rock field splits between the two stencil ids."""
+        settings = self._stencil_settings()
+        if settings is None:
+            self.stencil_preview_var.set("Stencil ids must be 1-255 and the radius >= 0.")
+            return
+        boulder, small, radius = settings
+        _base, rocks_csv = self._rocks_csv_path()
+        try:
+            scales = np.loadtxt(rocks_csv, delimiter=",", skiprows=1, usecols=5, ndmin=1)
+        except (OSError, ValueError, IndexError):
+            self.stencil_preview_var.set("Export the rock field to see how it splits.")
+            return
+        n_boulder = int((scales >= radius).sum())
+        n_small = len(scales) - n_boulder
+        text = (f"This field: {n_boulder} boulders (id {boulder}), "
+                f"{n_small} small rocks (id {small}).")
+        if len(scales) and (n_boulder == 0 or n_small == 0):
+            text += (f"\nAll rocks fall in one class: planned radii run "
+                     f"{scales.min():.2f}-{scales.max():.2f} m.")
+        self.stencil_preview_var.set(text)
+
+    def _start_unreal_job(self, status, job):
+        """Runs `job(log)` on a worker thread with the planner's buttons disabled."""
+        self.status_var.set(status)
+        for button in (self.preview_button, self.export_button, self.place_button,
+                       self.stencil_button):
+            button.state(["disabled"])
+
+        def worker():
+            try:
+                job(lambda text, level=None: self._queue.put(("log", (text, level))))
+            except Exception:
+                self._queue.put(("log", (traceback.format_exc(), "error")))
+            finally:
+                self._queue.put(("done", None))
+
+        self._worker = threading.Thread(target=worker, daemon=True)
+        self._worker.start()
+
+    def update_stencils_in_unreal(self):
+        """Re-tags the rocks already placed in Unreal with the current stencil ids."""
+        if self._busy():
+            self.log("A job is already running; wait for it to finish.", level="warn")
+            return
+        settings = self._stencil_settings()
+        if settings is None:
+            self.log("Stencil ids must be whole numbers 1-255 and the radius >= 0.",
+                     level="error")
+            return
+        boulder, small, radius = settings
+        base_name, _csv = self._rocks_csv_path()
+        save_level = self.rock_save_level_var.get()
+        self.log(f"Updating stencils of the '{base_name}' rocks in Unreal "
+                 f"(boulder {boulder} if radius >= {radius:g} m, else {small}).")
+        self._start_unreal_job(
+            "Updating stencils in Unreal...",
+            lambda log: rocks_to_unreal.send_stencils_to_unreal(
+                base_name, boulder, small, radius, save_level=save_level, log=log))
+
+    def place_in_unreal(self):
+        """Sends the exported rock field to a running Unreal Editor."""
+        if self._busy():
+            self.log("A job is already running; wait for it to finish.", level="warn")
+            return
+        if not self.models_folder:
+            self.log("Choose the folder with the rock models first.", level="warn")
+            return
+        base_name, rocks_csv = self._rocks_csv_path()
+        if not os.path.isfile(rocks_csv):
+            self.log(f"No {base_name}_rocks.csv yet: run Generate & Export first.",
+                     level="warn")
+            return
+        try:
+            resolution = float(self.resolution_var.get())
+        except ValueError:
+            resolution = 0.0
+        if not resolution > 0:
+            self.log("Resolution must be a positive number.", level="error")
+            return
+        settings = self._stencil_settings()
+        if settings is None:
+            self.log("Stencil ids must be whole numbers 1-255 and the radius >= 0.",
+                     level="error")
+            return
+        boulder, small, radius = settings
+
+        # The Landscape is labelled after its heightmap, and its width is in the
+        # heightmap's JSON next to the DEM.
+        dem_stem = (os.path.splitext(os.path.basename(self.dem_path))[0]
+                    if self.dem_path else base_name)
+        width = rocks_to_unreal.heightmap_width(
+            os.path.join(GENERATOR_OUTPUT_DIR, dem_group_name(dem_stem)), dem_stem)
+        seed = self._seed() or 1
+        physics = self.physics_var.get()
+        save_level = self.rock_save_level_var.get()
+
+        if self.model_sizes is None:
+            self._read_model_sizes()
+        scale_range = self._model_scale_range()
+        if scale_range and (scale_range[1] > MODEL_SCALE_WARN
+                            or scale_range[0] < 1.0 / MODEL_SCALE_WARN):
+            self.log(f"The planned radii scale the models {scale_range[0]:.2g}x-"
+                     f"{scale_range[1]:.2g}x. Use Match Rock Sizes to Models and "
+                     "re-export to place them at their real size.", level="warn")
+
+        models_folder = self.models_folder
+        self.log(f"Placing {os.path.basename(rocks_csv)} in Unreal "
+                 f"(models: {os.path.basename(models_folder)}).")
+        self._start_unreal_job(
+            "Placing rocks in Unreal...",
+            lambda log: rocks_to_unreal.send_rocks_to_unreal(
+                rocks_csv, models_folder, resolution,
+                landscape_label=f"{dem_stem}_heightmap", landscape_width=width,
+                seed=seed, simulate_physics=physics, boulder_stencil=boulder,
+                small_rock_stencil=small, boulder_min_radius_m=radius,
+                save_level=save_level, log=log))
+
     def open_output_folder(self):
         base_name = self.export_name_var.get().strip() or "procedural_lunar_terrain"
         target = os.path.join(GENERATOR_OUTPUT_DIR, base_name)
@@ -1857,10 +2237,15 @@ class RockPlannerStudio(ttk.Frame):
                     self.result = payload
                     self._render(payload)
                     self._log_result(payload)
+                    self._refresh_rock_estimate()
                 elif kind == "written":
                     self.log("Rock field written:", level="ok")
                     for label, path in payload.items():
                         self.log(f"  {label}: {path}")
+                    self._refresh_stencil_preview()
+                elif kind == "log":
+                    text, level = payload
+                    self.log(text, level=level)
                 elif kind == "cancelled":
                     self.log("Job cancelled.", level="warn")
                     self.status_var.set("Cancelled")
@@ -1871,6 +2256,9 @@ class RockPlannerStudio(ttk.Frame):
                 elif kind == "done":
                     self.preview_button.state(["!disabled"])
                     self.export_button.state(["!disabled"])
+                    if LOADER_AVAILABLE:
+                        self.place_button.state(["!disabled"])
+                        self.stencil_button.state(["!disabled"])
                     self.stop_button.state(["disabled"])
                     if self.status_var.get() not in ("Failed", "Cancelled"):
                         self.status_var.set("Idle")
@@ -1880,6 +2268,10 @@ class RockPlannerStudio(ttk.Frame):
         self.after(80, self._drain_queue)
 
     def _log_result(self, result):
+        if result.get('rock_capped'):
+            self.log(f"The coverage asked for {result['rock_requested']:,} rocks; the plan "
+                     f"stops at {rock_field.MAX_ROCKS:,}, so it covers less than asked.",
+                     level="warn")
         self.log(
             f"Placed {result['rock_count']} rocks. "
             f"Drivable {result['drivable_frac'] * 100:.1f}% of map "
@@ -2092,6 +2484,11 @@ class UnrealDispatchWindow(ttk.Frame):
         ttk.Label(settings, style="HomeHint.TLabel",
                   text="Unticked, the heightmap is written but no editor is "
                        "contacted.").grid(row=2, column=0, columnspan=2, sticky="w")
+        self.save_level_var = tk.BooleanVar(value=True)
+        save_check = ttk.Checkbutton(settings, text="Save the level afterwards",
+                                     variable=self.save_level_var)
+        save_check.grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        Tooltip(save_check, 'Saves the open Unreal level once the Landscape actor is spawned.\nThe heightmap import is still manual: save again after it.')
 
         # --- destination ---
         destination = ttk.Frame(outer)
@@ -2230,6 +2627,7 @@ class UnrealDispatchWindow(ttk.Frame):
 
         source_path = self.source_path
         dispatch = self.dispatch_var.get()
+        save_level = self.save_level_var.get()
         output_dir = output_group_dir(source_path)
 
         self.log(f"Sending to Unreal: {os.path.basename(source_path)}")
@@ -2247,7 +2645,7 @@ class UnrealDispatchWindow(ttk.Frame):
                         "progress", (message, fraction)),
                     dialog=lambda title, message: self._post(
                         "dialog", (title, message)),
-                    cancelled=self._cancel_event.is_set)
+                    cancelled=self._cancel_event.is_set, save_level=save_level)
             except terrain_core.TerrainCancelled:
                 self._post("cancelled", None)
             except Exception:
@@ -2470,6 +2868,7 @@ class TerrainStudio(tk.Tk):
             'exag': self.exaggeration_var.get(),
             'export_name': self.export_name_var.get(),
             'dispatch': self.dispatch_var.get(),
+            'save_level': self.save_level_var.get(),
             'displayed': self.displayed,
             'full_result': self.full_result,
             'preview_result': self.preview_result,
@@ -2501,6 +2900,7 @@ class TerrainStudio(tk.Tk):
         self.exaggeration_var.set(snapshot['exag'])
         self.export_name_var.set(snapshot['export_name'])
         self.dispatch_var.set(snapshot['dispatch'])
+        self.save_level_var.set(snapshot['save_level'])
         self.displayed = snapshot['displayed']
         self.full_result = snapshot['full_result']
         self.preview_result = snapshot['preview_result']
@@ -3141,6 +3541,11 @@ class TerrainStudio(tk.Tk):
                 "When enabled, the studio broadcasts for a running Unreal Editor with\n"
                 "Remote Execution enabled and spawns the Landscape actor automatically.\n"
                 "When disabled, only the .r16 / .json / .txt files are written.")
+        self.save_level_var = tk.BooleanVar(value=True)
+        save_check = ttk.Checkbutton(export_group, text="Save the level afterwards",
+                                     variable=self.save_level_var)
+        save_check.pack(anchor="w")
+        Tooltip(save_check, 'Saves the open Unreal level once the Landscape actor is spawned.\nThe heightmap import is still manual: save again after it.')
 
         self.unreal_button = ttk.Button(export_group, text="Send to Unreal",
                                         style="Accent.TButton",
@@ -3654,6 +4059,7 @@ class TerrainStudio(tk.Tk):
 
         resolution = self.params['RESOLUTION_M_PER_PX']
         dispatch = self.dispatch_var.get()
+        save_level = self.save_level_var.get()
         output_dir = output_group_dir(source_path)
 
         self.log(f"Sending to Unreal: {os.path.basename(source_path)}")
@@ -3664,7 +4070,7 @@ class TerrainStudio(tk.Tk):
                 log=self._log_from_worker,
                 progress=self._progress_hook,
                 dialog=self._dialog_from_worker,
-                cancelled=self._cancel_event.is_set)
+                cancelled=self._cancel_event.is_set, save_level=save_level)
 
         self._start_worker(job, "Sending to Unreal...", cancellable=True)
 

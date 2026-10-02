@@ -109,10 +109,11 @@ def generate_lunar_terrain(input_map_filepath, output_map_directory, input_resol
 
 
 def send_to_unreal(landscape_config, interpolation_resolution, z_axis_scale, heightmap_filename,
-                   z_offset=0.0, output_directory=None):
+                   z_offset=0.0, output_directory=None, save_level=True):
     """
-    Initializes a network broadcast to locate a running Unreal Editor, connects to 
+    Initializes a network broadcast to locate a running Unreal Editor, connects to
     the first available node, and injects the Python execution command.
+    With save_level, Unreal saves the level once the Landscape is spawned.
     """
     
     # Initialize the Unreal Remote Execution network client
@@ -145,9 +146,10 @@ def send_to_unreal(landscape_config, interpolation_resolution, z_axis_scale, hei
             command = (
                 f"import sys; "
                 f"sys.path.append('{BASE_DIRECTORY}') if '{BASE_DIRECTORY}' not in sys.path else None; "
+                f"import importlib; import unreal_level_saver; importlib.reload(unreal_level_saver); "
                 f"import unreal_terrain_generator; "
-                f"import importlib; importlib.reload(unreal_terrain_generator); "
-                f"unreal_terrain_generator.create_landscape({landscape_config}, {interpolation_resolution}, {z_axis_scale}, '{target_r16_path}', {0.0}, {0.0}, {z_offset})"
+                f"importlib.reload(unreal_terrain_generator); "
+                f"unreal_terrain_generator.create_landscape({landscape_config}, {interpolation_resolution}, {z_axis_scale}, '{target_r16_path}', {0.0}, {0.0}, {z_offset}, save_level={bool(save_level)})"
             )
 
             remote_exec.run_command(command)

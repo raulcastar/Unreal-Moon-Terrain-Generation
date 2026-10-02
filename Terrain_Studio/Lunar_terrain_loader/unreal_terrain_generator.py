@@ -10,11 +10,13 @@ import os
 
 import unreal
 
+from unreal_level_saver import save_current_level
+
 # --- Global Constants ---
 # Unreal Engine uses Centimeters (cm) as its native base unit for all world transforms.
 CM_PER_METER = 100.0 
 
-def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, heightmap_filepath="outputs/lunar_terrain.r16", x_offset=0.0, y_offset=0.0, z_offset=0.0):
+def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, heightmap_filepath="outputs/lunar_terrain.r16", x_offset=0.0, y_offset=0.0, z_offset=0.0, save_level=True):
     """
     Instantiates and configures a Landscape actor based on pre-calculated DEM dimensions.
     
@@ -24,6 +26,7 @@ def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, h
         z_axis_scale (float): Normalized vertical scaling factor for the Landscape transform.
         heightmap_filepath (str): Absolute path to the generated .r16 file for user reference.
         x_offset, y_offset, z_offset (float): World-space spawn coordinates in meters.
+        save_level (bool): Save the level once the Landscape actor exists.
     """
     
     # Unpack the pre-calculated component topology configuration
@@ -92,6 +95,11 @@ def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, h
     # Force the Editor selection state to the newly created actor and frame the viewport camera
     unreal.PythonBPLib.select_actor(landscape_actor, selected=True, notify=True)
     unreal.PythonBPLib.request_viewport_focus_on_selection()
+
+    # Save now so the Landscape actor survives a restart; the heightmap import
+    # below is manual, so the level needs saving again after it.
+    if save_level:
+        unreal.log(f"[*] {save_current_level()}")
     
     # =========================================================================
     # 3. PROMPT USER WITH IMPORT INSTRUCTIONS
@@ -110,7 +118,10 @@ def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, h
         "5. Click 'Import' in the bottom right panel.\n\n"
         "The terrain relief will be applied immediately."
     )
-    
+    if save_level:
+        dialog_message += ("\n\nThe level has been saved with the flat Landscape: "
+                           "save it again (Ctrl+S) after the import.")
+
     # Suspend Editor execution and visually notify the user of pending manual operations
     unreal.EditorDialog.show_message(
         dialog_title, dialog_message, unreal.AppMsgType.OK, unreal.AppReturnType.OK

@@ -355,12 +355,35 @@ def _connect_components(cost, region, corridor, progress):
 # ROCK PLACEMENT
 # =========================================================================
 
+# Hard ceiling on the rocks one plan may place. Small rocks on a large map can
+# otherwise ask for millions, which neither the planner nor Unreal (one actor
+# per rock) can handle.
+MAX_ROCKS = 100_000
+
+# A rock whose radius is under half a planning cell fits inside its own cell.
+_CELL_FIT = 0.5
+_SQRT2 = float(np.sqrt(2.0))
+
+
+def estimate_rock_count(params, drivable_area_m2):
+    """
+    Rocks a plan aims for on `drivable_area_m2` of drivable ground, before the
+    MAX_ROCKS ceiling: coverage x area / mean rock footprint.
+    """
+    min_r = params['ROCK_MIN_SCALE']
+    max_r = max(min_r, params['ROCK_MAX_SCALE'])
+    mean_r = min_r + (max_r - min_r) * _CUBE_BIAS_MEAN
+    return max(0, int(params['ROCK_COVERAGE'] * drivable_area_m2
+                      / max(np.pi * mean_r ** 2, 1e-12)))
+
+
 def _stamp_disk(mask, row, col, radius):
     """Marks a filled disk of the given radius into a boolean mask, in place."""
     rows, cols = mask.shape
-    reach = int(np.ceil(radius))
-    r0, r1 = max(0, row - reach), min(rows, row + reach + 1)
-    c0, c1 = max(0, col - reach), min(cols, col + reach + 1)
+    reach = int(np.ceil(radius)) + 1
+    r_mid, c_mid = int(round(row)), int(round(col))
+    r0, r1 = max(0, r_mid - reach), min(rows, r_mid + reach + 1)
+    c0, c1 = max(0, c_mid - reach), min(cols, c_mid + reach + 1)
     if r0 >= r1 or c0 >= c1:
         return
     rr, cc = np.ogrid[r0:r1, c0:c1]
@@ -373,8 +396,14 @@ def _place_rocks(region, corridor, crater_mask, params, res_row, res_col, seed,
     Scatters rocks over the drivable region while keeping clear of the corridors
     and craters.
 
-    Returns (registry, occupancy) where registry is an (N, 3) array of
-    (row, col, radius_px) and occupancy is the rock footprint mask.
+    Returns (registry, occupancy, requested) where registry is an (N, 3) array
+    of (row, col, radius_px), occupancy is the rock footprint mask, and
+    requested is the rock count the coverage asked for before MAX_ROCKS.
+
+    Rocks smaller than half a planning cell get a random offset inside their
+    cell instead of sitting on the cell centre, which would line them up on the
+    grid. Keeping each inside its own cell, one per cell, rules out overlaps
+    among them without comparing against every rock already placed.
     """
     rows, cols = region.shape
     mean_res = 0.5 * (res_row + res_col)
@@ -402,23 +431,23 @@ def _place_rocks(region, corridor, crater_mask, params, res_row, res_col, seed,
         dist_to_crater = np.full((rows, cols), np.inf)
 
     drivable_px = int(region.sum())
-    mean_radius_px = min_r_px + (max_r_px - min_r_px) * _CUBE_BIAS_MEAN
-    mean_area_px = np.pi * mean_radius_px ** 2
-    target = int(params['ROCK_COVERAGE'] * drivable_px / max(mean_area_px, 1e-6))
-    target = max(0, target)
+    requested = estimate_rock_count(params, drivable_px * mean_res ** 2)
+    target = min(requested, MAX_ROCKS)
 
     if target == 0 or drivable_px == 0:
-        return np.empty((0, 3)), occupancy
+        return np.empty((0, 3)), occupancy, requested
 
     rng = np.random.default_rng(seed)
     registry = np.empty((target, 3), dtype=float)
     placed, attempts = 0, 0
     max_attempts = target * 20
+    cell_taken = np.zeros((rows, cols), dtype=bool)
+    large = []          # registry rows of rocks too big to fit in one cell
 
     # Candidate cells: drivable and already clear of the corridor keep-out.
     candidate_rows, candidate_cols = np.nonzero(region & (dist_to_corridor > keep_clear))
     if candidate_rows.size == 0:
-        return np.empty((0, 3)), occupancy
+        return np.empty((0, 3)), occupancy, requested
 
     progress and progress(f"Placing up to {target} rocks", 0.6)
 
@@ -431,25 +460,43 @@ def _place_rocks(region, corridor, crater_mask, params, res_row, res_col, seed,
         r, c = int(candidate_rows[pick]), int(candidate_cols[pick])
         radius = min_r_px + (max_r_px - min_r_px) * (rng.random() ** 3)
 
-        if dist_to_corridor[r, c] <= radius + keep_clear:
+        # Largest offset that keeps the footprint inside the cell, and how far
+        # the footprint can then reach from the cell centre.
+        jitter = max(0.0, _CELL_FIT - radius)
+        reach = radius + jitter * _SQRT2
+        if dist_to_corridor[r, c] <= reach + keep_clear:
             continue
-        if dist_to_crater[r, c] <= radius:
+        if dist_to_crater[r, c] <= reach:
             continue
+
+        if jitter > 0:
+            if cell_taken[r, c]:
+                continue
+            row = r + rng.uniform(-jitter, jitter)
+            col = c + rng.uniform(-jitter, jitter)
+            others = registry[large] if large else None
+        else:
+            row, col = float(r), float(c)
+            others = registry[:placed] if placed else None
 
         # Reject overlaps with rocks already placed (footprints must not touch).
-        if placed:
-            existing = registry[:placed]
-            gaps = np.hypot(existing[:, 0] - r, existing[:, 1] - c)
-            if np.any(gaps < existing[:, 2] + radius):
+        if others is not None:
+            gaps = np.hypot(others[:, 0] - row, others[:, 1] - col)
+            if np.any(gaps < others[:, 2] + radius):
                 continue
 
-        registry[placed] = (r, c, radius)
-        _stamp_disk(occupancy, r, c, radius)
+        registry[placed] = (row, col, radius)
+        if jitter > 0:
+            cell_taken[r, c] = True
+            occupancy[r, c] = True          # the cell holds a rock
+        else:
+            large.append(placed)
+            _stamp_disk(occupancy, row, col, radius)
         placed += 1
         if target >= 200 and placed % 200 == 0 and progress:
             progress(f"Placing rocks ({placed}/{target})", 0.6 + 0.25 * placed / target)
 
-    return registry[:placed], occupancy
+    return registry[:placed], occupancy, requested
 
 
 # =========================================================================
@@ -516,7 +563,7 @@ def build_rock_field(elevation, resolution, params, seed=None,
         markers = []
     marker_label = "Crater centre (site)"
 
-    registry, occupancy = _place_rocks(
+    registry, occupancy, requested = _place_rocks(
         region, corridor, crater_mask, params, res_row, res_col, seed,
         progress, cancel_check)
 
@@ -564,6 +611,9 @@ def build_rock_field(elevation, resolution, params, seed=None,
         'drivable_frac': float(region.sum()) / total_px,
         'free_frac': float(free.sum()) / total_px,
         'rock_count': int(len(registry)),
+        # Rocks the coverage asked for, and whether MAX_ROCKS cut that short.
+        'rock_requested': int(requested),
+        'rock_capped': requested > MAX_ROCKS,
     }
 
 
