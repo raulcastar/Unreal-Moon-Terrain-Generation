@@ -5,15 +5,13 @@ Executes natively within the Unreal Engine Python environment. Imports rock
 meshes from a folder and places the rock field planned by the studio
 (<name>_rocks.csv) on the Landscape.
 
-Positions follow the Landscape spawned by unreal_terrain_generator. Its
-heightmap is mirrored in X, so at the default spawn position a rock at
-(x_m, y_m) in the DEM frame sits at Unreal X = -x_m * 100, Y = y_m * 100.
-When the Landscape is found in the level, positions are taken from its actual
-transform instead, so a moved or rescaled Landscape keeps its rocks aligned.
-Heights come from a line trace onto the surface, so the heightmap must be
-imported into the Landscape before placing rocks.
+Positions follow the Landscape spawned by unreal_terrain_generator, whose
+heightmap is mirrored in X: at the default spawn position a rock at (x_m, y_m)
+in the DEM frame lies at X = -x_m * 100, Y = y_m * 100 (cm). When the Landscape
+is present, its actual transform is used, so moved or rescaled Landscapes stay
+aligned. Heights come from line traces, so the heightmap must be applied first.
 
-Only the standard library is used: Unreal's embedded Python has no numpy.
+Standard library only: Unreal's embedded Python has no numpy.
 """
 
 import csv
@@ -67,8 +65,8 @@ def _run_import(source_path, destination_path, destination_name=None, options=No
     except Exception:
         pass
     unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
-    # Read the result from the task: the asset registry only lists new assets
-    # on a later tick, so listing the folder now would find nothing.
+    # The asset registry lists new assets only on a later tick, so the result
+    # is read from the task itself.
     try:
         return [str(p) for p in task.get_editor_property("imported_object_paths")]
     except Exception:
@@ -76,7 +74,7 @@ def _run_import(source_path, destination_path, destination_name=None, options=No
 
 
 def _assets_in(folder, cls):
-    """Loaded assets of class `cls` under `folder`."""
+    """Returns the loaded assets of class `cls` under `folder`."""
     if not unreal.EditorAssetLibrary.does_directory_exist(folder):
         return []
     found = []
@@ -90,10 +88,9 @@ def _assets_in(folder, cls):
 
 def _usable(meshes):
     """
-    Meshes with real geometry. An import can leave an empty static mesh (zero
-    bounds); scaling one to a planned footprint would blow it up to an absurd
-    size, so empty meshes are dropped. Mesh-description APIs are not used to
-    check this: on an empty mesh they crash the editor.
+    Filters out empty static meshes (zero bounds), which a failed import can
+    leave behind. Bounds are used because mesh-description APIs crash the
+    editor on empty meshes.
     """
     usable = []
     for mesh in meshes:
@@ -104,10 +101,7 @@ def _usable(meshes):
 
 
 def _pick_lod0(meshes):
-    """
-    The mesh to place when a file holds one mesh per LOD: the one named LOD0,
-    otherwise the one with the most vertices.
-    """
+    """Selects the mesh to place from a per-LOD import: LOD0 by name, else the densest."""
     if len(meshes) < 2:
         return meshes[0] if meshes else None
     named = [m for m in meshes if "lod0" in m.get_name().lower()]
@@ -122,9 +116,8 @@ def _pick_lod0(meshes):
 
 def simple_shape_count(mesh):
     """
-    Simple collision shapes on `mesh`, read from its aggregate geometry.
-    StaticMeshEditorSubsystem.get_simple_collision_count does not count the
-    convex hulls added by convex decomposition in UE 5.7.
+    Counts the simple collision shapes in the mesh's aggregate geometry.
+    get_simple_collision_count omits convex-decomposition hulls in UE 5.7.
     """
     body = mesh.get_editor_property("body_setup")
     if body is None:
@@ -136,11 +129,9 @@ def simple_shape_count(mesh):
 
 def ensure_simple_collision(mesh):
     """
-    Gives `mesh` a convex-hull simple collision if it has none.
-
-    Chaos physics (the rover's body and wheels) collides with simple collision;
-    glTF imports come without any, so the rocks would only block traces.
-    Returns True when collision was added.
+    Adds a convex-hull simple collision if the mesh has none (glTF imports lack
+    it, and Chaos physics only collides with simple collision). Returns True if
+    collision was added.
     """
     if simple_shape_count(mesh) > 0:
         return False
@@ -161,7 +152,7 @@ def _loaded(paths, cls):
 
 
 def _mesh_import_options(is_obj):
-    """Static-mesh import settings for .obj/.fbx: Nanite and simple collision."""
+    """Returns .obj/.fbx static-mesh import options with Nanite and simple collision."""
     mesh_data = unreal.FbxStaticMeshImportData()
     mesh_data.set_editor_property("build_nanite", True)
     mesh_data.set_editor_property("auto_generate_collision", True)
@@ -177,7 +168,7 @@ def _mesh_import_options(is_obj):
 
 
 def _material_from_texture(texture, folder, material_name):
-    """Material with the texture as base colour and a rough, non-metallic surface."""
+    """Creates (or reuses) a rough, non-metallic material using the texture as base colour."""
     material_path = f"{folder}/{material_name}"
     if unreal.EditorAssetLibrary.does_asset_exist(material_path):
         return unreal.load_asset(material_path)
@@ -208,8 +199,8 @@ def _material_from_texture(texture, folder, material_name):
 
 def _matching_texture(mesh_path):
     """
-    Texture beside an .obj/.fbx: same stem first, then one whose stem starts
-    with the mesh stem (rock_01 -> rock_01_albedo), then a lone texture.
+    Finds the texture for an .obj/.fbx: same stem, then a stem prefixed by the
+    mesh stem (rock_01 -> rock_01_albedo), then the folder's only texture.
     """
     folder, stem = os.path.dirname(mesh_path), os.path.splitext(os.path.basename(mesh_path))[0]
     textures = sorted(f for f in os.listdir(folder) if f.lower().endswith(TEXTURE_EXTENSIONS))
@@ -224,14 +215,14 @@ def _matching_texture(mesh_path):
 
 def _import_model(model_path):
     """
-    Imports one rock model into its own folder under ROCK_ASSET_FOLDER and
-    returns its static mesh. glTF brings its own materials; .obj/.fbx get the
-    matching texture. Models already imported are reused.
+    Imports a rock model into its own folder under ROCK_ASSET_FOLDER and returns
+    its static mesh, reusing a previous import. glTF keeps its materials;
+    .obj/.fbx receive the matching texture.
     """
     stem = os.path.splitext(os.path.basename(model_path))[0]
     folder = f"{ROCK_ASSET_FOLDER}/{_asset_name(stem)}"
 
-    # Reuse a previous import only if it has geometry; an empty one is redone.
+    # Reuse a previous import unless it is empty.
     meshes = _usable(_assets_in(folder, unreal.StaticMesh))
     if meshes:
         return _pick_lod0(meshes)
@@ -254,10 +245,7 @@ def _import_model(model_path):
 
 
 def import_rock_models(models_folder):
-    """
-    Imports the rock models in `models_folder` and returns
-    [(mesh, footprint_radius_cm, bottom_z_cm, height_cm)].
-    """
+    """Imports all models in `models_folder`; returns [(mesh, footprint_radius_cm, bottom_z_cm, height_cm)]."""
     paths = find_model_files(models_folder)
     if not paths:
         raise ValueError(f"No .obj, .fbx, .gltf or .glb rock models found in {models_folder}")
@@ -291,7 +279,7 @@ def _level_actors():
 
 
 def find_landscape(label):
-    """The Landscape labelled `label`, or the only Landscape in the level."""
+    """Returns the Landscape labelled `label`, or the only Landscape in the level."""
     landscapes = [a for a in _level_actors() if isinstance(a, unreal.LandscapeProxy)]
     for actor in landscapes:
         if label and actor.get_actor_label() == label:
@@ -306,8 +294,8 @@ def find_landscape(label):
 
 def landscape_frame(landscape, landscape_width, resolution):
     """
-    (x0, y0, step_x, step_y): world position in cm of DEM cell (0, 0) and the
-    world step per DEM cell. DEM columns run towards -X (mirrored heightmap).
+    Returns (x0, y0, step_x, step_y): the world position (cm) of DEM cell (0, 0)
+    and the step per cell. Columns run towards -X (mirrored heightmap).
     """
     if landscape is None:
         step = resolution * CM_PER_METER
@@ -324,13 +312,13 @@ def landscape_frame(landscape, landscape_width, resolution):
 
 
 def rock_world_xy(x_m, y_m, resolution, frame):
-    """World (X, Y) in cm of a rock at (x_m, y_m) metres in the DEM frame."""
+    """Converts DEM-frame metres (x_m, y_m) to world (X, Y) in cm."""
     x0, y0, step_x, step_y = frame
     return x0 + (x_m / resolution) * step_x, y0 + (y_m / resolution) * step_y
 
 
 def _surface_z(world, x, y):
-    """Height of the first surface below (x, y), or None if the trace misses."""
+    """Returns the height of the first surface below (x, y), or None if the trace misses."""
     hit = unreal.SystemLibrary.line_trace_single(
         world, unreal.Vector(x, y, TRACE_REACH_CM), unreal.Vector(x, y, -TRACE_REACH_CM),
         unreal.TraceTypeQuery.TRACE_TYPE_QUERY1, True, [],
@@ -357,7 +345,7 @@ def _read_rocks(rocks_csv):
 def rock_stencil(radius_m, boulder_stencil=BOULDER_STENCIL,
                  small_rock_stencil=SMALL_ROCK_STENCIL,
                  boulder_min_radius_m=BOULDER_MIN_RADIUS_M):
-    """Stencil id for a rock of footprint radius `radius_m`."""
+    """Returns the stencil id for a rock of footprint radius `radius_m`."""
     return boulder_stencil if radius_m >= boulder_min_radius_m else small_rock_stencil
 
 
@@ -371,9 +359,8 @@ def set_rock_stencils(group, boulder_stencil=BOULDER_STENCIL,
                       small_rock_stencil=SMALL_ROCK_STENCIL,
                       boulder_min_radius_m=BOULDER_MIN_RADIUS_M, save_level=False):
     """
-    Tags already placed rocks of `group` in the Custom Depth-Stencil buffer,
-    sizing each from its actor scale, then saves the level if `save_level`.
-    Returns {stencil_id: count}.
+    Re-tags the placed rocks of `group` with Custom Depth-Stencil ids, sized
+    from their actor scale, and optionally saves the level. Returns {stencil_id: count}.
     """
     tag = f"LunarRocks_{group}"
     radius_cm = {}
@@ -396,7 +383,7 @@ def set_rock_stencils(group, boulder_stencil=BOULDER_STENCIL,
 
 
 def clear_rocks(group):
-    """Deletes the rocks a previous run placed for `group`."""
+    """Deletes the rocks placed by a previous run for `group`."""
     tag = f"LunarRocks_{group}"
     old = [a for a in _level_actors() if tag in [str(t) for t in a.tags]]
     if old:
@@ -409,15 +396,14 @@ def place_rocks(rocks_csv, models_folder, resolution=1.0, landscape_label="",
                 boulder_stencil=BOULDER_STENCIL, small_rock_stencil=SMALL_ROCK_STENCIL,
                 boulder_min_radius_m=BOULDER_MIN_RADIUS_M, save_level=False):
     """
-    Places every rock in `rocks_csv` on the Landscape. Rocks from a previous
-    run of the same rock field are removed first. With `save_level`, the
-    imported rock assets and the level are saved afterwards. Returns a
-    summary line.
+    Places every rock in `rocks_csv` on the Landscape, replacing those from a
+    previous run of the same field. With `save_level`, the rock assets and the
+    level are saved afterwards. Returns a summary line.
     """
     if not resolution > 0:
         raise ValueError(f"Resolution must be positive, got {resolution}.")
-    # Models imported during Play In Editor come out as empty meshes, and actors
-    # spawned then belong to the play session and vanish when it stops.
+    # During Play In Editor imports produce empty meshes and spawned actors
+    # belong to the transient play world.
     level_editor = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
     if level_editor is not None and level_editor.is_in_play_in_editor():
         raise RuntimeError("Unreal is in Play In Editor: stop playing, then place the rocks.")
@@ -441,7 +427,7 @@ def place_rocks(rocks_csv, models_folder, resolution=1.0, landscape_label="",
                 else unreal.ComponentMobility.STATIC)
     tag = unreal.Name(f"LunarRocks_{group}")
 
-    # Trace every position before spawning, so no trace lands on a new rock.
+    # Trace all positions before spawning so traces never hit new rocks.
     positions, misses = [], 0
     with unreal.ScopedSlowTask(len(rocks), "Tracing rock positions") as task:
         task.make_dialog(True)
@@ -466,13 +452,11 @@ def place_rocks(rocks_csv, models_folder, resolution=1.0, landscape_label="",
                 break
             task.enter_progress_frame(1)
             rng = random.Random(seed * 1000003 + int(rock["id"]))
-            # A model close to the planned size, so it keeps roughly its
-            # modelled size instead of being blown up or shrunk.
+            # Prefer models close to the planned size to limit scaling.
             choices = fitting_models(model_radii, rock["scale"] * CM_PER_METER)
             mesh, radius_cm, bottom_cm, height_cm = models[rng.choice(choices)]
 
-            # Scale the mesh so its footprint matches the planned rock radius,
-            # then rest its base on the surface and bury it slightly.
+            # Scale to the planned footprint, rest on the surface, then sink slightly.
             factor = rock["scale"] * CM_PER_METER / radius_cm
             z_pivot = z - bottom_cm * factor - SINK_FRACTION * height_cm * factor
 
@@ -505,7 +489,7 @@ def place_rocks(rocks_csv, models_folder, resolution=1.0, landscape_label="",
         summary += (f"; {misses} found no surface below them and were set at the "
                     f"Landscape's base height (is the heightmap imported?)")
     if save_level and placed:
-        # The imported meshes and their collision edits, then the level itself.
+        # Save the rock assets (including collision edits), then the level.
         unreal.EditorAssetLibrary.save_directory(ROCK_ASSET_FOLDER, only_if_is_dirty=True,
                                                  recursive=True)
         summary += "; " + save_current_level().rstrip(".")

@@ -355,20 +355,19 @@ def _connect_components(cost, region, corridor, progress):
 # ROCK PLACEMENT
 # =========================================================================
 
-# Hard ceiling on the rocks one plan may place. Small rocks on a large map can
-# otherwise ask for millions, which neither the planner nor Unreal (one actor
-# per rock) can handle.
+# Upper bound on rocks per plan. Small rocks on large maps can otherwise
+# require millions of instances (one Unreal actor each).
 MAX_ROCKS = 100_000
 
-# A rock whose radius is under half a planning cell fits inside its own cell.
+# Rocks with a radius below half a planning cell fit within a single cell.
 _CELL_FIT = 0.5
 _SQRT2 = float(np.sqrt(2.0))
 
 
 def estimate_rock_count(params, drivable_area_m2):
     """
-    Rocks a plan aims for on `drivable_area_m2` of drivable ground, before the
-    MAX_ROCKS ceiling: coverage x area / mean rock footprint.
+    Returns the target rock count for `drivable_area_m2` of drivable ground
+    (coverage x area / mean footprint), before the MAX_ROCKS cap.
     """
     min_r = params['ROCK_MIN_SCALE']
     max_r = max(min_r, params['ROCK_MAX_SCALE'])
@@ -396,14 +395,13 @@ def _place_rocks(region, corridor, crater_mask, params, res_row, res_col, seed,
     Scatters rocks over the drivable region while keeping clear of the corridors
     and craters.
 
-    Returns (registry, occupancy, requested) where registry is an (N, 3) array
-    of (row, col, radius_px), occupancy is the rock footprint mask, and
-    requested is the rock count the coverage asked for before MAX_ROCKS.
+    Returns (registry, occupancy, requested): an (N, 3) array of
+    (row, col, radius_px), the rock footprint mask, and the target count before
+    the MAX_ROCKS cap.
 
-    Rocks smaller than half a planning cell get a random offset inside their
-    cell instead of sitting on the cell centre, which would line them up on the
-    grid. Keeping each inside its own cell, one per cell, rules out overlaps
-    among them without comparing against every rock already placed.
+    Sub-cell rocks are jittered within their cell to avoid grid alignment. At
+    most one is placed per cell, which precludes overlaps between them without
+    pairwise checks.
     """
     rows, cols = region.shape
     mean_res = 0.5 * (res_row + res_col)
@@ -460,8 +458,7 @@ def _place_rocks(region, corridor, crater_mask, params, res_row, res_col, seed,
         r, c = int(candidate_rows[pick]), int(candidate_cols[pick])
         radius = min_r_px + (max_r_px - min_r_px) * (rng.random() ** 3)
 
-        # Largest offset that keeps the footprint inside the cell, and how far
-        # the footprint can then reach from the cell centre.
+        # Maximum in-cell offset, and the resulting reach from the cell centre.
         jitter = max(0.0, _CELL_FIT - radius)
         reach = radius + jitter * _SQRT2
         if dist_to_corridor[r, c] <= reach + keep_clear:
@@ -472,8 +469,9 @@ def _place_rocks(region, corridor, crater_mask, params, res_row, res_col, seed,
         if jitter > 0:
             if cell_taken[r, c]:
                 continue
-            row = r + rng.uniform(-jitter, jitter)
-            col = c + rng.uniform(-jitter, jitter)
+            # Clamp to the map bounds in edge cells.
+            row = rng.uniform(max(r - jitter, 0), min(r + jitter, rows - 1))
+            col = rng.uniform(max(c - jitter, 0), min(c + jitter, cols - 1))
             others = registry[large] if large else None
         else:
             row, col = float(r), float(c)

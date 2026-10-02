@@ -1,15 +1,14 @@
 """
 Rock Model Inspection
 ---------------------
-Finds rock model files and reads their real-world size without Unreal, so the
-studio can match the planned rock sizes to the meshes that will be placed.
+Locates rock model files and measures their real-world size outside Unreal,
+so planned rock sizes can be matched to the meshes being placed.
 
-Shared by the studio and by unreal_rock_placer (which runs inside Unreal), so
-it uses the standard library only.
+Used by both the studio and unreal_rock_placer (inside Unreal), hence standard
+library only.
 
-Size convention, matching the placer: models are Y-up (glTF and most OBJ
-exports) and in metres; the footprint radius is half the larger horizontal
-extent and the height is the vertical extent.
+Conventions: models are Y-up and in metres; the footprint radius is half the
+larger horizontal extent and the height is the vertical extent.
 """
 
 import json
@@ -22,7 +21,7 @@ MESH_EXTENSIONS = (".obj", ".fbx") + GLTF_EXTENSIONS
 
 
 def find_model_files(models_folder):
-    """Every .obj/.fbx/.gltf/.glb under `models_folder`, including subfolders."""
+    """Returns every .obj/.fbx/.gltf/.glb file under `models_folder`, recursively."""
     found = []
     for root, _dirs, files in os.walk(models_folder):
         found += [os.path.join(root, f) for f in files if f.lower().endswith(MESH_EXTENSIONS)]
@@ -44,7 +43,7 @@ def _read_gltf_json(path):
 
 
 def _gltf_extent(path):
-    """(dx, dy, dz) in metres of the mesh the placer would pick: LOD0, else the densest."""
+    """Returns the (dx, dy, dz) extent in metres of the mesh the placer selects (LOD0, else the densest)."""
     doc = _read_gltf_json(path)
     meshes, accessors, nodes = doc.get("meshes", []), doc.get("accessors", []), doc.get("nodes", [])
     if not meshes:
@@ -75,7 +74,7 @@ def _gltf_extent(path):
 
 
 def _obj_extent(path):
-    """(dx, dy, dz) of the vertices in an OBJ file."""
+    """Returns the (dx, dy, dz) vertex extent of an OBJ file."""
     lo, hi = [float("inf")] * 3, [float("-inf")] * 3
     with open(path, encoding="utf-8", errors="ignore") as handle:
         for line in handle:
@@ -90,8 +89,8 @@ def _obj_extent(path):
 
 def model_dimensions(path):
     """
-    (footprint_radius_m, height_m) of one model, or None when the size cannot
-    be read without Unreal (.fbx) or the file is unreadable.
+    Returns (footprint_radius_m, height_m), or None for unreadable files and
+    formats that cannot be measured outside Unreal (.fbx).
     """
     try:
         if path.lower().endswith(GLTF_EXTENSIONS):
@@ -106,7 +105,7 @@ def model_dimensions(path):
 
 
 def folder_dimensions(models_folder):
-    """[(file name, footprint_radius_m or None, height_m or None)] for every model."""
+    """Returns [(file_name, footprint_radius_m, height_m)] per model; sizes are None if unknown."""
     rows = []
     for path in find_model_files(models_folder):
         size = model_dimensions(path)
@@ -116,8 +115,8 @@ def folder_dimensions(models_folder):
 
 def size_summary(rows):
     """
-    (min_radius_m, max_radius_m, median height/radius) over the models whose
-    size is known, or None if none is.
+    Returns (min_radius_m, max_radius_m, median height/radius) over the models
+    of known size, or None if there are none.
     """
     known = [(r, h) for _name, r, h in rows if r]
     if not known:
@@ -128,15 +127,15 @@ def size_summary(rows):
     return min(r for r, _h in known), max(r for r, _h in known), median
 
 
-# A rock may use any model whose size is within this factor of the best fit, so
-# a field keeps some variety without stretching models far from their own size.
+# Size ratio, relative to the best fit, within which a model is eligible for a
+# rock. Keeps variety without scaling models far from their native size.
 FIT_TOLERANCE = 1.5
 
 
 def fitting_models(model_radii, radius):
     """
-    Indices of the models a rock of footprint `radius` may use: the closest in
-    size (by ratio) and any within FIT_TOLERANCE of it. Units only need to match.
+    Returns the indices of the models eligible for a rock of footprint `radius`:
+    the closest by size ratio and any within FIT_TOLERANCE of it (consistent units).
     """
     misfit = [abs(math.log(radius / r)) for r in model_radii]
     limit = min(misfit) + math.log(FIT_TOLERANCE) + 1e-9
@@ -145,8 +144,8 @@ def fitting_models(model_radii, radius):
 
 def scale_range(model_radii, planned_min, planned_max, samples=256):
     """
-    (smallest, largest) uniform scale a placed model gets when rocks of
-    planned_min..planned_max radius each use a fitting model.
+    Returns the (min, max) uniform scale applied to models for planned radii
+    in [planned_min, planned_max], each rock using an eligible model.
     """
     planned_max = max(planned_min, planned_max)
     low, high = float("inf"), 0.0

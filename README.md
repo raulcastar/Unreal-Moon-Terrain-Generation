@@ -65,14 +65,16 @@ base mesh; `height_m` is `scale × ROCK_HEIGHT_RATIO`.
 
 ![Send to Unreal](docs/images/send-to-unreal.png)
 
-Converts an elevation map to Unreal's 16-bit `.r16` heightmap and spawns the
-Landscape actor in a running editor. The heightmap is written to
-`outputs/<name>/`, with a dialog giving its path and the import steps. Untick
-*Dispatch to running Unreal Editor* to only write the files.
+Converts an elevation map to Unreal's 16-bit `.r16` heightmap, spawns the
+Landscape actor in a running editor, applies the heightmap to it and saves the
+level. The heightmap is written to `outputs/<name>/`. Untick *Dispatch to
+running Unreal Editor* to only write the files (a dialog then gives the path and
+the manual import steps), or *Save the level afterwards* to leave saving to you.
 
 **Unreal setup:** enable the *Python Editor Script Plugin* and *Remote Execution*
-in Project Settings. Applying the heightmap is manual: Landscape Mode → Manage →
-right-click → Import.
+in Project Settings. Landscapes larger than 4097 × 4097 vertices, or an
+automatic import that fails, fall back to the manual import (Landscape Mode →
+Manage → right-click → Import), with the steps shown in the editor.
 
 ## Browse maps
 

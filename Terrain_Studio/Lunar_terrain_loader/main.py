@@ -152,8 +152,16 @@ def send_to_unreal(landscape_config, interpolation_resolution, z_axis_scale, hei
                 f"unreal_terrain_generator.create_landscape({landscape_config}, {interpolation_resolution}, {z_axis_scale}, '{target_r16_path}', {0.0}, {0.0}, {z_offset}, save_level={bool(save_level)})"
             )
 
-            remote_exec.run_command(command)
+            result = remote_exec.run_command(command)
             print(f"[+] Success: Command dispatched to Node [{node_id}]")
+
+            # Relay the Editor's log output (heightmap import, level save).
+            for entry in result.get("output", []):
+                text = str(entry.get("output", "")).strip()
+                if text:
+                    print(f"    Unreal: {text}")
+            if not result.get("success", False):
+                print(f"[-] Failed in Unreal: {result.get('result', '')}")
     else:
         print("[-] Error: No Unreal instance detected. Ensure 'Remote Execution' is active in Project Settings.")
 

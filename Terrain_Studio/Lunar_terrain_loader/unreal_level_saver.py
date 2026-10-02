@@ -2,8 +2,7 @@
 Unreal Level Saver
 ------------------
 Executes natively within the Unreal Engine Python environment. Saves the open
-level after the studio has changed it (Landscape spawned, rocks placed), so the
-result survives an editor restart without a manual save.
+level after the studio modifies it (Landscape spawn, rock placement).
 """
 
 import unreal
@@ -19,14 +18,14 @@ def save_current_level():
         return "Level not saved: no level is open."
 
     package = world.get_outermost().get_path_name()
-    # A level never saved lives under /Temp and would need a Save As dialog.
+    # Untitled levels live under /Temp/ and would require a Save As dialog.
     if package.startswith("/Temp/"):
         return ("Level not saved: it is untitled. Save it once with File > Save "
                 "Current Level As; later runs then save it automatically.")
     if not level_editor.save_current_level():
         return f"Could not save level {package}; save it from the editor."
 
-    # World Partition levels keep each actor in its own package.
+    # World Partition levels store actors in external packages.
     leftover = unreal.EditorLoadingAndSavingUtils.get_dirty_map_packages()
     if leftover:
         unreal.EditorLoadingAndSavingUtils.save_packages(leftover, True)

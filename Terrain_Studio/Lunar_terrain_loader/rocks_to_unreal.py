@@ -16,7 +16,7 @@ BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__)).replace("\\", "/")
 
 
 def heightmap_width(output_directory, dem_stem):
-    """Landscape width in vertices from <dem_stem>_heightmap.json, or 0 if absent."""
+    """Returns the Landscape width in vertices from <dem_stem>_heightmap.json, or 0 if absent."""
     path = os.path.join(output_directory, f"{dem_stem}_heightmap.json")
     try:
         with open(path) as handle:
@@ -26,7 +26,7 @@ def heightmap_width(output_directory, dem_stem):
 
 
 def _placer_call(call):
-    """Python that imports the placer inside Unreal and prints the result of `call`."""
+    """Builds Unreal-side Python that imports the placer and prints the result of `call`."""
     return (
         f"import sys, importlib\n"
         f"if {BASE_DIRECTORY!r} not in sys.path: sys.path.append({BASE_DIRECTORY!r})\n"
@@ -42,7 +42,7 @@ def build_command(rocks_csv, models_folder, resolution, landscape_label,
                   landscape_width, seed, simulate_physics,
                   boulder_stencil=20, small_rock_stencil=21, boulder_min_radius_m=0.15,
                   save_level=True):
-    """The Python Unreal runs to place the rocks. Paths are passed with repr() quoting."""
+    """Builds the placement command; paths are quoted with repr()."""
     args = ", ".join([
         repr(rocks_csv.replace("\\", "/")),
         repr(models_folder.replace("\\", "/")),
@@ -61,7 +61,7 @@ def build_command(rocks_csv, models_folder, resolution, landscape_label,
 
 def build_stencil_command(group, boulder_stencil, small_rock_stencil, boulder_min_radius_m,
                           save_level=True):
-    """The Python Unreal runs to re-tag placed rocks without moving them."""
+    """Builds the command that re-tags placed rocks without moving them."""
     args = ", ".join([repr(group), f"boulder_stencil={int(boulder_stencil)}",
                       f"small_rock_stencil={int(small_rock_stencil)}",
                       f"boulder_min_radius_m={float(boulder_min_radius_m)!r}",
@@ -72,8 +72,8 @@ def build_stencil_command(group, boulder_stencil, small_rock_stencil, boulder_mi
 def run_in_unreal(command, log=print, action="Running in Unreal",
                   discovery_seconds=2.0):
     """
-    Runs `command` in the first Unreal Editor that answers and relays its output
-    to `log`. Blocks until Unreal finishes. Returns True on success.
+    Runs `command` in the first responding Unreal Editor, relaying its output to
+    `log`. Blocks until completion; returns True on success.
     """
     remote_exec = unreal_api.RemoteExecution()
     remote_exec.start()
@@ -111,8 +111,8 @@ def send_rocks_to_unreal(rocks_csv, models_folder, resolution, landscape_label="
                          boulder_min_radius_m=0.15, save_level=True, log=print,
                          discovery_seconds=2.0):
     """
-    Places the rock field in a running Unreal Editor, then saves the level
-    when `save_level`. Returns True on success.
+    Places the rock field in a running Unreal Editor and optionally saves the
+    level. Returns True on success.
     """
     command = build_command(rocks_csv, models_folder, resolution, landscape_label,
                             landscape_width, seed, simulate_physics,
@@ -126,8 +126,8 @@ def send_stencils_to_unreal(group, boulder_stencil=20, small_rock_stencil=21,
                             boulder_min_radius_m=0.15, save_level=True, log=print,
                             discovery_seconds=2.0):
     """
-    Re-tags the placed rocks of `group` with new stencil ids, then saves the
-    level when `save_level`. Returns True on success.
+    Re-tags the placed rocks of `group` with new stencil ids and optionally
+    saves the level. Returns True on success.
     """
     command = build_stencil_command(group, boulder_stencil, small_rock_stencil,
                                     boulder_min_radius_m, save_level)

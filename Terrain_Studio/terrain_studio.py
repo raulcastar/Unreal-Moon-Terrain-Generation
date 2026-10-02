@@ -166,11 +166,10 @@ SURFACE_MESH_DETAIL = 100
 SURFACE_DRAG_DETAIL = 36
 
 
-# Planned radius / model radius beyond which the planner warns that rocks will
-# be visibly stretched or shrunk in Unreal.
+# Planned-to-model size ratio beyond which the planner warns about visible scaling.
 MODEL_SCALE_WARN = 3.0
-# Placing in Unreal measured ~15 ms per rock (10,338 rocks in 158 s); above this
-# count the estimate also gives the expected time.
+# Measured Unreal placement cost (10,338 rocks in 158 s). Above UNREAL_ROCKS_WARN
+# rocks, the estimate also reports the expected placement time.
 UNREAL_SECONDS_PER_ROCK = 0.015
 UNREAL_ROCKS_WARN = 20_000
 
@@ -667,9 +666,9 @@ def scan_dem_folder(root, include_companions=False):
 IMPORT_STEPS = (
     "To apply it to a Landscape in Unreal:\n"
     "    1. Enter Landscape Mode (Shift + 2).\n"
-    "    2. Select the Landscape actor. With 'Dispatch to running\n"
-    "       Unreal Editor' enabled the studio spawns one; otherwise\n"
-    "       create a Landscape sized to the heightmap.\n"
+    "    2. Select a Landscape sized to the heightmap. (With 'Dispatch\n"
+    "       to running Unreal Editor' enabled the studio spawns it and\n"
+    "       applies the heightmap itself.)\n"
     "    3. Right-click it in the Manage tab list and choose 'Import'.\n"
     "    4. Set the Heightmap File to the path above.\n"
     "    5. Click Import.\n\n"
@@ -749,13 +748,11 @@ def convert_and_dispatch(source_path, resolution, dispatch, output_dir,
     heightmap_path = os.path.normpath(os.path.join(output_dir, heightmap))
     log(f"Heightmap written: {heightmap_path}", level="ok")
 
-    # Import into Unreal is a manual step, so show the instructions and the
-    # exact file path here, not only inside the editor.
-    dialog("Heightmap ready for Unreal",
-           "The 16-bit heightmap has been written to:\n\n"
-           + format_path_block(heightmap_path) + "\n\n" + IMPORT_STEPS)
-
     if not dispatch:
+        # No dispatch: show the manual import instructions and the file path.
+        dialog("Heightmap ready for Unreal",
+               "The 16-bit heightmap has been written to:\n\n"
+               + format_path_block(heightmap_path) + "\n\n" + IMPORT_STEPS)
         progress("Conversion complete (dispatch disabled)", 1.0)
         return heightmap_path
 
@@ -1565,8 +1562,7 @@ class RockPlannerStudio(ttk.Frame):
             for spec in specs:
                 self.rows_widgets[spec[0]] = ParamRow(group, spec, self._on_param_change)
             if group_name == "Rock Population":
-                # Rock count the coverage asks for, so a small radius that would
-                # need hundreds of thousands of rocks shows up before planning.
+                # Rock count implied by the coverage, shown before planning.
                 self.rock_estimate_var = tk.StringVar()
                 self._wrapping_labels.append(ttk.Label(
                     group, textvariable=self.rock_estimate_var, justify="left",
@@ -1653,8 +1649,7 @@ class RockPlannerStudio(ttk.Frame):
                  "dropped onto its surface."))
         self._wrapping_labels[-1].pack(anchor="w", pady=(0, 4))
 
-        # Real size of the chosen models next to the planned sizes, so a field
-        # planned in metres for centimetre models is caught before placing.
+        # Model sizes versus planned sizes, to flag scale mismatches before placing.
         self.model_sizes = None       # rock_models.size_summary() of the folder
         self.model_radii = []         # Footprint radius (m) of each sized model
         self.model_info_var = tk.StringVar()
@@ -1687,8 +1682,8 @@ class RockPlannerStudio(ttk.Frame):
                 "Off: rocks are static obstacles at their planned positions.\n"
                 "On: rocks are movable rigid bodies and may settle or roll.")
 
-        # Custom Depth-Stencil ids for the GNC object mask. They must match
-        # mask_labels in GNC-Moon-Simulator/component_stereo_depth/config/params.yaml.
+        # Custom Depth-Stencil ids for the GNC object mask; must match mask_labels
+        # in GNC-Moon-Simulator/component_stereo_depth/config/params.yaml.
         ttk.Label(unreal_group, text="Object mask (Custom Depth Stencil)",
                   font=("Segoe UI Semibold", 8)).pack(anchor="w", pady=(8, 2))
         stencil_grid = ttk.Frame(unreal_group)
@@ -1714,8 +1709,7 @@ class RockPlannerStudio(ttk.Frame):
             Tooltip(name, tip)
             var.trace_add("write", self._refresh_stencil_preview)
 
-        # How the current rock field splits, so an empty class shows up here
-        # rather than in the simulator's mask.
+        # Class split of the exported field, to flag an empty class early.
         self.stencil_preview_var = tk.StringVar()
         self._wrapping_labels.append(ttk.Label(
             unreal_group, textvariable=self.stencil_preview_var, justify="left",
@@ -1975,7 +1969,7 @@ class RockPlannerStudio(ttk.Frame):
             self._read_model_sizes()
 
     def _read_model_sizes(self):
-        """Reads the real size of every model in the chosen folder."""
+        """Measures the models in the selected folder."""
         self.model_sizes = None
         rows = rock_models.folder_dimensions(self.models_folder) if self.models_folder else []
         self.model_radii = [radius for _name, radius, _h in rows if radius]
@@ -1994,11 +1988,7 @@ class RockPlannerStudio(ttk.Frame):
         self._refresh_model_info()
 
     def _model_scale_range(self):
-        """
-        (smallest, largest) uniform scale Unreal applies to a model over the
-        planned radii (each rock takes a model close to its size), or None
-        without model sizes.
-        """
+        """Returns the (min, max) model scale for the planned radii, or None without model sizes."""
         if not self.model_radii:
             return None
         return rock_models.scale_range(self.model_radii,
@@ -2006,7 +1996,7 @@ class RockPlannerStudio(ttk.Frame):
                                        self.rows_widgets['ROCK_MAX_SCALE'].get())
 
     def _refresh_model_info(self, *_trace_args):
-        """Compares the planned rock sizes with the chosen models' real sizes."""
+        """Updates the readout comparing planned rock sizes with the model sizes."""
         if not hasattr(self, "model_info_var"):
             return
         if not self.models_folder:
@@ -2034,7 +2024,7 @@ class RockPlannerStudio(ttk.Frame):
         self.match_button.state(["!disabled"] if LOADER_AVAILABLE else ["disabled"])
 
     def match_sizes_to_models(self):
-        """Plans the rock field at the chosen models' real size."""
+        """Sets the radius range and height ratio from the measured models."""
         if not self.model_sizes:
             return
         low, high, ratio = self.model_sizes
@@ -2048,7 +2038,7 @@ class RockPlannerStudio(ttk.Frame):
         self._on_param_change()
 
     def _refresh_rock_estimate(self, *_trace_args):
-        """Shows how many rocks the coverage asks for on the loaded map."""
+        """Updates the rock-count estimate for the loaded map."""
         if not hasattr(self, "rock_estimate_var"):
             return
         if self.dem is None:
@@ -2080,7 +2070,7 @@ class RockPlannerStudio(ttk.Frame):
                                        f"{base_name}_rocks.csv")
 
     def _stencil_settings(self):
-        """(boulder_id, small_rock_id, boulder_min_radius_m), or None if invalid."""
+        """Returns (boulder_id, small_rock_id, boulder_min_radius_m), or None if invalid."""
         try:
             boulder = int(self.boulder_stencil_var.get())
             small = int(self.small_rock_stencil_var.get())
@@ -2092,7 +2082,7 @@ class RockPlannerStudio(ttk.Frame):
         return boulder, small, radius
 
     def _refresh_stencil_preview(self, *_trace_args):
-        """Shows how the exported rock field splits between the two stencil ids."""
+        """Updates the readout of how the exported field splits between stencil ids."""
         settings = self._stencil_settings()
         if settings is None:
             self.stencil_preview_var.set("Stencil ids must be 1-255 and the radius >= 0.")
@@ -2114,7 +2104,7 @@ class RockPlannerStudio(ttk.Frame):
         self.stencil_preview_var.set(text)
 
     def _start_unreal_job(self, status, job):
-        """Runs `job(log)` on a worker thread with the planner's buttons disabled."""
+        """Runs `job(log)` on a worker thread, disabling the planner buttons meanwhile."""
         self.status_var.set(status)
         for button in (self.preview_button, self.export_button, self.place_button,
                        self.stencil_button):
@@ -2132,7 +2122,7 @@ class RockPlannerStudio(ttk.Frame):
         self._worker.start()
 
     def update_stencils_in_unreal(self):
-        """Re-tags the rocks already placed in Unreal with the current stencil ids."""
+        """Re-tags the rocks placed in Unreal with the current stencil ids."""
         if self._busy():
             self.log("A job is already running; wait for it to finish.", level="warn")
             return
@@ -2178,8 +2168,8 @@ class RockPlannerStudio(ttk.Frame):
             return
         boulder, small, radius = settings
 
-        # The Landscape is labelled after its heightmap, and its width is in the
-        # heightmap's JSON next to the DEM.
+        # The Landscape is labelled after its heightmap; its width is read from
+        # the heightmap JSON.
         dem_stem = (os.path.splitext(os.path.basename(self.dem_path))[0]
                     if self.dem_path else base_name)
         width = rocks_to_unreal.heightmap_width(
@@ -2488,7 +2478,7 @@ class UnrealDispatchWindow(ttk.Frame):
         save_check = ttk.Checkbutton(settings, text="Save the level afterwards",
                                      variable=self.save_level_var)
         save_check.grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
-        Tooltip(save_check, 'Saves the open Unreal level once the Landscape actor is spawned.\nThe heightmap import is still manual: save again after it.')
+        Tooltip(save_check, 'Saves the open Unreal level once the Landscape is spawned and its\nheightmap applied.')
 
         # --- destination ---
         destination = ttk.Frame(outer)
@@ -3539,13 +3529,14 @@ class TerrainStudio(tk.Tk):
         dispatch_check.pack(anchor="w")
         Tooltip(dispatch_check,
                 "When enabled, the studio broadcasts for a running Unreal Editor with\n"
-                "Remote Execution enabled and spawns the Landscape actor automatically.\n"
+                "Remote Execution enabled, spawns the Landscape actor and applies the\n"
+                "heightmap automatically.\n"
                 "When disabled, only the .r16 / .json / .txt files are written.")
         self.save_level_var = tk.BooleanVar(value=True)
         save_check = ttk.Checkbutton(export_group, text="Save the level afterwards",
                                      variable=self.save_level_var)
         save_check.pack(anchor="w")
-        Tooltip(save_check, 'Saves the open Unreal level once the Landscape actor is spawned.\nThe heightmap import is still manual: save again after it.')
+        Tooltip(save_check, 'Saves the open Unreal level once the Landscape is spawned and its\nheightmap applied.')
 
         self.unreal_button = ttk.Button(export_group, text="Send to Unreal",
                                         style="Accent.TButton",
