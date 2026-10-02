@@ -40,11 +40,12 @@ def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, h
     unreal_map_scale_x = float(CM_PER_METER * abs(interpolation_resolution))
     unreal_map_scale_y = float(CM_PER_METER * abs(interpolation_resolution))
 
-    # Calculate the physical width of the map in meters. 
-    # (Number of vertices wide * distance between vertices in meters)
-    map_width_meters = final_width * abs(interpolation_resolution)
-    
-    # Shift the X offset in the negative direction by the exact width of the map
+    # Physical width of the map in meters: N vertices span N - 1 quads.
+    map_width_meters = (final_width - 1) * abs(interpolation_resolution)
+
+    # Shift the X offset in the negative direction by the width of the map.
+    # The heightmap is mirrored in X (fliplr), so DEM column j sits at vertex
+    # final_width - 1 - j; with this origin it lands at X = -j * spacing.
     x_offset -= map_width_meters
 
     # =========================================================================
