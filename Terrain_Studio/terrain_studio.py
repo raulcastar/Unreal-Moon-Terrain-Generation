@@ -31,6 +31,7 @@ import subprocess
 import sys
 import textwrap
 import threading
+import time
 import traceback
 from contextlib import redirect_stdout
 
@@ -306,6 +307,163 @@ class Tooltip:
         if self._window:
             self._window.destroy()
             self._window = None
+
+
+# =========================================================================
+# PROGRESS WITH TIME ESTIMATES
+# =========================================================================
+
+# Seconds per unit of work of each job kind, learned from finished runs and
+# kept between sessions, so jobs that cannot report progress still get an
+# estimate.
+DURATIONS_PATH = os.path.join(os.path.expanduser("~"), ".lunar_terrain_studio", "durations.json")
+_durations = None
+
+
+def _job_rates():
+    global _durations
+    if _durations is None:
+        try:
+            with open(DURATIONS_PATH) as handle:
+                _durations = {k: float(v) for k, v in json.load(handle).items()}
+        except (OSError, ValueError, AttributeError):
+            _durations = {}
+    return _durations
+
+
+def _record_job_rate(key, seconds_per_unit):
+    rates = _job_rates()
+    old = rates.get(key)
+    rates[key] = seconds_per_unit if old is None else 0.5 * old + 0.5 * seconds_per_unit
+    try:
+        os.makedirs(os.path.dirname(DURATIONS_PATH), exist_ok=True)
+        with open(DURATIONS_PATH, "w") as handle:
+            json.dump(rates, handle, indent=1)
+    except OSError:
+        pass                                # The estimate is a convenience only
+
+
+def format_duration(seconds):
+    seconds = max(0, int(round(seconds)))
+    if seconds < 60:
+        return f"{seconds} s"
+    if seconds < 3600:
+        return f"{seconds // 60} min {seconds % 60:02d} s"
+    return f"{seconds // 3600} h {(seconds % 3600) // 60:02d} min"
+
+
+class ProgressPanel(ttk.Frame):
+    """
+    Status line and progress bar for a view's background jobs, with the
+    elapsed time and an estimate of the time left. Jobs that report progress
+    are estimated from their rate; the others animate the bar and are estimated
+    from how long the same kind of job took before, per unit of `work`.
+    """
+
+    TICK_MS = 500
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.text_var = tk.StringVar(value="Idle")
+        ttk.Label(self, textvariable=self.text_var, style="Readout.TLabel").pack(anchor="w")
+        self.bar = ttk.Progressbar(self, mode="determinate", maximum=1.0)
+        self.bar.pack(fill="x", pady=(2, 0))
+        self._job = None
+        self._tick_job = None
+        self._idle_job = None
+
+    @property
+    def running(self):
+        return self._job is not None
+
+    def start(self, label, key=None, work=1.0):
+        """Begins a job; `work` scales the learned duration of `key` (e.g. megapixels)."""
+        if self._idle_job:
+            self.after_cancel(self._idle_job)
+            self._idle_job = None
+        self._job = {"message": label, "key": key or label, "work": max(float(work), 1e-6),
+                     "start": time.monotonic(), "fraction": None, "eta": None}
+        self.bar.configure(mode="indeterminate")
+        self.bar.start(15)
+        self._render()
+        if self._tick_job is None:
+            self._tick_job = self.after(self.TICK_MS, self._tick)
+
+    def update(self, message=None, fraction=None):
+        """Reports progress; starts a job implicitly if none is running."""
+        if self._job is None:
+            self.start(message or "Working...")
+        if message:
+            self._job["message"] = message
+        if fraction is not None and fraction > 0:
+            if self._job["fraction"] is None:
+                self.bar.stop()
+                self.bar.configure(mode="determinate")
+            self._job["fraction"] = min(max(float(fraction), self._job["fraction"] or 0.0), 1.0)
+            self.bar.configure(value=self._job["fraction"])
+        self._render()
+
+    def note(self, text):
+        if self._job is not None:
+            self._job["message"] = text
+            self._render()
+
+    def finish(self, outcome="done"):
+        """Ends the job: 'done' (its duration is learned), 'failed' or 'cancelled'."""
+        job, self._job = self._job, None
+        if job is None:
+            return
+        elapsed = time.monotonic() - job["start"]
+        if outcome == "done" and elapsed > 0.2:
+            _record_job_rate(job["key"], elapsed / job["work"])
+        self.bar.stop()
+        self.bar.configure(mode="determinate", value=0)
+        verb = {"done": "Done in", "failed": "Failed after", "cancelled": "Cancelled after"}[outcome]
+        self.text_var.set(f"{job['message'].rstrip('.')}: {verb.lower()} {format_duration(elapsed)}")
+        self._idle_job = self.after(6000, lambda: self.text_var.set("Idle"))
+
+    def _tick(self):
+        self._tick_job = None
+        if self._job is not None and self.winfo_exists():
+            self._render()
+            self._tick_job = self.after(self.TICK_MS, self._tick)
+
+    def _remaining(self, elapsed):
+        job = self._job
+        learned = _job_rates().get(job["key"])
+        learned_left = learned * job["work"] - elapsed if learned is not None else None
+        fraction = job["fraction"]
+        if fraction and fraction >= 0.05 and elapsed >= 1.0:
+            from_rate = elapsed * (1 - fraction) / fraction
+            if learned_left is not None and learned_left > 0 and fraction < 0.5:
+                weight = (fraction - 0.05) / 0.45          # Trust the rate more as it firms up
+                return weight * from_rate + (1 - weight) * learned_left
+            return from_rate
+        if learned_left is not None:
+            return learned_left
+        return None
+
+    def _render(self):
+        job = self._job
+        if job is None:
+            return
+        elapsed = time.monotonic() - job["start"]
+        parts = [job["message"].rstrip(".")]
+        if job["fraction"] is not None:
+            parts.append(f"{job['fraction'] * 100:.0f}%")
+        parts.append(f"{format_duration(elapsed)} elapsed")
+        left = self._remaining(elapsed)
+        if left is not None:
+            # Smooth the estimate so it does not jump with every update.
+            job["eta"] = left if job["eta"] is None else 0.7 * job["eta"] + 0.3 * left
+            if job["eta"] > 0.5:
+                parts.append(f"about {format_duration(job['eta'])} left")
+            else:
+                parts.append("finishing (longer than last time)" if left < -2 else "almost done")
+        elif elapsed > 2:
+            parts.append("no estimate yet (first run)")
+        self.text_var.set("   ·   ".join(parts))
+
 
 
 class MessageDialog(tk.Toplevel):
@@ -730,6 +888,10 @@ def dem_source_problem(source_path):
     return None
 
 
+class UnrealUnavailable(RuntimeError):
+    """No Unreal Editor answered the Remote Execution broadcast."""
+
+
 def convert_and_dispatch(source_path, resolution, dispatch, output_dir,
                          log, progress, dialog, cancelled, save_level=True):
     """
@@ -785,8 +947,10 @@ def convert_and_dispatch(source_path, resolution, dispatch, output_dir,
         if line.strip():
             log(line, level="error" if "[-]" in line else None)
     if "[-]" in output:
-        log("No editor responded. Enable the Python Editor Script Plugin and "
-            "'Remote Execution' in Project Settings, then retry.", level="warn")
+        raise UnrealUnavailable(
+            "Unreal did not complete the import. Check that the editor is running with the "
+            "Python Editor Script Plugin and 'Remote Execution' enabled, then retry. The "
+            f"heightmap is written: {heightmap_path}")
     progress("Dispatch complete", 1.0)
     return heightmap_path
 
@@ -1682,24 +1846,60 @@ class RockPlannerStudio(ttk.Frame):
         rock_save_check.pack(anchor="w")
         Tooltip(rock_save_check,
                 "Saves the open Unreal level, and the imported rock assets, once the\n"
-                "rocks are placed.")
+                "rocks are placed or their mask ids updated.")
         Tooltip(physics_check,
                 "Off: rocks are static obstacles at their planned positions.\n"
                 "On: rocks are movable rigid bodies and may settle or roll.")
 
-        # Object-mask ids come from the Ground Truth Masks view.
-        self.mask_ids_var = tk.StringVar()
+        # Object-mask ids the placed rocks are tagged with (Custom Depth Stencil);
+        # they must match mask_labels in the GNC stereo-depth params.
+        ttk.Label(unreal_group, text="Object mask ids",
+                  font=("Segoe UI Semibold", 8)).pack(anchor="w", pady=(8, 2))
+        stencil_grid = ttk.Frame(unreal_group)
+        stencil_grid.pack(fill="x")
+        stencil_grid.columnconfigure(0, weight=1)
+        self.boulder_stencil_var = tk.StringVar()
+        self.small_rock_stencil_var = tk.StringVar()
+        self.boulder_radius_var = tk.StringVar()
+        for row, (label, var, tip) in enumerate((
+                ("Boulder id", self.boulder_stencil_var,
+                 "Mask id (1-255) for boulders; 20 is 'boulder' in the GNC mask labels."),
+                ("Small rock id", self.small_rock_stencil_var,
+                 "Mask id (1-255) for small rocks; 21 is 'small_rock' in the GNC\n"
+                 "mask labels. Use the boulder id here too for a single rock class."),
+                ("Boulder if radius >= (m)", self.boulder_radius_var,
+                 "Rocks whose planned footprint radius is at least this are boulders;\n"
+                 "the rest are small rocks."))):
+            name = ttk.Label(stencil_grid, text=label, font=("Segoe UI", 8))
+            name.grid(row=row, column=0, sticky="w", pady=1)
+            ttk.Entry(stencil_grid, textvariable=var, width=8, justify="right",
+                      font=("Consolas", 9)).grid(row=row, column=1, sticky="e", pady=1)
+            Tooltip(name, tip)
+
+        # Class split of the exported field, to flag an empty class early.
+        self.stencil_preview_var = tk.StringVar()
         self._wrapping_labels.append(ttk.Label(
-            unreal_group, textvariable=self.mask_ids_var, justify="left",
-            style="HomeHint.TLabel"))
-        self._wrapping_labels[-1].pack(anchor="w", pady=(6, 0))
+            unreal_group, textvariable=self.stencil_preview_var, justify="left",
+            style="Readout.TLabel"))
+        self._wrapping_labels[-1].pack(anchor="w", pady=(4, 0))
 
         self.place_button = ttk.Button(unreal_group, text="Place Rocks in Unreal",
                                        command=self.place_in_unreal)
         self.place_button.pack(fill="x", pady=(6, 0))
+        self.stencil_button = ttk.Button(unreal_group, text="Update Mask Ids Only",
+                                         command=self.update_stencils_in_unreal)
+        self.stencil_button.pack(fill="x", pady=(4, 0))
+        Tooltip(self.stencil_button,
+                "Re-tags rocks already placed in Unreal with the ids above,\n"
+                "without moving or re-importing them.")
         if not LOADER_AVAILABLE:
             self.place_button.state(["disabled"])
+            self.stencil_button.state(["disabled"])
         self.refresh_mask_ids()
+        for var in (self.boulder_stencil_var, self.small_rock_stencil_var,
+                    self.boulder_radius_var):
+            var.trace_add("write", self._stencils_changed)
+        self.export_name_var.trace_add("write", self._refresh_stencil_preview)
         self._refresh_model_info()
 
         # Mouse-wheel scrolling over the panel, bound locally (not app-wide) so it
@@ -1716,8 +1916,7 @@ class RockPlannerStudio(ttk.Frame):
         log_frame = ttk.Frame(right, padding=(8, 4, 8, 8))
         ttk.Label(log_frame, text="Activity log",
                   font=("Segoe UI Semibold", 10)).pack(anchor="w")
-        self.status_var = tk.StringVar(value="Idle")
-        self.progress = ttk.Progressbar(log_frame, mode="determinate", maximum=1.0)
+        self.progress = ProgressPanel(log_frame)
         self.progress.pack(fill="x", pady=(4, 4))
         self.log_text = tk.Text(log_frame, height=7, font=("Consolas", 8), wrap="word",
                                 relief="solid", borderwidth=1, background="#1e1e1e",
@@ -1775,7 +1974,7 @@ class RockPlannerStudio(ttk.Frame):
             return
         self._cancel.set()
         self.stop_button.state(["disabled"])
-        self.status_var.set("Cancelling...")
+        self.progress.note("Cancelling...")
         self.log("Cancellation requested; stopping at the next checkpoint...",
                  level="warn")
 
@@ -1840,6 +2039,8 @@ class RockPlannerStudio(ttk.Frame):
 
         self.log(f"Loading DEM: {os.path.basename(path)} ...")
         self._show_message(f"Loading {os.path.basename(path)} ...")
+        self.progress.start(f"Loading {os.path.basename(path)}", "load_dem",
+                            max(os.path.getsize(path) / 1e6, 0.01) if os.path.exists(path) else 1.0)
 
         def worker():
             try:
@@ -1886,7 +2087,8 @@ class RockPlannerStudio(ttk.Frame):
         self.preview_button.state(["disabled"])
         self.export_button.state(["disabled"])
         self.stop_button.state(["!disabled"])
-        self.status_var.set("Exporting..." if export else "Planning...")
+        self.progress.start("Exporting..." if export else "Planning...",
+                            "rock_export" if export else "rock_plan", dem.size / 1e6)
 
         def worker():
             try:
@@ -2040,22 +2242,73 @@ class RockPlannerStudio(ttk.Frame):
                                        f"{base_name}_rocks.csv")
 
     def refresh_mask_ids(self):
-        """Shows the object-mask ids placed rocks will be tagged with."""
+        """Loads the shared rock mask ids into the fields."""
         ids = mask_ids(self.app)
-        self.mask_ids_var.set(
-            f"Rocks are tagged for the rover's object mask as boulders (id {ids['boulder']}, "
-            f"radius >= {ids['boulder_radius_m']:g} m) and small rocks (id {ids['small_rock']}). "
-            "Change the ids, or re-tag placed rocks, in Ground Truth Masks.")
+        self.boulder_stencil_var.set(str(ids["boulder"]))
+        self.small_rock_stencil_var.set(str(ids["small_rock"]))
+        self.boulder_radius_var.set(f"{ids['boulder_radius_m']:g}")
+        self._refresh_stencil_preview()
 
-    def _start_unreal_job(self, status, job):
+    def _stencil_settings(self):
+        """Returns (boulder_id, small_rock_id, boulder_min_radius_m), or None if invalid."""
+        try:
+            boulder = int(self.boulder_stencil_var.get())
+            small = int(self.small_rock_stencil_var.get())
+            radius = float(self.boulder_radius_var.get())
+        except ValueError:
+            return None
+        if not (1 <= boulder <= 255 and 1 <= small <= 255 and radius >= 0):
+            return None
+        return boulder, small, radius
+
+    def _stencils_changed(self, *_trace_args):
+        settings = self._stencil_settings()
+        if settings is not None:
+            ids = dict(mask_ids(self.app))
+            ids["boulder"], ids["small_rock"], ids["boulder_radius_m"] = settings
+            self.app.mask_ids = ids         # Shared with Crater Masks' labels
+        self._refresh_stencil_preview()
+
+    def _refresh_stencil_preview(self, *_trace_args):
+        """Updates the readout of how the exported field splits between the ids."""
+        settings = self._stencil_settings()
+        if settings is None:
+            self.stencil_preview_var.set("Ids must be 1-255 and the radius >= 0.")
+            return
+        boulder, small, radius = settings
+        _base, rocks_csv = self._rocks_csv_path()
+        try:
+            scales = np.loadtxt(rocks_csv, delimiter=",", skiprows=1, usecols=5, ndmin=1)
+        except (OSError, ValueError, IndexError):
+            self.stencil_preview_var.set("Export the rock field to see how it splits.")
+            return
+        n_boulder = int((scales >= radius).sum())
+        text = (f"This field: {n_boulder} boulders (id {boulder}), "
+                f"{len(scales) - n_boulder} small rocks (id {small}).")
+        if len(scales) and n_boulder in (0, len(scales)):
+            text += (f"\nAll rocks fall in one class: planned radii run "
+                     f"{scales.min():.2f}-{scales.max():.2f} m.")
+        self.stencil_preview_var.set(text)
+
+    def _rock_count(self):
+        """Rows in the exported rock list (the work an Unreal job scales with)."""
+        try:
+            with open(self._rocks_csv_path()[1]) as handle:
+                return max(sum(1 for _ in handle) - 1, 1)
+        except OSError:
+            return 1
+
+    def _start_unreal_job(self, status, job, key="rock_unreal"):
         """Runs `job(log)` on a worker thread, disabling the planner buttons meanwhile."""
-        self.status_var.set(status)
-        for button in (self.preview_button, self.export_button, self.place_button):
+        self.progress.start(status, key, self._rock_count())
+        for button in (self.preview_button, self.export_button, self.place_button,
+                       self.stencil_button):
             button.state(["disabled"])
 
         def worker():
             try:
-                job(lambda text, level=None: self._queue.put(("log", (text, level))))
+                if job(lambda text, level=None: self._queue.put(("log", (text, level)))) is False:
+                    self._queue.put(("job_failed", None))
             except Exception:
                 self._queue.put(("log", (traceback.format_exc(), "error")))
             finally:
@@ -2063,6 +2316,26 @@ class RockPlannerStudio(ttk.Frame):
 
         self._worker = threading.Thread(target=worker, daemon=True)
         self._worker.start()
+
+    def update_stencils_in_unreal(self):
+        """Re-tags the rocks placed in Unreal with the current mask ids."""
+        if self._busy():
+            self.log("A job is already running; wait for it to finish.", level="warn")
+            return
+        settings = self._stencil_settings()
+        if settings is None:
+            self.log("Mask ids must be whole numbers 1-255 and the radius >= 0.", level="error")
+            return
+        boulder, small, radius = settings
+        base_name, _csv = self._rocks_csv_path()
+        save_level = self.rock_save_level_var.get()
+        self.log(f"Updating the mask ids of the '{base_name}' rocks in Unreal "
+                 f"(boulder {boulder} if radius >= {radius:g} m, else {small}).")
+        self._start_unreal_job(
+            "Updating mask ids in Unreal...", key="rock_ids",
+            job=
+            lambda log: rocks_to_unreal.send_stencils_to_unreal(
+                base_name, boulder, small, radius, save_level=save_level, log=log))
 
     def place_in_unreal(self):
         """Sends the exported rock field to a running Unreal Editor."""
@@ -2084,8 +2357,11 @@ class RockPlannerStudio(ttk.Frame):
         if not resolution > 0:
             self.log("Resolution must be a positive number.", level="error")
             return
-        ids = mask_ids(self.app)
-        boulder, small, radius = ids["boulder"], ids["small_rock"], ids["boulder_radius_m"]
+        settings = self._stencil_settings()
+        if settings is None:
+            self.log("Mask ids must be whole numbers 1-255 and the radius >= 0.", level="error")
+            return
+        boulder, small, radius = settings
 
         # The Landscape is labelled after its heightmap; its width is read from
         # the heightmap JSON.
@@ -2110,7 +2386,8 @@ class RockPlannerStudio(ttk.Frame):
         self.log(f"Placing {os.path.basename(rocks_csv)} in Unreal "
                  f"(models: {os.path.basename(models_folder)}).")
         self._start_unreal_job(
-            "Placing rocks in Unreal...",
+            "Placing rocks in Unreal...", key="place_rocks",
+            job=
             lambda log: rocks_to_unreal.send_rocks_to_unreal(
                 rocks_csv, models_folder, resolution,
                 landscape_label=f"{dem_stem}_heightmap", landscape_width=width,
@@ -2135,13 +2412,13 @@ class RockPlannerStudio(ttk.Frame):
                 kind, payload = self._queue.get_nowait()
                 if kind == "dem":
                     self.dem = payload
+                    self.progress.finish()
                     self.log(f"Loaded DEM {payload.shape[1]} x {payload.shape[0]} px.",
                              level="ok")
                     self.request_preview()
                 elif kind == "progress":
                     message, fraction = payload
-                    self.status_var.set(message)
-                    self.progress.configure(value=fraction)
+                    self.progress.update(message, fraction)
                 elif kind == "result":
                     self.result = payload
                     self._render(payload)
@@ -2151,25 +2428,27 @@ class RockPlannerStudio(ttk.Frame):
                     self.log("Rock field written:", level="ok")
                     for label, path in payload.items():
                         self.log(f"  {label}: {path}")
+                    self._refresh_stencil_preview()
                 elif kind == "log":
                     text, level = payload
                     self.log(text, level=level)
                 elif kind == "cancelled":
                     self.log("Job cancelled.", level="warn")
-                    self.status_var.set("Cancelled")
+                    self.progress.finish("cancelled")
+                elif kind == "job_failed":
+                    self.progress.finish("failed")
                 elif kind == "error":
                     self.log(payload, level="error")
-                    self.status_var.set("Failed")
+                    self.progress.finish("failed")
                     self._show_message("Rock planning failed.\nSee the activity log.")
                 elif kind == "done":
                     self.preview_button.state(["!disabled"])
                     self.export_button.state(["!disabled"])
                     if LOADER_AVAILABLE:
                         self.place_button.state(["!disabled"])
+                        self.stencil_button.state(["!disabled"])
                     self.stop_button.state(["disabled"])
-                    if self.status_var.get() not in ("Failed", "Cancelled"):
-                        self.status_var.set("Idle")
-                    self.progress.configure(value=0)
+                    self.progress.finish()
         except queue.Empty:
             pass
         self.after(80, self._drain_queue)
@@ -2277,10 +2556,11 @@ class RockPlannerStudio(ttk.Frame):
 
 
 # =========================================================================
-# GROUND TRUTH MASKS
+# CRATER MASKS
 # =========================================================================
 
-# Object-mask ids shared by the rock planner (placement) and this view.
+# Object-mask ids: rocks are set in the rock planner, craters in Crater Masks;
+# both views read them for placement and the GNC labels.
 DEFAULT_MASK_IDS = {"boulder": 20, "small_rock": 21, "boulder_radius_m": 0.15,
                     "crater": crater_mask.CRATER_ID, "rim": crater_mask.RIM_ID}
 GNC_MASK_LABELS = "GNC-Moon-Simulator/component_stereo_depth/config/params.yaml"
@@ -2291,12 +2571,12 @@ def mask_ids(app):
     return getattr(app, "mask_ids", None) or dict(DEFAULT_MASK_IDS)
 
 
-class GroundTruthStudio(ttk.Frame):
+class CraterMaskStudio(ttk.Frame):
     """
-    Labels for the rover's object mask: the stencil ids rocks are tagged with,
-    and the crater map the mask material draws on the Landscape. Shows the
-    craters and rock classes over the map, exports the crater map and sends
-    both to Unreal.
+    Crater labels for the rover's object mask. Maps the craters on a DEM,
+    exports the crater map, and sends it to Unreal, where the mask material
+    draws it on the Landscape for the chosen mask camera. Also lists the GNC
+    mask labels for every id in use.
     """
 
     def __init__(self, master, figure_dpi=100, source_path=None, resolution=1.0):
@@ -2307,6 +2587,7 @@ class GroundTruthStudio(ttk.Frame):
         self.dem_path = None
         self.craters = None           # find_craters() result for the loaded DEM
         self._crater_depth = None     # Min depth the craters were found with
+        self._cameras_listed = False
         self._queue = queue.Queue()
         self._worker = None
 
@@ -2314,10 +2595,12 @@ class GroundTruthStudio(ttk.Frame):
         self.resolution_var.set(f"{resolution:g}")
         self._load_ids()
         self.after(80, self._drain_queue)
-        self.log("Set the mask ids, find the craters, then send them to Unreal.")
+        self.log("Find the craters, pick the mask camera, then send them to Unreal.")
         if source_path and os.path.exists(source_path):
             self.load_dem(source_path)
         self.after_idle(self._place_sash)
+        if LOADER_AVAILABLE:
+            self.after(300, lambda: self.find_cameras(quiet=True))
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
@@ -2330,7 +2613,7 @@ class GroundTruthStudio(ttk.Frame):
         top_bar = ttk.Frame(left)
         top_bar.pack(fill="x")
         ttk.Button(top_bar, text="⌂ Home", width=9, command=self.app.show_home).pack(side="left")
-        ttk.Label(top_bar, text="Ground Truth Masks",
+        ttk.Label(top_bar, text="Crater Masks",
                   font=("Segoe UI Semibold", 11)).pack(side="left", padx=(8, 0))
 
         actions = ttk.Frame(left)
@@ -2359,9 +2642,10 @@ class GroundTruthStudio(ttk.Frame):
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        self._hint(inner, "Labels for the rover's object mask (navcam/central/object_mask). "
-                          "Rocks carry their id from placement; craters are drawn on the "
-                          "Landscape by the mask material from a crater map.", pady=(0, 8))
+        self._hint(inner, "Shows craters in the rover's object mask "
+                          "(navcam/central/object_mask): the mask camera's material draws "
+                          "this crater map on the Landscape. Rocks get their ids when they "
+                          "are placed (step 2).", pady=(0, 8))
 
         # Source DEM
         source = self._group(inner, "Map")
@@ -2376,29 +2660,6 @@ class GroundTruthStudio(ttk.Frame):
         self.resolution_var = tk.StringVar(value="1")
         ttk.Entry(row, textvariable=self.resolution_var, width=7, justify="right",
                   font=("Consolas", 9)).pack(side="left", padx=(4, 0))
-
-        # Rocks
-        rocks = self._group(inner, "Rocks")
-        self.boulder_var, self.small_var, self.radius_var = (tk.StringVar() for _ in range(3))
-        self._id_rows(rocks, (
-            ("Boulder id", self.boulder_var,
-             "Mask id (1-255) of boulders; 20 is 'boulder' in the GNC labels."),
-            ("Small rock id", self.small_var,
-             "Mask id (1-255) of small rocks; 21 is 'small_rock'. Use the boulder\n"
-             "id here too for a single rock class."),
-            ("Boulder if radius >= (m)", self.radius_var,
-             "Rocks with a planned footprint radius at least this are boulders.")))
-        self.rock_split_var = tk.StringVar()
-        self._readout(rocks, self.rock_split_var)
-        self.save_level_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(rocks, text="Save the level afterwards",
-                        variable=self.save_level_var).pack(anchor="w", pady=(4, 0))
-        self.rock_button = ttk.Button(rocks, text="Update Rock Ids in Unreal",
-                                      command=self.update_rock_ids)
-        self.rock_button.pack(fill="x", pady=(6, 0))
-        Tooltip(self.rock_button,
-                "Re-tags the rocks already placed for this map with the ids above,\n"
-                "without moving them. New placements use these ids automatically.")
 
         # Craters
         craters = self._group(inner, "Craters")
@@ -2430,14 +2691,35 @@ class GroundTruthStudio(ttk.Frame):
         Tooltip(self.export_button,
                 "Writes <map>_craterMask.png (mask ids, 4 cells per DEM cell) and its\n"
                 ".json into the map's output folder.")
-        self.send_button = ttk.Button(craters, text="Send Crater Map to Unreal",
+
+        # Mask camera and sending
+        camera = self._group(inner, "Mask Camera in Unreal")
+        self._hint(camera, "The scene capture that renders the object mask. It gets "
+                           "PPM_ObjectMask and, if its actor has a StereoCamStreamer, is "
+                           "streamed as the mask camera.")
+        camera_row = ttk.Frame(camera)
+        camera_row.pack(fill="x", pady=(4, 0))
+        self.camera_var = tk.StringVar(value="Leo_Raph0 / Navcam_Mask")
+        self.camera_box = ttk.Combobox(camera_row, textvariable=self.camera_var,
+                                       font=("Consolas", 8))
+        self.camera_box.pack(side="left", fill="x", expand=True)
+        self.cameras_button = ttk.Button(camera_row, text="Find", width=6,
+                                         command=self.find_cameras)
+        self.cameras_button.pack(side="left", padx=(4, 0))
+        Tooltip(self.cameras_button, "Lists the scene-capture cameras in the open Unreal level.")
+        self.camera_info_var = tk.StringVar()
+        self._readout(camera, self.camera_info_var)
+        self.save_level_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(camera, text="Save the level afterwards",
+                        variable=self.save_level_var).pack(anchor="w", pady=(4, 0))
+        self.send_button = ttk.Button(camera, text="Send Crater Mask to Unreal",
                                       style="Accent.TButton", command=self.send_crater_map)
-        self.send_button.pack(fill="x", pady=(4, 0))
+        self.send_button.pack(fill="x", pady=(6, 0))
         Tooltip(self.send_button,
-                "Imports the exported crater map and rebuilds PPM_ObjectMask so Landscape\n"
-                "pixels take the crater ids. Rocks keep theirs. The original material is\n"
-                "kept as PPM_ObjectMask_Original.")
-        self.restore_button = ttk.Button(craters, text="Restore Original Mask Material",
+                "Exports the crater map if needed, rebuilds PPM_ObjectMask so Landscape\n"
+                "pixels take the crater ids (rocks keep theirs), and sets up the mask\n"
+                "camera above. The original material is kept as PPM_ObjectMask_Original.")
+        self.restore_button = ttk.Button(camera, text="Restore Original Mask Material",
                                          command=self.restore_material)
         self.restore_button.pack(fill="x", pady=(4, 0))
         Tooltip(self.restore_button, "Puts back PPM_ObjectMask as it was before the crater map.")
@@ -2450,10 +2732,9 @@ class GroundTruthStudio(ttk.Frame):
         self.labels_text.pack(fill="x", pady=(4, 0))
         ttk.Button(labels, text="Copy", command=self.copy_labels).pack(anchor="e", pady=(4, 0))
 
-        for var in (self.boulder_var, self.small_var, self.radius_var,
-                    self.crater_var, self.rim_var):
+        for var in (self.crater_var, self.rim_var):
             var.trace_add("write", self._ids_changed)
-        self._unreal_buttons = (self.rock_button, self.send_button, self.restore_button)
+        self._unreal_buttons = (self.send_button, self.restore_button)
         if not LOADER_AVAILABLE:
             for button in self._unreal_buttons:
                 button.state(["disabled"])
@@ -2467,7 +2748,8 @@ class GroundTruthStudio(ttk.Frame):
         self._panes.add(right, weight=1)
         log_frame = ttk.Frame(right, padding=(8, 4, 8, 8))
         ttk.Label(log_frame, text="Activity log", font=("Segoe UI Semibold", 10)).pack(anchor="w")
-        self.status_var = tk.StringVar(value="Idle")
+        self.progress = ProgressPanel(log_frame)
+        self.progress.pack(fill="x", pady=(4, 0))
         self.log_text = tk.Text(log_frame, height=6, font=("Consolas", 8), wrap="word",
                                 relief="solid", borderwidth=1, background="#1e1e1e",
                                 foreground="#d4d4d4", insertbackground="#d4d4d4")
@@ -2483,7 +2765,7 @@ class GroundTruthStudio(ttk.Frame):
         self.canvas = FigureCanvasTkAgg(self.figure, master=plot)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
         NavigationToolbar2Tk(self.canvas, plot).update()
-        self._message("Load a DEM to see its craters and rocks.")
+        self._message("Load a DEM to see its craters.")
 
     def _group(self, parent, title):
         group = ttk.Labelframe(parent, text=title, padding=(8, 4, 8, 8), style="Group.TLabelframe")
@@ -2537,39 +2819,37 @@ class GroundTruthStudio(ttk.Frame):
     # ----------------------------------------------------------------- ids
     def _load_ids(self):
         ids = mask_ids(self.app)
-        self.boulder_var.set(str(ids["boulder"]))
-        self.small_var.set(str(ids["small_rock"]))
-        self.radius_var.set(f"{ids['boulder_radius_m']:g}")
         self.crater_var.set(str(ids["crater"]))
         self.rim_var.set(str(ids["rim"]))
 
+    def refresh_ids(self):
+        """Re-reads the shared ids (rock ids may have changed in the rock planner)."""
+        self._load_ids()
+        self._ids_changed()
+
     def _read_ids(self):
-        """The ids in the fields, or None (with a log line) when one is invalid."""
+        """All mask ids: rocks from the shared ids, craters from the fields; None if invalid."""
+        ids = dict(mask_ids(self.app))
         try:
-            ids = {"boulder": int(self.boulder_var.get()), "small_rock": int(self.small_var.get()),
-                   "boulder_radius_m": float(self.radius_var.get()),
-                   "crater": int(self.crater_var.get()), "rim": int(self.rim_var.get())}
+            ids["crater"], ids["rim"] = int(self.crater_var.get()), int(self.rim_var.get())
         except ValueError:
             return None
-        if not (1 <= ids["boulder"] <= 255 and 1 <= ids["small_rock"] <= 255
-                and 1 <= ids["crater"] <= 255 and 0 <= ids["rim"] <= 255
-                and ids["boulder_radius_m"] >= 0 and ids["crater"] != ids["rim"]):
+        if not (1 <= ids["crater"] <= 255 and 0 <= ids["rim"] <= 255 and ids["crater"] != ids["rim"]):
             return None
         return ids
 
     def _ids_changed(self, *_trace_args):
         ids = self._read_ids()
         if ids is not None:
-            self.app.mask_ids = ids         # Shared with the rock planner's placement
+            self.app.mask_ids = ids         # Shared with the rock planner
         self._refresh_labels(ids)
-        self._refresh_rock_split(ids)
         self._redraw()
 
     def _refresh_labels(self, ids):
         self.labels_text.configure(state="normal")
         self.labels_text.delete("1.0", "end")
         if ids is None:
-            self.labels_text.insert("end", "Ids must be whole numbers 1-255\n(rim 0-255, radius >= 0).")
+            self.labels_text.insert("end", "Crater ids must be whole numbers 1-255\n(rim 0-255).")
         else:
             lines = ['- "2:rover"', '- "10:landscape"', f'- "{ids["boulder"]}:boulder"']
             if ids["small_rock"] != ids["boulder"]:
@@ -2589,27 +2869,6 @@ class GroundTruthStudio(ttk.Frame):
     def _group_name(self):
         return dem_group_name(self.dem_path) if self.dem_path else None
 
-    def _rock_scales(self):
-        group = self._group_name()
-        if not group:
-            return None
-        try:
-            return np.loadtxt(os.path.join(GENERATOR_OUTPUT_DIR, group, f"{group}_rocks.csv"),
-                              delimiter=",", skiprows=1, usecols=(3, 4, 5), ndmin=2)
-        except (OSError, ValueError, IndexError):
-            return None
-
-    def _refresh_rock_split(self, ids):
-        rocks = self._rock_scales()
-        if ids is None:
-            self.rock_split_var.set("")
-        elif rocks is None or not len(rocks):
-            self.rock_split_var.set("No exported rock field for this map yet (stage 2).")
-        else:
-            boulders = int((rocks[:, 2] >= ids["boulder_radius_m"]).sum())
-            self.rock_split_var.set(f"This map's rocks: {boulders} boulders (id {ids['boulder']}), "
-                                    f"{len(rocks) - boulders} small (id {ids['small_rock']}).")
-
     def open_dem_menu(self):
         drop_dem_menu(self, self.load_button, self.load_dem, self.browse_dem)
 
@@ -2626,12 +2885,15 @@ class GroundTruthStudio(ttk.Frame):
         self.craters = None
         self.log(f"Loading DEM: {os.path.basename(path)} ...")
         self._message(f"Loading {os.path.basename(path)} ...")
+        self.progress.start(f"Loading {os.path.basename(path)}", "load_dem",
+                            max(os.path.getsize(path) / 1e6, 0.01) if os.path.exists(path) else 1.0)
 
         def worker():
             try:
                 self._queue.put(("dem", load_dem_array(path)))
             except Exception as exc:
                 self._queue.put(("log", (f"Could not load DEM: {exc}", "error")))
+                self._queue.put(("failed", None))
         threading.Thread(target=worker, daemon=True).start()
 
     def _resolution(self):
@@ -2654,18 +2916,19 @@ class GroundTruthStudio(ttk.Frame):
     def _busy(self):
         return self._worker is not None and self._worker.is_alive()
 
-    def _run(self, status, job):
+    def _run(self, status, job, key=None, work=1.0):
         """Runs `job(log)` on a worker thread with the buttons disabled."""
         if self._busy():
             self.log("A job is already running; wait for it to finish.", level="warn")
             return
-        self.status_var.set(status)
+        self.progress.start(status, key, work)
         for button in (self.find_button, self.export_button) + self._unreal_buttons:
             button.state(["disabled"])
 
         def worker():
             try:
-                job(lambda text, level=None: self._queue.put(("log", (text, level))))
+                if job(lambda text, level=None: self._queue.put(("log", (text, level)))) is False:
+                    self._queue.put(("job_failed", None))
             except Exception:
                 self._queue.put(("log", (traceback.format_exc(), "error")))
             finally:
@@ -2685,9 +2948,11 @@ class GroundTruthStudio(ttk.Frame):
 
         def job(log):
             log(f"Finding craters (min depth {depth:g} m) ...")
-            craters = crater_mask.find_craters(dem, resolution, depth)
+            craters = crater_mask.find_craters(
+                dem, resolution, depth,
+                progress=lambda m, f: self._queue.put(("progress", (m, f))))
             self._queue.put(("craters", (craters, depth, then)))
-        self._run("Finding craters...", job)
+        self._run("Finding craters...", job, "find_craters", dem.size / 1e6)
 
     def _labels(self, supersample=1):
         ids = self._read_ids()
@@ -2703,17 +2968,25 @@ class GroundTruthStudio(ttk.Frame):
             self.find_craters(then=lambda: self.export_crater_map(then))
             return
         k = crater_mask.supersample_for(self.dem.shape)
-        labels, ids = self._labels(k)
-        rim = ids["rim"] if self.rim_row.get() > 0 else 0
-        written = crater_mask.export_crater_mask(
-            labels, GENERATOR_OUTPUT_DIR, self._group_name(), self._resolution(),
-            self._crater_depth, ids["crater"], rim, self.rim_row.get(), supersample=k)
-        self.log(f"Crater map written ({labels.shape[1]} x {labels.shape[0]}, {k} per DEM cell):",
-                 level="ok")
-        for path in written.values():
-            self.log(f"  {path}")
-        if then:
-            self.after(10, then)
+        ids = self._read_ids()
+        rim_fraction = self.rim_row.get()
+        rim = ids["rim"] if rim_fraction > 0 else 0
+        shape, craters, group = self.dem.shape, self.craters, self._group_name()
+        resolution, depth = self._resolution(), self._crater_depth
+
+        def job(log):
+            labels = crater_mask.render_labels(shape, craters, ids["crater"], rim,
+                                               rim_fraction, k)
+            written = crater_mask.export_crater_mask(
+                labels, GENERATOR_OUTPUT_DIR, group, resolution, depth,
+                ids["crater"], rim, rim_fraction, supersample=k)
+            log(f"Crater map written ({labels.shape[1]} x {labels.shape[0]}, {k} per DEM cell):",
+                "ok")
+            for path in written.values():
+                log(f"  {path}")
+            if then:
+                self._queue.put(("then", then))
+        self._run("Writing the crater map...", job, "crater_export", shape[0] * shape[1] * k * k / 1e6)
 
     def send_crater_map(self):
         if self.dem_path is None:
@@ -2732,29 +3005,73 @@ class GroundTruthStudio(ttk.Frame):
             return
         stem = os.path.splitext(os.path.basename(self.dem_path))[0]
         width = rocks_to_unreal.heightmap_width(os.path.join(GENERATOR_OUTPUT_DIR, group), stem)
+        camera_actor, camera_capture = self._camera()
+        save_level = self.save_level_var.get()
         self.log(f"Sending {os.path.basename(png)} to Unreal (crater id {meta['crater_id']}, "
-                 f"rim id {meta['rim_id']}).")
-        self._run("Sending the crater map to Unreal...",
+                 f"rim id {meta['rim_id']}; mask camera "
+                 f"{camera_actor + ' / ' + camera_capture if camera_actor else 'unchanged'}).")
+        self._run("Sending the crater mask to Unreal...", key="crater_send",
+                  work=max(os.path.getsize(png) / 1e6, 0.01),
+                  job=
                   lambda log: crater_mask_to_unreal.send_crater_mask_to_unreal(
                       png, meta["width"], meta["height"], meta["resolution_m"],
                       landscape_label=f"{stem}_heightmap", landscape_width=width,
-                      supersample=meta.get("supersample", 1), log=log))
+                      supersample=meta.get("supersample", 1), camera_actor=camera_actor,
+                      camera_capture=camera_capture, save_level=save_level, log=log))
 
     def restore_material(self):
         self._run("Restoring the mask material...",
-                  lambda log: crater_mask_to_unreal.remove_crater_mask_from_unreal(log=log))
+                  lambda log: crater_mask_to_unreal.remove_crater_mask_from_unreal(log=log),
+                  "restore_mask")
 
-    def update_rock_ids(self):
-        ids, group = self._read_ids(), self._group_name()
-        if ids is None or group is None:
-            self.log("Load the map and set valid ids first.", level="warn")
+    def find_cameras(self, quiet=False):
+        """Lists the scene-capture cameras in Unreal into the camera box (own thread)."""
+        self.cameras_button.state(["disabled"])
+        self.camera_info_var.set("Listing cameras in Unreal...")
+        log = (lambda text, level=None: None) if quiet else (
+            lambda text, level=None: self._queue.put(("log", (text, level))))
+
+        def worker():
+            found = None
+            try:
+                found = crater_mask_to_unreal.list_mask_cameras(log=log, discovery_seconds=1.5)
+            finally:
+                self._queue.put(("cameras", (found, quiet)))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_cameras(self, found, quiet):
+        if LOADER_AVAILABLE:
+            self.cameras_button.state(["!disabled"])
+        if not found:
+            self.camera_info_var.set("Unreal not reached: press Find to try again.")
+            if not quiet:
+                self.log("No answer from Unreal: is the editor running with Remote Execution?",
+                         level="warn")
             return
-        save = self.save_level_var.get()
-        self.log(f"Updating the ids of the '{group}' rocks in Unreal.")
-        self._run("Updating rock ids in Unreal...",
-                  lambda log: rocks_to_unreal.send_stencils_to_unreal(
-                      group, ids["boulder"], ids["small_rock"], ids["boulder_radius_m"],
-                      save_level=save, log=log))
+        options, streamed = [], None
+        for actor in found.get("actors", []):
+            for capture in actor["captures"]:
+                options.append(f"{actor['actor']} / {capture}")
+            if actor.get("streamer_mask"):
+                streamed = f"{actor['actor']} / {actor['streamer_mask']}"
+        self.camera_box.configure(values=options)
+        if streamed and (self.camera_var.get() not in options):
+            self.camera_var.set(streamed)
+        self.camera_info_var.set(
+            (f"Streamed as the object mask now: {streamed}." if streamed
+             else "No StereoCamStreamer found: the mask is not streamed.")
+            + (" Play In Editor is running: camera changes last until it stops."
+               if found.get("pie") else ""))
+        if not quiet:
+            self.log(f"{len(options)} cameras listed.", level="ok")
+
+    def _camera(self):
+        """(actor label, capture name) from the camera box, or ('', '') when blank."""
+        text = self.camera_var.get().strip()
+        if " / " not in text:
+            return "", ""
+        actor, capture = text.split(" / ", 1)
+        return actor.strip(), capture.strip()
 
     # ------------------------------------------------------------- drawing
     def _message(self, text):
@@ -2778,7 +3095,7 @@ class GroundTruthStudio(ttk.Frame):
         axes.imshow(relief, cmap="gray", extent=extent, vmin=0, vmax=1)
         handles = []
         ids = self._read_ids()
-        title = "Object mask classes"
+        title = "Crater mask"
         if self.craters is not None and ids is not None:
             labels, _ids = self._labels()
             overlay = np.zeros(labels.shape + (4,))
@@ -2789,20 +3106,6 @@ class GroundTruthStudio(ttk.Frame):
             if ids["rim"] and self.rim_row.get() > 0:
                 handles.append(Patch(facecolor=(0.23, 0.63, 1.0, 0.6), label=f"Rim ({ids['rim']})"))
             title += f"  -  {len(self.craters)} craters"
-        rocks = self._rock_scales()
-        if rocks is not None and len(rocks) and ids is not None:
-            big = rocks[:, 2] >= ids["boulder_radius_m"]
-            for mask, colour, name in ((~big, "#ffe14d", f"Small rock ({ids['small_rock']})"),
-                                       (big, "#ff4d4d", f"Boulder ({ids['boulder']})")):
-                if mask.any():
-                    axes.scatter(rocks[mask, 0], rocks[mask, 1],
-                                 s=np.clip(rocks[mask, 2] * 40, 1, 30), c=colour,
-                                 edgecolors="none", label=name)
-            handles += [Line2D([0], [0], marker="o", lw=0, color="#ff4d4d",
-                               label=f"Boulder ({ids['boulder']})"),
-                        Line2D([0], [0], marker="o", lw=0, color="#ffe14d",
-                               label=f"Small rock ({ids['small_rock']})")]
-            title += f", {len(rocks)} rocks"
         if handles:
             axes.legend(handles=handles, loc="upper right", fontsize=7, framealpha=0.9)
         axes.set_title(title, fontsize=9)
@@ -2817,9 +3120,9 @@ class GroundTruthStudio(ttk.Frame):
                 kind, payload = self._queue.get_nowait()
                 if kind == "dem":
                     self.dem = payload
+                    self.progress.finish()
                     self.log(f"Loaded DEM {payload.shape[1]} x {payload.shape[0]} px.", level="ok")
                     self.crater_info_var.set("Press Find Craters to map them.")
-                    self._refresh_rock_split(self._read_ids())
                     self._redraw()
                 elif kind == "craters":
                     self.craters, self._crater_depth, then = payload
@@ -2830,6 +3133,14 @@ class GroundTruthStudio(ttk.Frame):
                     self._redraw()
                     if then:
                         self.after(250, then)   # Once the worker thread has ended
+                elif kind == "cameras":
+                    self._show_cameras(*payload)
+                elif kind == "progress":
+                    self.progress.update(*payload)
+                elif kind == "then":
+                    self.after(250, payload)   # Once the worker thread has ended
+                elif kind in ("failed", "job_failed"):
+                    self.progress.finish("failed")
                 elif kind == "log":
                     text, level = payload
                     self.log(text, level=level)
@@ -2839,7 +3150,7 @@ class GroundTruthStudio(ttk.Frame):
                     if LOADER_AVAILABLE:
                         for button in self._unreal_buttons:
                             button.state(["!disabled"])
-                    self.status_var.set("Idle")
+                    self.progress.finish()
         except queue.Empty:
             pass
         self.after(80, self._drain_queue)
@@ -3135,7 +3446,8 @@ class SunStudio(ttk.Frame):
         log_frame = ttk.Frame(right, padding=(8, 4, 8, 8))
         ttk.Label(log_frame, text="Activity log",
                   font=("Segoe UI Semibold", 10)).pack(anchor="w")
-        self.status_var = tk.StringVar(value="Idle")
+        self.progress = ProgressPanel(log_frame)
+        self.progress.pack(fill="x", pady=(4, 0))
         self.log_text = tk.Text(log_frame, height=6, font=("Consolas", 8), wrap="word",
                                 relief="solid", borderwidth=1, background="#1e1e1e",
                                 foreground="#d4d4d4", insertbackground="#d4d4d4")
@@ -3289,6 +3601,8 @@ class SunStudio(ttk.Frame):
         self.source_note_var.set(dem_source_note(path))
         self.log(f"Loading DEM: {os.path.basename(path)} ...")
         self._show_message(f"Loading {os.path.basename(path)} ...")
+        self.progress.start(f"Loading {os.path.basename(path)}", "load_dem",
+                            max(os.path.getsize(path) / 1e6, 0.01) if os.path.exists(path) else 1.0)
 
         def worker():
             try:
@@ -3588,14 +3902,15 @@ class SunStudio(ttk.Frame):
     def _unreal_busy(self):
         return self._unreal_worker is not None and self._unreal_worker.is_alive()
 
-    def _start_unreal_job(self, status, job):
-        self.status_var.set(status)
+    def _start_unreal_job(self, status, job, key=None):
+        self.progress.start(status, key)
         self.send_button.state(["disabled"])
         self.read_button.state(["disabled"])
 
         def worker():
             try:
-                job(lambda text, level=None: self._queue.put(("log", (text, level))))
+                if job(lambda text, level=None: self._queue.put(("log", (text, level)))) is False:
+                    self._queue.put(("job_failed", None))
             except Exception:
                 self._queue.put(("log", (traceback.format_exc(), "error")))
             finally:
@@ -3621,7 +3936,7 @@ class SunStudio(ttk.Frame):
         self.log(f"Sending the sun to Unreal: azimuth {azimuth:.1f}, elevation "
                  f"{elevation:.1f} deg, {intensity:.0f} lux.")
         self._start_unreal_job(
-            "Setting the sun in Unreal...",
+            "Setting the sun in Unreal...", key="sun_send", job=
             lambda log: sun_to_unreal.send_sun_to_unreal(
                 azimuth, elevation, intensity_lux=intensity, source_angle_deg=disc,
                 save_level=save_level, log=log))
@@ -3635,7 +3950,8 @@ class SunStudio(ttk.Frame):
             found = sun_to_unreal.read_sun_from_unreal(log=log)
             if found:
                 self._queue.put(("unreal_sun", found))
-        self._start_unreal_job("Reading the sun from Unreal...", job)
+            return bool(found)
+        self._start_unreal_job("Reading the sun from Unreal...", job, "sun_read")
 
     # ---------------------------------------------------------- main pump
     def _drain_queue(self):
@@ -3644,6 +3960,7 @@ class SunStudio(ttk.Frame):
                 kind, payload = self._queue.get_nowait()
                 if kind == "dem":
                     self.dem = payload
+                    self.progress.finish()
                     self.log(f"Loaded DEM {payload.shape[1]} x {payload.shape[0]} px.",
                              level="ok")
                     self._rebuild_view()
@@ -3665,14 +3982,17 @@ class SunStudio(ttk.Frame):
                 elif kind == "log":
                     text, level = payload
                     self.log(text, level=level)
+                elif kind == "job_failed":
+                    self.progress.finish("failed")
                 elif kind == "error":
                     self.log(payload, level="error")
+                    self.progress.finish("failed")
                     self._show_message("Could not light the map.\nSee the activity log.")
                 elif kind == "unreal_done":
                     if LOADER_AVAILABLE:
                         self.send_button.state(["!disabled"])
                         self.read_button.state(["!disabled"])
-                    self.status_var.set("Idle")
+                    self.progress.finish()
         except queue.Empty:
             pass
         self.after(80, self._drain_queue)
@@ -3816,13 +4136,8 @@ class UnrealDispatchWindow(ttk.Frame):
         self.open_folder_button.pack(anchor="w", pady=(4, 0))
 
         # --- progress ---
-        progress_frame = ttk.Frame(outer)
-        progress_frame.pack(fill="x", pady=(10, 0))
-        self.status_var = tk.StringVar(value="Idle")
-        ttk.Label(progress_frame, textvariable=self.status_var,
-                  style="Readout.TLabel").pack(anchor="w")
-        self.progress = ttk.Progressbar(progress_frame, mode="determinate", maximum=1.0)
-        self.progress.pack(fill="x", pady=(4, 0))
+        self.progress = ProgressPanel(outer)
+        self.progress.pack(fill="x", pady=(10, 0))
 
         # --- actions ---
         actions = ttk.Frame(outer)
@@ -3941,7 +4256,7 @@ class UnrealDispatchWindow(ttk.Frame):
 
         self.log(f"Sending to Unreal: {os.path.basename(source_path)}")
         self._cancel_event.clear()
-        self.status_var.set("Sending to Unreal...")
+        self.progress.start("Sending to Unreal...", "dispatch", max(os.path.getsize(source_path) / 1e6, 0.01) if os.path.exists(source_path) else 1.0)
         self.send_button.state(["disabled"])
         self.stop_button.state(["!disabled"])
 
@@ -3957,6 +4272,8 @@ class UnrealDispatchWindow(ttk.Frame):
                     cancelled=self._cancel_event.is_set, save_level=save_level)
             except terrain_core.TerrainCancelled:
                 self._post("cancelled", None)
+            except UnrealUnavailable as exc:
+                self._post("failed", str(exc))
             except Exception:
                 self._post("error", traceback.format_exc())
             finally:
@@ -3970,7 +4287,7 @@ class UnrealDispatchWindow(ttk.Frame):
             return
         self._cancel_event.set()
         self.stop_button.state(["disabled"])
-        self.status_var.set("Cancelling...")
+        self.progress.note("Cancelling...")
         self.log("Cancellation requested; stopping at the next checkpoint...",
                  level="warn")
 
@@ -3990,24 +4307,20 @@ class UnrealDispatchWindow(ttk.Frame):
                     text, level = payload
                     self.log(text, level=level)
                 elif kind == "progress":
-                    message, fraction = payload
-                    self.status_var.set(message)
-                    self.progress.configure(value=fraction)
+                    self.progress.update(*payload)
                 elif kind == "dialog":
                     title, message = payload
                     show_message(self, title, message)
                 elif kind == "cancelled":
                     self.log("Conversion cancelled.", level="warn")
-                    self.status_var.set("Cancelled")
-                elif kind == "error":
-                    self.log(payload, level="error")
-                    self.status_var.set("Failed")
+                    self.progress.finish("cancelled")
+                elif kind in ("error", "failed"):
+                    self.log(payload, level="error" if kind == "error" else "warn")
+                    self.progress.finish("failed")
                 elif kind == "done":
                     self.send_button.state(["!disabled"])
                     self.stop_button.state(["disabled"])
-                    if self.status_var.get() not in ("Failed", "Cancelled"):
-                        self.status_var.set("Idle")
-                    self.progress.configure(value=0)
+                    self.progress.finish()
         except queue.Empty:
             pass
         if self.winfo_exists():
@@ -4068,8 +4381,8 @@ class TerrainStudio(tk.Tk):
         self.map_browser = None         # Reused MapBrowser window
         self.rock_planner = None         # Reused RockPlannerStudio window
         self.sun_studio = None           # Reused SunStudio window
-        self.ground_truth = None         # Reused GroundTruthStudio window
-        self.mask_ids = dict(DEFAULT_MASK_IDS)   # Object-mask ids, shared by stages 2 and 5
+        self.crater_masks = None         # Reused CraterMaskStudio window
+        self.mask_ids = dict(DEFAULT_MASK_IDS)   # Object-mask ids, shared by steps 2 and 3
         self.stale_axes = {'relief': True, 'surface': True, 'slope': True}
         self._surface_artists = None   # (full detail, drag detail) collections
         self._redraw_job = None
@@ -4196,7 +4509,7 @@ class TerrainStudio(tk.Tk):
         self.studio_frame.destroy()
         # Views are rebuilt lazily at the new scale on their next visit.
         for attribute in ("map_browser", "rock_planner", "unreal_window", "sun_studio",
-                          "ground_truth"):
+                          "crater_masks"):
             view = getattr(self, attribute)
             if view is not None and view.winfo_exists():
                 view.destroy()
@@ -4322,21 +4635,18 @@ class TerrainStudio(tk.Tk):
         gap = self.px(14)
 
         stages = [
-            ("01", "Create a Terrain",
-             "Generate a procedural lunar DEM with craters, erosion and surface "
-             "roughness.", self.enter_generate, False),
+            ("01", "Create & Send Terrain",
+             "Generate a procedural lunar DEM, then turn it into a heightmap and "
+             "spawn the Landscape in Unreal.", self.enter_generate, False),
             ("02", "Rocks & Rover Paths",
-             "Scatter rocks over the drivable ground, keeping a connected network "
-             "of rover corridors.", self.enter_rock_planner, True),
-            ("03", "Send to Unreal",
-             "Convert a map to a 16-bit heightmap and spawn the Landscape in the "
-             "running editor.", self.enter_send_to_unreal, False),
+             "Scatter rocks around drivable rover corridors and place them in Unreal, "
+             "tagged for the object mask.", self.enter_rock_planner, True),
+            ("03", "Crater Masks",
+             "Map the craters and show them in the rover's object-mask camera.",
+             self.enter_crater_masks, True),
             ("04", "Sun & Shadows",
              "Draw the shadow you want and set a lunar sun in Unreal to cast it.",
              self.enter_sun_studio, True),
-            ("05", "Ground Truth Masks",
-             "Label rocks and craters for the rover's object mask and send them "
-             "to Unreal.", self.enter_ground_truth, True),
         ]
         self._home_caption(grid, "WORKFLOW", row=0, span=len(stages))
         for column, (number, title, blurb, command, optional) in enumerate(stages):
@@ -4347,13 +4657,17 @@ class TerrainStudio(tk.Tk):
         self._home_caption(grid, "LIBRARY", row=2, top=self.px(26), span=len(stages))
         self._home_card(grid, None, "Browse Maps",
                         "Preview every map in the project. The one you select becomes "
-                        "the current map for the other stages.", self.browse_maps).grid(
+                        "the current map for the other steps.", self.browse_maps).grid(
             row=3, column=0, sticky="nsew")
+        self._home_card(grid, None, "Send an Existing Map",
+                        "Turn any elevation map into a heightmap and spawn its Landscape "
+                        "in Unreal.", self.enter_send_to_unreal).grid(
+            row=3, column=1, sticky="nsew", padx=(gap, 0))
 
         # Maps on disk and the current map; refreshed by show_home.
         status = tk.Frame(grid, background=colours["card"], highlightthickness=1,
                           highlightbackground=colours["border"])
-        status.grid(row=3, column=1, columnspan=len(stages) - 1, sticky="nsew", padx=(gap, 0))
+        status.grid(row=3, column=2, columnspan=len(stages) - 2, sticky="nsew", padx=(gap, 0))
         tk.Label(status, text="PROJECT", font=("Segoe UI Semibold", 8),
                  foreground=colours["muted"], background=colours["card"]).pack(
             anchor="w", padx=self.px(18), pady=(self.px(16), self.px(4)))
@@ -4493,7 +4807,7 @@ class TerrainStudio(tk.Tk):
     def _all_views(self):
         """Every frame that can occupy the window, home and studio included."""
         return [self.home_frame, self.studio_frame, self.map_browser,
-                self.rock_planner, self.unreal_window, self.sun_studio, self.ground_truth]
+                self.rock_planner, self.unreal_window, self.sun_studio, self.crater_masks]
 
     def show_view(self, view, title=None):
         """
@@ -4616,16 +4930,18 @@ class TerrainStudio(tk.Tk):
         self.rock_planner.refresh_mask_ids()
         self.show_view(self.rock_planner, "Rock Field & Rover Paths")
 
-    def enter_ground_truth(self):
-        """Opens the object-mask labels view, seeded with the last generated / chosen DEM."""
+    def enter_crater_masks(self):
+        """Opens the crater-mask view, seeded with the last generated / chosen DEM."""
         source = self.exported_paths.get('elevation_npy') or self.unreal_source_path
-        if self.ground_truth is None or not self.ground_truth.winfo_exists():
-            self.ground_truth = GroundTruthStudio(
+        if self.crater_masks is None or not self.crater_masks.winfo_exists():
+            self.crater_masks = CraterMaskStudio(
                 self, figure_dpi=self.figure_dpi, source_path=source,
                 resolution=self.params.get('RESOLUTION_M_PER_PX', 1.0))
-        elif source and source != self.ground_truth.dem_path:
-            self.ground_truth.load_dem(source)
-        self.show_view(self.ground_truth, "Ground Truth Masks")
+        else:
+            self.crater_masks.refresh_ids()
+            if source and source != self.crater_masks.dem_path:
+                self.crater_masks.load_dem(source)
+        self.show_view(self.crater_masks, "Crater Masks")
 
     def enter_sun_studio(self):
         """Opens the sun & shadows view, seeded with the last generated / chosen DEM."""
@@ -5024,11 +5340,7 @@ class TerrainStudio(tk.Tk):
 
         ttk.Label(status_row, text="Activity log", style="Header.TLabel").pack(side="left")
 
-        self.status_var = tk.StringVar(value="Idle")
-        ttk.Label(status_row, textvariable=self.status_var,
-                  font=("Segoe UI", 8)).pack(side="right")
-
-        self.progress = ttk.Progressbar(footer, mode="determinate", maximum=1.0)
+        self.progress = ProgressPanel(footer)
         self.progress.pack(fill="x", pady=(6, 4))
 
         self.log_text = tk.Text(footer, height=8, font=("Consolas", 8), wrap="word",
@@ -5242,11 +5554,11 @@ class TerrainStudio(tk.Tk):
     def _busy(self):
         return self.worker is not None and self.worker.is_alive()
 
-    def _start_worker(self, target, label, cancellable=False):
+    def _start_worker(self, target, label, cancellable=False, key=None, work=1.0):
         if self._busy():
             self.log("A job is already running; wait for it to finish.", level="warn")
             return False
-        self.status_var.set(label)
+        self.progress.start(label, key, work)
         self._cancel_event.clear()
         for button in (self.preview_button, self.generate_button, self.unreal_button):
             button.state(["disabled"])
@@ -5263,6 +5575,8 @@ class TerrainStudio(tk.Tk):
             target()
         except terrain_core.TerrainCancelled:
             self.message_queue.put(("cancelled", None))
+        except UnrealUnavailable as exc:
+            self.message_queue.put(("failed", str(exc)))
         except Exception:
             self.message_queue.put(("error", traceback.format_exc()))
         finally:
@@ -5274,7 +5588,7 @@ class TerrainStudio(tk.Tk):
             return
         self._cancel_event.set()
         self.stop_button.state(["disabled"])
-        self.status_var.set("Cancelling...")
+        self.progress.note("Cancelling...")
         self.log("Cancellation requested; stopping at the next checkpoint...",
                  level="warn")
 
@@ -5294,9 +5608,7 @@ class TerrainStudio(tk.Tk):
                     text, level = payload
                     self.log(text, level=level)
                 elif kind == "progress":
-                    message, fraction = payload
-                    self.status_var.set(message)
-                    self.progress.configure(value=fraction)
+                    self.progress.update(*payload)
                 elif kind == "preview":
                     self.preview_result = payload
                     self.displayed = payload
@@ -5312,24 +5624,22 @@ class TerrainStudio(tk.Tk):
                     # Newly generated map becomes the default Unreal source.
                     if 'elevation_npy' in self.exported_paths:
                         self._set_unreal_source(self.exported_paths['elevation_npy'])
-                elif kind == "error":
-                    self.log(payload, level="error")
-                    self.status_var.set("Failed")
+                elif kind in ("error", "failed"):
+                    self.log(payload, level="error" if kind == "error" else "warn")
+                    self.progress.finish("failed")
                 elif kind == "dialog":
                     title, message = payload
                     show_message(self, title, message)
                 elif kind == "cancelled":
                     self.log("Job cancelled.", level="warn")
-                    self.status_var.set("Cancelled")
+                    self.progress.finish("cancelled")
                 elif kind == "done":
                     for button in (self.preview_button, self.generate_button):
                         button.state(["!disabled"])
                     if LOADER_AVAILABLE:
                         self.unreal_button.state(["!disabled"])
                     self.stop_button.state(["disabled"])
-                    if self.status_var.get() not in ("Failed", "Cancelled"):
-                        self.status_var.set("Idle")
-                    self.progress.configure(value=0)
+                    self.progress.finish()
         except queue.Empty:
             pass
         # Keep the id so _cancel_drain can stop the pending timer on destroy;
@@ -5401,7 +5711,7 @@ class TerrainStudio(tk.Tk):
                 f"Preview rendered at {preview_cols}x{preview_rows} "
                 f"({result['crater_count']} craters, seed {seed}).")
 
-        self._start_worker(job, "Rendering preview...")
+        self._start_worker(job, "Rendering preview...", key="preview")
 
     def run_full_generation(self):
         self._collect_params()
@@ -5452,7 +5762,8 @@ class TerrainStudio(tk.Tk):
             for label, path in written.items():
                 self._log_from_worker(f"  wrote {label}: {path}")
 
-        self._start_worker(job, "Generating full resolution...", cancellable=True)
+        self._start_worker(job, "Generating full resolution...", cancellable=True,
+                           key="generate", work=pixels / 1e6)
 
     def _set_unreal_source(self, path):
         """Sets the DEM that 'Send to Unreal' will convert, and updates the field."""
@@ -5512,7 +5823,8 @@ class TerrainStudio(tk.Tk):
                 dialog=self._dialog_from_worker,
                 cancelled=self._cancel_event.is_set, save_level=save_level)
 
-        self._start_worker(job, "Sending to Unreal...", cancellable=True)
+        self._start_worker(job, "Sending to Unreal...", cancellable=True, key="dispatch",
+                           work=max(os.path.getsize(source_path) / 1e6, 0.01) if os.path.exists(source_path) else 1.0)
 
     def open_output_folder(self):
         base_name = self.export_name_var.get().strip() or "procedural_lunar_terrain"

@@ -15,9 +15,13 @@ frame as the rock placer (columns run towards -X); it may hold several cells
 per DEM cell (CraterSupersample).
 """
 
+import json
+
 import unreal
 
 from unreal_rock_placer import find_landscape, landscape_frame
+
+CAMERAS_JSON_PREFIX = "CAMERAS_JSON "
 
 MASK_MATERIAL = "/Game/Blueprints/PPM_ObjectMask"
 BACKUP_MATERIAL = "/Game/Blueprints/PPM_ObjectMask_Original"
@@ -139,11 +143,98 @@ def _build_mask_graph(material, texture, values):
     unreal.EditorAssetLibrary.save_loaded_asset(material)
 
 
-def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="",
-                      landscape_width=0, landscape_stencil=LANDSCAPE_STENCIL, supersample=1):
+def _in_pie():
+    return unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).is_in_play_in_editor()
+
+
+def _actors():
+    """Actors of the open level, or of the running game during Play In Editor."""
+    editor = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
+    world = editor.get_game_world() if _in_pie() else editor.get_editor_world()
+    return list(unreal.GameplayStatics.get_all_actors_of_class(world, unreal.Actor)) if world else []
+
+
+def _streamer(actor):
+    for component in actor.get_components_by_class(unreal.ActorComponent):
+        if component.get_class().get_name() == "StereoCamStreamer":
+            return component
+    return None
+
+
+def _has_mask_material(capture):
+    settings = capture.get_editor_property("post_process_settings")
+    blends = settings.get_editor_property("weighted_blendables").get_editor_property("array")
+    return any(b.get_editor_property("object") is not None
+               and b.get_editor_property("object").get_path_name().startswith(MASK_MATERIAL)
+               for b in blends)
+
+
+def list_mask_cameras():
     """
-    Imports the crater map and makes the object mask show it on the Landscape.
-    Returns a summary line.
+    CAMERAS_JSON_PREFIX + JSON: every actor with scene captures, as
+    {"actor", "captures", "with_mask", "streamer_mask"} (the capture its
+    StereoCamStreamer streams as the object mask, or null).
+    """
+    found = []
+    for actor in _actors():
+        captures = actor.get_components_by_class(unreal.SceneCaptureComponent2D)
+        if not captures:
+            continue
+        streamer = _streamer(actor)
+        found.append({
+            "actor": actor.get_actor_label(),
+            "captures": [c.get_name() for c in captures],
+            "with_mask": [c.get_name() for c in captures if _has_mask_material(c)],
+            "streamer_mask": str(streamer.get_editor_property("mask_capture_name")) if streamer else None})
+    return CAMERAS_JSON_PREFIX + json.dumps({"pie": _in_pie(), "actors": found})
+
+
+def assign_mask_camera(actor_label, capture_name):
+    """
+    Makes `capture_name` on `actor_label` the object-mask camera: adds
+    PPM_ObjectMask to its post-process materials and, when the actor has a
+    StereoCamStreamer, streams it as the mask. Returns a summary line.
+    """
+    actor = next((a for a in _actors() if a.get_actor_label() == actor_label), None)
+    if actor is None:
+        return f"[-] No actor '{actor_label}' in the level."
+    capture = next((c for c in actor.get_components_by_class(unreal.SceneCaptureComponent2D)
+                    if c.get_name() == capture_name), None)
+    if capture is None:
+        return f"[-] '{actor_label}' has no scene capture '{capture_name}'."
+
+    notes = []
+    if not _has_mask_material(capture):
+        settings = capture.get_editor_property("post_process_settings")
+        blendables = settings.get_editor_property("weighted_blendables")
+        entries = list(blendables.get_editor_property("array"))
+        entry = unreal.WeightedBlendable()
+        entry.set_editor_property("weight", 1.0)
+        entry.set_editor_property("object", unreal.load_asset(MASK_MATERIAL))
+        entries.append(entry)
+        blendables.set_editor_property("array", entries)
+        settings.set_editor_property("weighted_blendables", blendables)
+        capture.set_editor_property("post_process_settings", settings)
+        notes.append("added PPM_ObjectMask")
+    streamer = _streamer(actor)
+    if streamer is not None and str(streamer.get_editor_property("mask_capture_name")) != capture_name:
+        streamer.set_editor_property("mask_capture_name", capture_name)
+        notes.append(f"streamer now streams it as mask camera {streamer.get_editor_property('mask_cam_id')}")
+    elif streamer is None:
+        notes.append("no StereoCamStreamer on this actor, so it is not streamed")
+    if _in_pie():
+        notes.append("Play In Editor is running: camera changes last until it stops")
+    detail = "; ".join(notes) if notes else "already set up"
+    return f"Mask camera: {actor_label} / {capture_name} ({detail})."
+
+
+def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="",
+                      landscape_width=0, landscape_stencil=LANDSCAPE_STENCIL, supersample=1,
+                      camera_actor="", camera_capture="", save_level=False):
+    """
+    Imports the crater map, makes the object mask show it on the Landscape and,
+    when given, sets up `camera_capture` on `camera_actor` as the mask camera.
+    Returns a summary.
     """
     landscape = find_landscape(landscape_label) or _game_landscape(landscape_label)
     if landscape is None:
@@ -160,9 +251,15 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
         "LandscapeStencil": landscape_stencil, "CraterOriginX": x0, "CraterOriginY": y0,
         "CraterStepX": step_x, "CraterStepY": step_y,
         "CraterWidth": width, "CraterHeight": height, "CraterSupersample": supersample})
-    return (f"Crater ground truth on '{landscape.get_actor_label()}': {texture.get_path_name()} "
-            f"({width} x {height}, {supersample} per DEM cell) in {MASK_MATERIAL}. "
-            f"Backup: {BACKUP_MATERIAL}.")
+    summary = (f"Crater ground truth on '{landscape.get_actor_label()}': {texture.get_path_name()} "
+               f"({width} x {height}, {supersample} per DEM cell) in {MASK_MATERIAL}. "
+               f"Backup: {BACKUP_MATERIAL}.")
+    if camera_actor and camera_capture:
+        summary += "\n" + assign_mask_camera(camera_actor, camera_capture)
+    if save_level and not _in_pie():
+        import unreal_level_saver
+        summary += "\n" + unreal_level_saver.save_current_level()
+    return summary
 
 
 def remove_crater_mask():

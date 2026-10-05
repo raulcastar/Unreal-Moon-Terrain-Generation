@@ -79,11 +79,16 @@ def _rim_circle(dem, centre, radius):
     return found
 
 
-def _seeds(dem, resolution, min_depth_m):
-    """(seed mask, depression) from the DEM, then from its local relief."""
-    yield detect_craters(dem, min_depth_m)
+def _seeds(dem, resolution, min_depth_m, report):
+    """
+    (seed mask, depression) from the DEM, then from its local relief. Flood
+    filling takes ~90% of each pass, so it spans 0-45% and 50-95% of the progress.
+    """
+    yield detect_craters(dem, min_depth_m, lambda f: report(
+        "Finding depressions (pass 1 of 2)", 0.45 * f))
     local = dem - ndimage.gaussian_filter(dem, REGIONAL_SIGMA_M / resolution)
-    yield detect_craters(local, min_depth_m)
+    yield detect_craters(local, min_depth_m, lambda f: report(
+        "Finding depressions (pass 2 of 2)", 0.5 + 0.45 * f))
 
 
 def supersample_for(shape):
@@ -91,20 +96,29 @@ def supersample_for(shape):
     return max(1, min(SUPERSAMPLE, MAX_MAP_SIDE // max(shape)))
 
 
-def find_craters(dem, resolution, min_depth_m):
+def find_craters(dem, resolution, min_depth_m, progress=None):
     """
     Craters as [(row, col, radius)] in DEM cells: the circle through each rim
-    crest, or the seed itself where no clear crest is found.
+    crest, or the seed itself where no clear crest is found. `progress(message,
+    fraction)` is called as the two passes advance.
     """
+    def report(message, fraction):
+        if progress:
+            progress(message, fraction)
+
     dem = np.asarray(dem, dtype=float)
     finite = np.isfinite(dem)
     dem = np.where(finite, dem, np.nanmin(dem) if finite.any() else 0.0)
 
     covered = np.zeros(dem.shape, dtype=bool)
     craters = []
-    for seeds, depression in _seeds(dem, resolution, min_depth_m):
-        blobs, _count = ndimage.label(seeds, structure=np.ones((3, 3)))
+    for passed, (seeds, depression) in enumerate(_seeds(dem, resolution, min_depth_m, report)):
+        blobs, count = ndimage.label(seeds, structure=np.ones((3, 3)))
+        base = 0.5 * passed
         for index, window in enumerate(ndimage.find_objects(blobs), start=1):
+            if index % 25 == 0:
+                report(f"Fitting craters (pass {passed + 1} of 2)",
+                       base + 0.45 + 0.05 * index / max(count, 1))
             blob = blobs[window] == index
             r_idx, c_idx = np.nonzero(blob)
             r_idx, c_idx = r_idx + window[0].start, c_idx + window[1].start
@@ -138,6 +152,7 @@ def find_craters(dem, resolution, min_depth_m):
                 continue
             covered[r0:r1, c0:c1] |= disc
             craters.append((float(centre[0]), float(centre[1]), float(radius)))
+    report("Craters found", 1.0)
     return craters
 
 

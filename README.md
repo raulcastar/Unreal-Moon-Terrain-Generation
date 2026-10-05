@@ -16,10 +16,12 @@ python Terrain_Studio/terrain_studio.py  # any platform
 Requires `numpy`, `scipy`, `pandas`, `pyyaml` and `matplotlib`; `tifffile` only for
 GeoTIFF input. Tkinter ships with Python (`sudo apt install python3-tk` on Debian/Ubuntu).
 
-The home screen lays out the five workflow stages in order, plus a map library.
+The home screen lays out the four workflow steps in order: create and send a
+terrain, place rocks, mask craters, position the sun. A library holds the map
+browser and a standalone sender.
 Every view opens in the same window and has a **⌂ Home** button to return.
 
-## 1. Create a terrain
+## 1. Create a terrain and send it to Unreal
 
 ![Creating a terrain](docs/images/create-terrain.gif)
 
@@ -36,7 +38,21 @@ Every view opens in the same window and has a **⌂ Home** button to return.
 
 Column widths are adjustable with the drag handles.
 
-## 2. Add rocks and rover paths (optional)
+**Send to Unreal**, in the same panel, takes the generated map (or any other you
+pick):
+
+Converts an elevation map to Unreal's 16-bit `.r16` heightmap, spawns the
+Landscape actor in a running editor, applies the heightmap to it and saves the
+level. The heightmap is written to `outputs/<name>/`. Untick *Dispatch to
+running Unreal Editor* to only write the files (a dialog then gives the path and
+the manual import steps), or *Save the level afterwards* to leave saving to you.
+
+**Unreal setup:** enable the *Python Editor Script Plugin* and *Remote Execution*
+in Project Settings. Landscapes larger than 4097 × 4097 vertices, or an
+automatic import that fails, fall back to the manual import (Landscape Mode →
+Manage → right-click → Import), with the steps shown in the editor.
+
+## 2. Place rocks and rover paths (optional)
 
 ![Rock field planner](docs/images/rock-planner.png)
 
@@ -61,25 +77,59 @@ DEM names the export after it, so the files land beside that map:
 the DEM). `scale` is the uniform mesh scale, i.e. the radius in metres of a 1 m
 base mesh; `height_m` is `scale × ROCK_HEIGHT_RATIO`.
 
-**Place Rocks in Unreal** tags each rock for the rover's object mask as a boulder
-or a small rock, using the ids set in stage 5.
+**Place Rocks in Unreal** puts the exported rocks on the Landscape and tags each one
+for the rover's object mask (`navcam/central/object_mask`) as a boulder or a small
+rock. The tags are the *Object mask ids*: by default 20 for boulders and 21 for
+small rocks, split at a 0.15 m radius. **Update Mask Ids Only** re-tags rocks
+already placed without moving them.
 
-## 3. Send to Unreal
+## 3. Crater masks (optional)
 
-![Send to Unreal](docs/images/send-to-unreal.png)
+Shows craters in the rover's object mask, alongside the rocks:
 
-Converts an elevation map to Unreal's 16-bit `.r16` heightmap, spawns the
-Landscape actor in a running editor, applies the heightmap to it and saves the
-level. The heightmap is written to `outputs/<name>/`. Untick *Dispatch to
-running Unreal Editor* to only write the files (a dialog then gives the path and
-the manual import steps), or *Save the level afterwards* to leave saving to you.
+1. **Find Craters** maps them on the DEM and shows them on the map preview.
+2. **Mask Camera in Unreal** picks the scene capture that renders the mask. The
+   list is read from the open level, and the default is the rover's
+   `Navcam_Mask`.
+3. **Send Crater Mask to Unreal** does three things:
+   - exports the crater map;
+   - rebuilds `PPM_ObjectMask` so the Landscape shows the craters;
+   - sets up the chosen camera: it gets `PPM_ObjectMask` and, if its actor has a
+     StereoCamStreamer, becomes the streamed mask camera.
 
-**Unreal setup:** enable the *Python Editor Script Plugin* and *Remote Execution*
-in Project Settings. Landscapes larger than 4097 × 4097 vertices, or an
-automatic import that fails, fall back to the manual import (Landscape Mode →
-Manage → right-click → Import), with the steps shown in the editor.
+   **Restore Original Mask Material** undoes the material change.
+4. **GNC Labels** lists the `mask_labels` that
+   `GNC-Moon-Simulator/component_stereo_depth/config/params.yaml` needs, for the
+   rock and crater ids together, ready to copy.
 
-## 4. Set the sun and shadows (optional)
+How craters are found:
+
+- They start from the closed depressions the rock planner treats as impassable.
+- Each crater is the circle fitted through its rim crest, so it covers the whole
+  bowl even on sloping ground.
+- Shallow or elongated basins are rejected.
+
+The crater map is `<name>_craterMask.png` in the map's output folder, with a JSON
+beside it. Its pixel values are mask ids:
+
+| Value | Meaning |
+| --- | --- |
+| `0` | Not a crater |
+| `30` | Crater: ground inside the rim crest |
+| `31` | Crater rim: a ring outside the crest, 0.2 × the radius wide by default |
+
+The map uses 4 cells per DEM cell (25 cm on a 1 m map), capped at 8192 px.
+
+How the mask is drawn: the mask camera's material looks at each Landscape pixel
+(stencil 10), takes the world point it shows, and reads the crater map there. So:
+
+- rocks and the rover keep their own ids;
+- craters hidden behind terrain stay hidden;
+- the original material is kept as `PPM_ObjectMask_Original`;
+- it also works during Play In Editor, although camera changes made then last
+  only until it stops.
+
+## 4. Position the sun (optional)
 
 Places the sun so shadows fall where you want them and sets the matching light in
 Unreal. The sun is set in one of three ways:
@@ -113,55 +163,19 @@ During Play In Editor, only the running game changes; send the sun again after
 stopping it to keep it in the level. **Read Sun from Unreal** loads the level's
 current sun into the sliders.
 
-## 5. Ground truth masks (optional)
-
-Labels for the rover's object mask (`navcam/central/object_mask`), in one place:
-
-- **Rocks:** the boulder and small-rock ids, and the radius that separates them.
-  Stage 2 tags rocks with these ids when it places them. **Update Rock Ids in
-  Unreal** re-tags rocks already placed, without moving them.
-- **Craters:** **Find Craters** maps them on the DEM and shows them on the map
-  preview. **Send Crater Map to Unreal** exports the crater map and makes the mask
-  show it. **Restore Original Mask Material** undoes that.
-- **GNC labels:** the `mask_labels` lines that
-  `GNC-Moon-Simulator/component_stereo_depth/config/params.yaml` needs for these
-  ids, ready to copy.
-
-How craters are found:
-
-- They start from the closed depressions the rock planner treats as impassable.
-- Each crater is the circle fitted through its rim crest, so it covers the whole
-  bowl even on sloping ground.
-- Shallow or elongated basins are rejected.
-
-The crater map is `<name>_craterMask.png` in the map's output folder, with a JSON
-beside it. Its pixel values are mask ids:
-
-| Value | Meaning |
-| --- | --- |
-| `0` | Not a crater |
-| `30` | Crater: ground inside the rim crest |
-| `31` | Crater rim: a ring outside the crest, 0.2 × the radius wide by default |
-
-The map uses 4 cells per DEM cell (25 cm on a 1 m map), capped at 8192 px.
-
-In Unreal, the map is imported into `/Game/GroundTruth/` and `PPM_ObjectMask`, the
-material on the rover's `Navcam_Mask` camera, is rebuilt:
-
-- Landscape pixels (stencil 10) take the crater map's id at the world point they
-  show.
-- Rocks and the rover keep their own ids, and hidden craters stay hidden.
-- The original material is kept as `PPM_ObjectMask_Original`.
-- It also works during Play In Editor.
-
-## Browse maps
+## Library: browse maps
 
 ![Browsing maps](docs/images/browse-maps.gif)
 
 Lists every map in `input_maps/` and `outputs/`; selecting one renders it as a
 shaded relief or, in the second tab, a rotatable 3D surface. The selected map
-becomes the current map for stages 2 and 3. Class, soil and rock rasters are
+becomes the current map for the other steps. Class, soil and rock rasters are
 hidden by default, since they share extensions but are not heights.
+
+## Library: send an existing map
+
+A standalone version of step 1's **Send to Unreal**, for any elevation map
+already on disk.
 
 ## Folders
 

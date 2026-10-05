@@ -113,12 +113,13 @@ def _plan_grid(elevation, resolution, cap):
     return plan, res_row, res_col, rows / plan_rows, cols / plan_cols
 
 
-def _fill_depressions(elevation):
+def _fill_depressions(elevation, progress=None):
     """
     Priority-flood sink fill (Barnes 2014): returns a surface equal to `elevation`
     except that every closed basin is raised to the height of its lowest outlet.
     `filled - elevation` is then the depth of standing water each cell would hold,
     which isolates crater bowls from ordinary valleys that drain off the edge.
+    `progress(fraction)` is called as cells are filled.
     """
     rows, cols = elevation.shape
     filled = np.empty_like(elevation, dtype=float)
@@ -139,8 +140,12 @@ def _fill_depressions(elevation):
     heapq.heapify(heap)
 
     neighbours = ((-1, 0), (1, 0), (0, -1), (0, 1))
+    total, popped = rows * cols, 0
     while heap:
         level, r, c = heapq.heappop(heap)
+        popped += 1
+        if progress and popped % 100000 == 0:
+            progress(popped / total)
         for dr, dc in neighbours:
             nr, nc = r + dr, c + dc
             if 0 <= nr < rows and 0 <= nc < cols and not closed[nr, nc]:
@@ -152,7 +157,7 @@ def _fill_depressions(elevation):
     return filled
 
 
-def detect_craters(elevation, min_depth):
+def detect_craters(elevation, min_depth, progress=None):
     """
     Returns (crater_mask, depression) where crater_mask marks closed depressions
     at least `min_depth` metres deep. Single-pixel speckle (from micro-roughness)
@@ -166,7 +171,7 @@ def detect_craters(elevation, min_depth):
     rows, cols = elevation.shape
     margin = max(16, int(round(0.1 * max(rows, cols))))
     padded = np.pad(elevation, margin, mode='reflect')
-    depression = (_fill_depressions(padded) - padded)[
+    depression = (_fill_depressions(padded, progress) - padded)[
         margin:margin + rows, margin:margin + cols]
     mask = depression >= max(float(min_depth), 1e-6)
     mask = ndimage.binary_opening(mask, structure=np.ones((3, 3)))
