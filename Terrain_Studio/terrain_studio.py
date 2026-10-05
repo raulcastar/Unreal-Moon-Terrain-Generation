@@ -65,6 +65,13 @@ OUTPUT_ROOT = os.path.join(PROJECT_ROOT, "outputs")
 GENERATOR_OUTPUT_DIR = OUTPUT_ROOT
 INPUT_MAPS_DIR = os.path.join(PROJECT_ROOT, "input_maps")
 
+# Home screen: banner rendered in the Moon Simulator, and its dark palette.
+HOME_BANNER = os.path.join(STUDIO_DIR, "assets", "home_banner.jpg")
+HOME_COLOURS = {
+    "bg": "#2e3540", "card": "#3a4250", "hover": "#465063", "border": "#525d6e",
+    "accent": "#f5c060", "text": "#f2f5f9", "muted": "#b7c0cd",
+}
+
 
 def map_browse_dir():
     """Where a DEM picker opens: generated maps first, then the raw input maps."""
@@ -3765,15 +3772,7 @@ class TerrainStudio(tk.Tk):
         style.configure("Group.TLabelframe.Label", font=("Segoe UI Semibold", 9))
         style.configure("Readout.TLabel", font=("Consolas", 8))
         style.configure("Accent.TButton", font=("Segoe UI Semibold", 9))
-        style.configure("Home.TButton", font=("Segoe UI Semibold", 12))
-        style.configure("HomeTitle.TLabel", font=("Segoe UI Semibold", 22))
-        style.configure("HomeSub.TLabel", font=("Segoe UI", 10), foreground="#666666")
         style.configure("HomeHint.TLabel", font=("Segoe UI", 8), foreground="#777777")
-        # Section captions and the step numbers on the landing screen.
-        style.configure("HomeSection.TLabel", font=("Segoe UI Semibold", 8),
-                        foreground="#8a8a8a")
-        style.configure("HomeStep.TLabel", font=("Segoe UI Semibold", 15),
-                        foreground="#b0b0b0")
 
     def _build_layout(self):
         # Two top-level views swapped by show_home / show_studio.
@@ -3813,78 +3812,176 @@ class TerrainStudio(tk.Tk):
     # ---------------------------------------------------------------- home
     def _build_home(self):
         """
-        Landing screen: numbered workflow stages, the map library, and a
-        status line reporting the maps on disk and the current map.
+        Landing screen: a banner rendered in the simulator, the workflow stages
+        as cards, and the map library with the maps on disk and the current map.
         """
-        self.home_frame = ttk.Frame(self)
+        colours = HOME_COLOURS
+        self.home_frame = tk.Frame(self, background=colours["bg"])
 
-        center = ttk.Frame(self.home_frame)
-        center.place(relx=0.5, rely=0.5, anchor="center")
+        # The banner is decorative: without Pillow or the file, only the title shows.
+        try:
+            from PIL import Image
+            self._banner_source = Image.open(HOME_BANNER).convert("RGB")
+        except Exception:
+            self._banner_source = None
+        self._banner_image = None
+        self._banner_size = None
+        self._banner_job = None
+        self.banner = tk.Canvas(self.home_frame, background=colours["bg"],
+                                highlightthickness=0, height=self.px(320))
+        self.banner.pack(fill="x")
+        self.banner.bind("<Configure>", self._schedule_banner)
+        self.home_frame.bind("<Configure>", self._fit_banner_height)
 
-        ttk.Label(center, text="Lunar Terrain Studio",
-                  style="HomeTitle.TLabel").pack(anchor="w")
-        ttk.Label(center, text="From a lunar elevation map to an Unreal Landscape",
-                  style="HomeSub.TLabel").pack(anchor="w", pady=(2, 22))
+        body = tk.Frame(self.home_frame, background=colours["bg"])
+        body.pack(fill="both", expand=True, padx=self.px(40), pady=(0, self.px(28)))
+        self._home_body = body
+        grid = tk.Frame(body, background=colours["bg"])
+        grid.pack(fill="x")
+        gap = self.px(14)
 
         stages = [
-            ("1", "Create a Terrain",
-             "Generate a procedural lunar DEM: craters, erosion, roughness. "
-             "Writes the elevation map that the next stages read.",
-             self.enter_generate, False),
-            ("2", "Add Rocks & Rover Paths",
-             "Scatter rocks across the drivable ground while keeping a connected "
-             "corridor network. Writes an instance list, not a new DEM.",
-             self.enter_rock_planner, True),
-            ("3", "Send to Unreal",
-             "Convert an elevation map to a 16-bit .r16 heightmap and spawn the "
-             "Landscape actor in a running editor.",
-             self.enter_send_to_unreal, False),
-            ("4", "Set the Sun & Shadows",
-             "Place the sun by drawing the shadow you want, see the cast shadows "
-             "over the map, and set a lunar Directional Light in Unreal.",
+            ("01", "Create a Terrain",
+             "Generate a procedural lunar DEM with craters, erosion and surface "
+             "roughness.", self.enter_generate, False),
+            ("02", "Rocks & Rover Paths",
+             "Scatter rocks over the drivable ground, keeping a connected network "
+             "of rover corridors.", self.enter_rock_planner, True),
+            ("03", "Send to Unreal",
+             "Convert a map to a 16-bit heightmap and spawn the Landscape in the "
+             "running editor.", self.enter_send_to_unreal, False),
+            ("04", "Sun & Shadows",
+             "Draw the shadow you want and set a lunar sun in Unreal to cast it.",
              self.enter_sun_studio, True),
         ]
+        self._home_caption(grid, "WORKFLOW", row=0)
+        for column, (number, title, blurb, command, optional) in enumerate(stages):
+            grid.columnconfigure(column, weight=1, uniform="card")
+            self._home_card(grid, number, title, blurb, command, optional).grid(
+                row=1, column=column, sticky="nsew", padx=(0 if column == 0 else gap, 0))
 
-        ttk.Label(center, text="WORKFLOW", style="HomeSection.TLabel").pack(
-            anchor="w", pady=(0, 6))
-        self._build_home_rows(center, stages)
-
-        ttk.Separator(center, orient="horizontal").pack(fill="x", pady=(18, 14))
-
-        ttk.Label(center, text="LIBRARY", style="HomeSection.TLabel").pack(
-            anchor="w", pady=(0, 6))
-        self._build_home_rows(center, [
-            ("", "Browse Maps",
-             "Look through every map in the project and see each one as you "
-             "select it. Whatever you leave selected becomes the current map "
-             "for stages 2 and 3.",
-             self.browse_maps, False),
-        ])
+        self._home_caption(grid, "LIBRARY", row=2, top=self.px(26))
+        self._home_card(grid, None, "Browse Maps",
+                        "Preview every map in the project. The one you select becomes "
+                        "the current map for the other stages.", self.browse_maps).grid(
+            row=3, column=0, sticky="nsew")
 
         # Maps on disk and the current map; refreshed by show_home.
+        status = tk.Frame(grid, background=colours["card"], highlightthickness=1,
+                          highlightbackground=colours["border"])
+        status.grid(row=3, column=1, columnspan=3, sticky="nsew", padx=(gap, 0))
+        tk.Label(status, text="PROJECT", font=("Segoe UI Semibold", 8),
+                 foreground=colours["muted"], background=colours["card"]).pack(
+            anchor="w", padx=self.px(18), pady=(self.px(16), self.px(4)))
         self.home_status_var = tk.StringVar()
-        ttk.Label(center, textvariable=self.home_status_var,
-                  style="HomeHint.TLabel", justify="left").pack(
-            anchor="w", pady=(20, 0))
+        tk.Label(status, textvariable=self.home_status_var, font=("Segoe UI", 10),
+                 foreground=colours["text"], background=colours["card"],
+                 justify="left").pack(anchor="w", padx=self.px(18))
 
-    def _build_home_rows(self, parent, rows):
-        """Renders one block of home-screen entries: step number, button, blurb."""
-        block = ttk.Frame(parent)
-        block.pack(fill="x")
-        block.columnconfigure(2, weight=1)
+    def _home_caption(self, parent, text, row, top=0):
+        tk.Label(parent, text=text, font=("Segoe UI Semibold", 8),
+                 foreground=HOME_COLOURS["muted"], background=HOME_COLOURS["bg"]).grid(
+            row=row, column=0, columnspan=4, sticky="w", pady=(top, self.px(8)))
 
-        for index, (number, label, blurb, command, optional) in enumerate(rows):
-            ttk.Label(block, text=number, style="HomeStep.TLabel",
-                      width=2, anchor="e").grid(row=index, column=0, sticky="n",
-                                                padx=(0, 10), pady=(0, 12))
-            button = ttk.Button(block, text=label, style="Home.TButton", width=26,
-                                command=command)
-            button.grid(row=index, column=1, sticky="w", pady=(0, 12), ipady=6)
+    def _home_card(self, parent, number, title, blurb, command, optional=False):
+        """A clickable home-screen card; highlights on hover and keyboard focus."""
+        colours = HOME_COLOURS
+        pad = self.px(18)
+        card = tk.Frame(parent, background=colours["card"], highlightthickness=1,
+                        highlightbackground=colours["border"], highlightcolor=colours["accent"],
+                        takefocus=1, cursor="hand2")
+        head = tk.Frame(card, background=colours["card"])
+        head.pack(fill="x", padx=pad, pady=(pad, 0))
+        if number:
+            tk.Label(head, text=number, font=("Segoe UI Semibold", 18),
+                     foreground=colours["accent"], background=colours["card"]).pack(side="left")
+        if optional:
+            tk.Label(head, text="OPTIONAL", font=("Segoe UI Semibold", 7),
+                     foreground=colours["muted"], background=colours["card"]).pack(
+                side="right", anchor="n")
+        tk.Label(card, text=title, font=("Segoe UI Semibold", 13), anchor="w",
+                 foreground=colours["text"], background=colours["card"]).pack(
+            fill="x", padx=pad, pady=(self.px(4), 0))
+        text = tk.Label(card, text=blurb, font=("Segoe UI", 9), anchor="nw", justify="left",
+                        foreground=colours["muted"], background=colours["card"])
+        text.pack(fill="both", expand=True, padx=pad, pady=(self.px(4), 0))
+        tk.Label(card, text="Open  \u2192", font=("Segoe UI Semibold", 9), anchor="w",
+                 foreground=colours["accent"], background=colours["card"]).pack(
+            fill="x", padx=pad, pady=(self.px(12), pad))
 
-            text = blurb + ("  (optional)" if optional else "")
-            ttk.Label(block, text=text, style="HomeHint.TLabel", justify="left",
-                      wraplength=self.px(430)).grid(
-                row=index, column=2, sticky="w", padx=(14, 0), pady=(0, 12))
+        widgets = [card] + list(card.winfo_children()) + list(head.winfo_children())
+
+        def paint(hover):
+            fill = colours["hover"] if hover else colours["card"]
+            for widget in widgets:
+                widget.configure(background=fill)
+            card.configure(highlightbackground=colours["accent"] if hover else colours["border"])
+
+        def leave(event):
+            # Leaving into one of the card's own widgets keeps the highlight.
+            inside = card.winfo_containing(event.x_root, event.y_root)
+            if inside is None or str(inside).find(str(card)) != 0:
+                paint(False)
+
+        for widget in widgets:
+            widget.bind("<Enter>", lambda e: paint(True))
+            widget.bind("<Leave>", leave)
+            widget.bind("<Button-1>", lambda e: command())
+        card.bind("<Return>", lambda e: command())
+        card.bind("<space>", lambda e: command())
+        card.bind("<Configure>", lambda e: text.configure(wraplength=max(e.width - 2 * pad, 80)))
+        return card
+
+    def _fit_banner_height(self, event):
+        """Gives the banner the height the cards leave free, within sensible limits."""
+        if event.widget is not self.home_frame:
+            return
+        free = event.height - self._home_body.winfo_reqheight() - self.px(64)
+        height = int(min(max(free, self.px(140)), event.height * 0.5, self.px(560)))
+        if int(self.banner.cget("height")) != height:
+            self.banner.configure(height=height)
+
+    def _schedule_banner(self, _event=None):
+        if self._banner_job is not None:
+            self.after_cancel(self._banner_job)
+        self._banner_job = self.after(50, self._draw_banner)
+
+    def _draw_banner(self):
+        """Fills the banner with the photo (cropped to cover it) and the title."""
+        self._banner_job = None
+        width, height = self.banner.winfo_width(), self.banner.winfo_height()
+        if width < 2 or height < 2:
+            return
+        colours = HOME_COLOURS
+        if self._banner_source is not None and self._banner_size != (width, height):
+            from PIL import Image, ImageTk
+            source = self._banner_source
+            scale = max(width / source.width, height / source.height)
+            size = (max(width, round(source.width * scale)), max(height, round(source.height * scale)))
+            image = source.resize(size, Image.LANCZOS)
+            left, top = (size[0] - width) // 2, int((size[1] - height) * 0.45)
+            pixels = np.asarray(image.crop((left, top, left + width, top + height)), dtype=np.float32)
+            # Fade the lower edge into the page background.
+            fade = np.clip((np.arange(height) - 0.7 * height) / (0.3 * height), 0.0, 1.0)
+            page = np.array(matplotlib.colors.to_rgb(colours["bg"])) * 255.0
+            pixels = pixels * (1 - fade[:, None, None]) + page * fade[:, None, None]
+            self._banner_image = ImageTk.PhotoImage(Image.fromarray(pixels.astype(np.uint8)))
+            self._banner_size = (width, height)
+
+        canvas = self.banner
+        canvas.delete("all")
+        if self._banner_image is not None:
+            canvas.create_image(0, 0, image=self._banner_image, anchor="nw")
+        x, y = self.px(40), self.px(36)
+        for dx, fill in ((2, "#000000"), (0, colours["text"])):      # Drop shadow, then text
+            canvas.create_text(x + dx, y + dx, text="Lunar Terrain Studio", anchor="nw",
+                               fill=fill, font=("Segoe UI Semibold", 30))
+        canvas.create_text(x, y + self.px(58), anchor="nw", fill="#c3ccd8",
+                           font=("Segoe UI", 12),
+                           text="From a lunar elevation map to an Unreal Landscape")
+        canvas.create_text(width - self.px(20), self.px(16), anchor="ne", fill="#6f7a8a",
+                           font=("Segoe UI", 8),
+                           text="Rendered in the Moon Simulator, Unreal Engine 5")
 
     def refresh_home_status(self):
         """Summarises what is on disk and which map the stages would act on."""
