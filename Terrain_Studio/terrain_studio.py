@@ -23,6 +23,7 @@ Run with:  python Terrain_Studio/terrain_studio.py
 
 import ctypes
 import io
+import json
 import math
 import os
 import queue
@@ -95,6 +96,7 @@ for path in (GENERATOR_DIR, LOADER_DIR):
 import terrain_core  # noqa: E402  (path setup must precede the import)
 import rock_field     # noqa: E402
 import sun_shadows    # noqa: E402
+import crater_mask    # noqa: E402
 
 # The Unreal loader is optional: the studio still generates and previews terrain
 # on a machine without the loader dependencies available.
@@ -104,6 +106,7 @@ try:
     import rocks_to_unreal          # noqa: E402
     import rock_models              # noqa: E402
     import sun_to_unreal            # noqa: E402
+    import crater_mask_to_unreal    # noqa: E402
     LOADER_AVAILABLE = True
     LOADER_IMPORT_ERROR = None
 except Exception as exc:  # pragma: no cover - environment dependent
@@ -594,7 +597,7 @@ def planned_output_files(base_name, export_csv):
     return files
 
 
-def planned_rock_files(base_name, obstacle_map):
+def planned_rock_files(base_name, obstacle_map, crater_mask_map=False):
     """
     Files a rock-field export writes, as [(filename, description)].
 
@@ -609,6 +612,10 @@ def planned_rock_files(base_name, obstacle_map):
     if obstacle_map:
         files.append((f"{base_name}_obstacleMap.csv",
                       "Full-resolution 0/1 rock-footprint raster."))
+    if crater_mask_map:
+        files.append((f"{base_name}_craterMask.png",
+                      "Crater ground truth: mask ids per DEM cell (craters, rims)."))
+        files.append((f"{base_name}_craterMask.json", "Crater map size, ids and settings."))
     return files
 
 
@@ -1613,6 +1620,15 @@ class RockPlannerStudio(ttk.Frame):
         Tooltip(obstacle_check,
                 "Writes a full-resolution 0/1 rock-footprint raster alongside the\n"
                 "instance list. Useful as a mask, but large for big DEMs.")
+        self.crater_mask_var = tk.BooleanVar(value=True)
+        crater_check = ttk.Checkbutton(
+            export_group, text="Also write crater ground truth (crater mask)",
+            variable=self.crater_mask_var, command=self._refresh_output_preview)
+        crater_check.pack(anchor="w")
+        Tooltip(crater_check,
+                "Writes a full-resolution map of the craters (inside the rim crest)\n"
+                "and their rims, with the stencil ids below as values. Send it to\n"
+                "Unreal to see craters in the rover's object mask.")
 
         # Lists the files that will be written, derived from the base filename.
         self.output_preview_var = tk.StringVar()
@@ -1702,6 +1718,8 @@ class RockPlannerStudio(ttk.Frame):
         self.boulder_stencil_var = tk.StringVar(value="20")
         self.small_rock_stencil_var = tk.StringVar(value="21")
         self.boulder_radius_var = tk.StringVar(value="0.15")
+        self.crater_id_var = tk.StringVar(value=str(crater_mask.CRATER_ID))
+        self.rim_id_var = tk.StringVar(value=str(crater_mask.RIM_ID))
         for row, (label, var, tip) in enumerate((
                 ("Boulder stencil id", self.boulder_stencil_var,
                  "Stencil id (1-255) for boulders; 20 is 'boulder' in the GNC mask labels."),
@@ -1710,7 +1728,13 @@ class RockPlannerStudio(ttk.Frame):
                  "mask labels. Use the boulder id here too for a single rock class."),
                 ("Boulder if radius >= (m)", self.boulder_radius_var,
                  "Rocks whose planned footprint radius is at least this are boulders;\n"
-                 "the rest are small rocks."))):
+                 "the rest are small rocks."),
+                ("Crater stencil id", self.crater_id_var,
+                 "Mask id (1-255) for the ground inside a crater's rim crest; 30 is\n"
+                 "'crater' in the GNC mask labels."),
+                ("Crater rim stencil id", self.rim_id_var,
+                 "Mask id for the ring just outside the rim crest; 31 is 'crater_rim'\n"
+                 "in the GNC mask labels. 0 leaves rims as plain landscape."))):
             name = ttk.Label(stencil_grid, text=label, font=("Segoe UI", 8))
             name.grid(row=row, column=0, sticky="w", pady=1)
             entry = ttk.Entry(stencil_grid, textvariable=var, width=8, justify="right",
@@ -1736,9 +1760,18 @@ class RockPlannerStudio(ttk.Frame):
         Tooltip(self.stencil_button,
                 "Re-tags rocks already placed in Unreal with the ids above,\n"
                 "without moving or re-importing them.")
+        self.crater_button = ttk.Button(unreal_group, text="Send Crater Mask to Unreal",
+                                        command=self.send_crater_mask)
+        self.crater_button.pack(fill="x", pady=(4, 0))
+        Tooltip(self.crater_button,
+                "Imports the exported crater map and updates the object-mask material\n"
+                "(PPM_ObjectMask), so landscape pixels inside craters and on rims take\n"
+                "the crater ids. Rocks keep their own ids. The original material is\n"
+                "kept as PPM_ObjectMask_Original.")
         if not LOADER_AVAILABLE:
             self.place_button.state(["disabled"])
             self.stencil_button.state(["disabled"])
+            self.crater_button.state(["disabled"])
         self._refresh_stencil_preview()
         self._refresh_model_info()
 
@@ -1853,7 +1886,8 @@ class RockPlannerStudio(ttk.Frame):
     def _refresh_output_preview(self, *_trace_args):
         """Lists the filenames an export will write, under the base filename field."""
         base_name = self.export_name_var.get().strip() or "procedural_lunar_terrain"
-        files = planned_rock_files(base_name, self.obstacle_map_var.get())
+        files = planned_rock_files(base_name, self.obstacle_map_var.get(),
+                                   self.crater_mask_var.get())
         self.output_preview_var.set(
             f"outputs/{base_name}/\n"
             + "\n".join(f"  {name}" for name, _ in files))
@@ -1920,6 +1954,10 @@ class RockPlannerStudio(ttk.Frame):
         resolution = self._resolution()
         dem = self.dem
         do_map = self.obstacle_map_var.get()
+        crater_ids = self._crater_ids() if self.crater_mask_var.get() else None
+        if export and self.crater_mask_var.get() and crater_ids is None:
+            self.log("Crater ids must be whole numbers 1-255 (rim 0-255).", level="error")
+            return
         base_name = self.export_name_var.get().strip() or "procedural_lunar_terrain"
 
         self._cancel.clear()
@@ -1941,6 +1979,17 @@ class RockPlannerStudio(ttk.Frame):
                         export_obstacle_map=do_map,
                         progress=lambda m, f: self._queue.put(("progress", (m, f))),
                         cancel_check=self._cancel.is_set)
+                    if crater_ids:
+                        self._queue.put(("progress", ("Finding craters for the ground truth", 0.9)))
+                        supersample = crater_mask.supersample_for(dem.shape)
+                        labels, count = crater_mask.crater_labels(
+                            dem, resolution, params['MIN_CRATER_DEPTH_M'], *crater_ids,
+                            supersample=supersample)
+                        written.update(crater_mask.export_crater_mask(
+                            labels, GENERATOR_OUTPUT_DIR, f"{base_name}_elevationMap",
+                            resolution, params['MIN_CRATER_DEPTH_M'], *crater_ids,
+                            supersample=supersample))
+                        self._queue.put(("log", (f"Crater ground truth: {count} craters.", "ok")))
                     self._queue.put(("written", written))
             except terrain_core.TerrainCancelled:
                 self._queue.put(("cancelled", None))
@@ -1959,7 +2008,8 @@ class RockPlannerStudio(ttk.Frame):
         self._collect_params()
         base_name = self.export_name_var.get().strip() or "procedural_lunar_terrain"
         group_dir = os.path.join(GENERATOR_OUTPUT_DIR, base_name)
-        files = planned_rock_files(base_name, self.obstacle_map_var.get())
+        files = planned_rock_files(base_name, self.obstacle_map_var.get(),
+                                   self.crater_mask_var.get())
         file_list = "\n".join(f"    {name}\n        {desc}" for name, desc in files)
         message = (f"Plan the rock field on {os.path.basename(self.dem_path)} "
                    f"and write:\n\n{file_list}\n\nInto:\n"
@@ -2117,7 +2167,7 @@ class RockPlannerStudio(ttk.Frame):
         """Runs `job(log)` on a worker thread, disabling the planner buttons meanwhile."""
         self.status_var.set(status)
         for button in (self.preview_button, self.export_button, self.place_button,
-                       self.stencil_button):
+                       self.stencil_button, self.crater_button):
             button.state(["disabled"])
 
         def worker():
@@ -2130,6 +2180,47 @@ class RockPlannerStudio(ttk.Frame):
 
         self._worker = threading.Thread(target=worker, daemon=True)
         self._worker.start()
+
+    def _crater_ids(self):
+        """Returns (crater_id, rim_id), or None if invalid; a rim id of 0 disables rims."""
+        try:
+            crater, rim = int(self.crater_id_var.get()), int(self.rim_id_var.get())
+        except ValueError:
+            return None
+        if not (1 <= crater <= 255 and 0 <= rim <= 255 and crater != rim):
+            return None
+        return crater, rim
+
+    def send_crater_mask(self):
+        """Sends the exported crater map to a running Unreal Editor."""
+        if self._busy():
+            self.log("A job is already running; wait for it to finish.", level="warn")
+            return
+        base_name, _csv = self._rocks_csv_path()
+        group_dir = os.path.join(GENERATOR_OUTPUT_DIR, base_name)
+        png = os.path.join(group_dir, f"{base_name}_craterMask.png")
+        meta_path = os.path.join(group_dir, f"{base_name}_craterMask.json")
+        try:
+            with open(meta_path) as handle:
+                meta = json.load(handle)
+        except (OSError, ValueError):
+            meta = None
+        if not os.path.isfile(png) or meta is None:
+            self.log(f"No {base_name}_craterMask.png yet: run Generate & Export with the "
+                     "crater ground truth option first.", level="warn")
+            return
+        dem_stem = (os.path.splitext(os.path.basename(self.dem_path))[0]
+                    if self.dem_path else base_name)
+        width = rocks_to_unreal.heightmap_width(
+            os.path.join(GENERATOR_OUTPUT_DIR, dem_group_name(dem_stem)), dem_stem)
+        self.log(f"Sending {os.path.basename(png)} to Unreal (craters id {meta['crater_id']}, "
+                 f"rims id {meta['rim_id']}).")
+        self._start_unreal_job(
+            "Adding crater ground truth in Unreal...",
+            lambda log: crater_mask_to_unreal.send_crater_mask_to_unreal(
+                png, meta["width"], meta["height"], meta["resolution_m"],
+                landscape_label=f"{dem_stem}_heightmap", landscape_width=width,
+                supersample=meta.get("supersample", 1), log=log))
 
     def update_stencils_in_unreal(self):
         """Re-tags the rocks placed in Unreal with the current stencil ids."""
@@ -2259,6 +2350,7 @@ class RockPlannerStudio(ttk.Frame):
                     if LOADER_AVAILABLE:
                         self.place_button.state(["!disabled"])
                         self.stencil_button.state(["!disabled"])
+                        self.crater_button.state(["!disabled"])
                     self.stop_button.state(["disabled"])
                     if self.status_var.get() not in ("Failed", "Cancelled"):
                         self.status_var.set("Idle")

@@ -61,6 +61,38 @@ DEM names the export after it, so the files land beside that map:
 the DEM). `scale` is the uniform mesh scale, i.e. the radius in metres of a 1 m
 base mesh; `height_m` is `scale × ROCK_HEIGHT_RATIO`.
 
+### Crater ground truth
+
+The export also writes `<name>_craterMask.png`, a crater map with a JSON beside
+it. Its pixel values are object-mask ids:
+
+| Value | Meaning |
+| --- | --- |
+| `0` | Not a crater |
+| `30` | Crater: ground inside the rim crest |
+| `31` | Crater rim: a ring out to 1.2 × the crater radius |
+
+How craters are found:
+
+- They start from the closed depressions the planner already detects.
+- Each crater is the circle fitted through its rim crest, so it covers the whole
+  bowl even on sloping ground.
+- Shallow or elongated basins are rejected.
+
+The map uses 4 cells per DEM cell (25 cm on a 1 m map) for smooth edges, capped at
+8192 px. Uncheck *Also write crater ground truth* to skip it.
+
+**Send Crater Mask to Unreal** shows craters in the rover's object mask, alongside
+the rocks:
+
+- It imports the map into `/Game/GroundTruth/`.
+- It rebuilds `PPM_ObjectMask` so that Landscape pixels (stencil 10) take the
+  crater map's id at their world position. Rocks and the rover keep their own
+  ids.
+- The original material is kept as `PPM_ObjectMask_Original`.
+- The ids must match `mask_labels` in
+  `GNC-Moon-Simulator/component_stereo_depth/config/params.yaml`.
+
 ## 3. Send to Unreal
 
 ![Send to Unreal](docs/images/send-to-unreal.png)
