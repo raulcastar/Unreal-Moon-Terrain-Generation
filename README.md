@@ -16,7 +16,7 @@ python Terrain_Studio/terrain_studio.py  # any platform
 Requires `numpy`, `scipy`, `pandas`, `pyyaml` and `matplotlib`; `tifffile` only for
 GeoTIFF input. Tkinter ships with Python (`sudo apt install python3-tk` on Debian/Ubuntu).
 
-The home screen lays out the four workflow stages in order, plus a map library.
+The home screen lays out the five workflow stages in order, plus a map library.
 Every view opens in the same window and has a **⌂ Home** button to return.
 
 ## 1. Create a terrain
@@ -61,37 +61,8 @@ DEM names the export after it, so the files land beside that map:
 the DEM). `scale` is the uniform mesh scale, i.e. the radius in metres of a 1 m
 base mesh; `height_m` is `scale × ROCK_HEIGHT_RATIO`.
 
-### Crater ground truth
-
-The export also writes `<name>_craterMask.png`, a crater map with a JSON beside
-it. Its pixel values are object-mask ids:
-
-| Value | Meaning |
-| --- | --- |
-| `0` | Not a crater |
-| `30` | Crater: ground inside the rim crest |
-| `31` | Crater rim: a ring out to 1.2 × the crater radius |
-
-How craters are found:
-
-- They start from the closed depressions the planner already detects.
-- Each crater is the circle fitted through its rim crest, so it covers the whole
-  bowl even on sloping ground.
-- Shallow or elongated basins are rejected.
-
-The map uses 4 cells per DEM cell (25 cm on a 1 m map) for smooth edges, capped at
-8192 px. Uncheck *Also write crater ground truth* to skip it.
-
-**Send Crater Mask to Unreal** shows craters in the rover's object mask, alongside
-the rocks:
-
-- It imports the map into `/Game/GroundTruth/`.
-- It rebuilds `PPM_ObjectMask` so that Landscape pixels (stencil 10) take the
-  crater map's id at their world position. Rocks and the rover keep their own
-  ids.
-- The original material is kept as `PPM_ObjectMask_Original`.
-- The ids must match `mask_labels` in
-  `GNC-Moon-Simulator/component_stereo_depth/config/params.yaml`.
+**Place Rocks in Unreal** tags each rock for the rover's object mask as a boulder
+or a small rock, using the ids set in stage 5.
 
 ## 3. Send to Unreal
 
@@ -141,6 +112,47 @@ settings:
 During Play In Editor, only the running game changes; send the sun again after
 stopping it to keep it in the level. **Read Sun from Unreal** loads the level's
 current sun into the sliders.
+
+## 5. Ground truth masks (optional)
+
+Labels for the rover's object mask (`navcam/central/object_mask`), in one place:
+
+- **Rocks:** the boulder and small-rock ids, and the radius that separates them.
+  Stage 2 tags rocks with these ids when it places them. **Update Rock Ids in
+  Unreal** re-tags rocks already placed, without moving them.
+- **Craters:** **Find Craters** maps them on the DEM and shows them on the map
+  preview. **Send Crater Map to Unreal** exports the crater map and makes the mask
+  show it. **Restore Original Mask Material** undoes that.
+- **GNC labels:** the `mask_labels` lines that
+  `GNC-Moon-Simulator/component_stereo_depth/config/params.yaml` needs for these
+  ids, ready to copy.
+
+How craters are found:
+
+- They start from the closed depressions the rock planner treats as impassable.
+- Each crater is the circle fitted through its rim crest, so it covers the whole
+  bowl even on sloping ground.
+- Shallow or elongated basins are rejected.
+
+The crater map is `<name>_craterMask.png` in the map's output folder, with a JSON
+beside it. Its pixel values are mask ids:
+
+| Value | Meaning |
+| --- | --- |
+| `0` | Not a crater |
+| `30` | Crater: ground inside the rim crest |
+| `31` | Crater rim: a ring outside the crest, 0.2 × the radius wide by default |
+
+The map uses 4 cells per DEM cell (25 cm on a 1 m map), capped at 8192 px.
+
+In Unreal, the map is imported into `/Game/GroundTruth/` and `PPM_ObjectMask`, the
+material on the rover's `Navcam_Mask` camera, is rebuilt:
+
+- Landscape pixels (stencil 10) take the crater map's id at the world point they
+  show.
+- Rocks and the rover keep their own ids, and hidden craters stay hidden.
+- The original material is kept as `PPM_ObjectMask_Original`.
+- It also works during Play In Editor.
 
 ## Browse maps
 

@@ -50,6 +50,18 @@ SCALAR_INPUTS = ("LandscapeStencil", "CraterOriginX", "CraterOriginY", "CraterSt
                  "CraterStepY", "CraterWidth", "CraterHeight", "CraterSupersample")
 
 
+def _game_landscape(label):
+    """The Landscape in the running game: during Play In Editor the editor's actors are not listed."""
+    world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_game_world()
+    if world is None:
+        return None
+    landscapes = list(unreal.GameplayStatics.get_all_actors_of_class(world, unreal.LandscapeProxy))
+    for actor in landscapes:
+        if label and actor.get_actor_label() == label:
+            return actor
+    return landscapes[0] if len(landscapes) == 1 else None
+
+
 def import_mask_texture(png_path, name):
     """Imports the crater map as an exact (uncompressed, unfiltered, no mips) texture."""
     task = unreal.AssetImportTask()
@@ -133,9 +145,9 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
     Imports the crater map and makes the object mask show it on the Landscape.
     Returns a summary line.
     """
-    landscape = find_landscape(landscape_label)
+    landscape = find_landscape(landscape_label) or _game_landscape(landscape_label)
     if landscape is None:
-        return "[-] No Landscape found to align the crater map with (is Play In Editor running?)."
+        return "[-] No Landscape found to align the crater map with."
     x0, y0, step_x, step_y = landscape_frame(landscape, landscape_width, resolution)
 
     stem = png_path.replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[0]
