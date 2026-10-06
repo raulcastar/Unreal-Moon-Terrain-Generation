@@ -25,6 +25,11 @@ AUTO_HEIGHTMAP_MAX_VERTICES = 4097 * 4097
 # Pixels sampled when validating the render target and the merged heightmap.
 _SPOT_CHECKS = 64
 
+# Material given to every new Landscape, and its id in the rover's object mask
+# (Custom Depth Stencil; 10 is 'landscape' in the GNC mask labels).
+DEFAULT_LANDSCAPE_MATERIAL = "/Game/Landscape/Landscape_Material"
+LANDSCAPE_MASK_STENCIL = 10
+
 
 def read_r16(heightmap_filepath, width, height):
     """Reads a little-endian .r16 heightmap. Raises ValueError if its size does not match."""
@@ -164,7 +169,28 @@ def save_when_heightmap_merged(landscape_actor, heightmap_filepath, width, heigh
     state["handle"] = unreal.register_slate_post_tick_callback(on_tick)
 
 
-def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, heightmap_filepath="outputs/lunar_terrain.r16", x_offset=0.0, y_offset=0.0, z_offset=0.0, save_level=True, import_heightmap=True):
+def setup_landscape(landscape_actor, material_path=DEFAULT_LANDSCAPE_MATERIAL,
+                    mask_stencil=LANDSCAPE_MASK_STENCIL):
+    """
+    Gives a Landscape its material and its object-mask id. A missing material
+    is logged and left as the engine default; a stencil of 0 leaves the mask off.
+    """
+    if material_path:
+        material = unreal.load_asset(material_path)
+        if material is None:
+            unreal.log_warning(f"[*] Landscape material {material_path} not found; "
+                               "the Landscape keeps the default material.")
+        else:
+            landscape_actor.set_editor_property("landscape_material", material)
+            unreal.log(f"[*] Landscape material: {material_path}")
+    if mask_stencil:
+        landscape_actor.set_editor_property("render_custom_depth", True)
+        landscape_actor.set_editor_property("custom_depth_stencil_value", int(mask_stencil))
+        unreal.log(f"[*] Landscape object-mask id (Custom Depth Stencil): {int(mask_stencil)}")
+
+
+def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, heightmap_filepath="outputs/lunar_terrain.r16", x_offset=0.0, y_offset=0.0, z_offset=0.0, save_level=True, import_heightmap=True,
+                     landscape_material=DEFAULT_LANDSCAPE_MATERIAL, mask_stencil=LANDSCAPE_MASK_STENCIL):
     """
     Instantiates and configures a Landscape actor based on pre-calculated DEM dimensions.
     
@@ -177,6 +203,9 @@ def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, h
         save_level (bool): Save the level once the Landscape is set up.
         import_heightmap (bool): Import the .r16 automatically. The manual import
             instructions are shown only if this is disabled or fails.
+        landscape_material (str): Material asset applied to the Landscape ('' keeps
+            the engine default).
+        mask_stencil (int): Custom Depth Stencil id for the object mask (0 = off).
     """
     
     # Unpack the pre-calculated component topology configuration
@@ -237,6 +266,8 @@ def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, h
         unreal.log(f"[*] Nanite enabled for Landscape '{actor_label}'.")
     except Exception as e:
         unreal.log_warning(f"[*] Could not enable Nanite. Ensure you are using UE 5.3+. Error: {e}")
+
+    setup_landscape(landscape_actor, landscape_material, mask_stencil)
 
     # =========================================================================
     # 2. APPLY THE HEIGHTMAP

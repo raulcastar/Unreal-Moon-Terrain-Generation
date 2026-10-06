@@ -49,6 +49,15 @@ level. The heightmap is written to `outputs/<name>/`. Untick *Dispatch to
 running Unreal Editor* to only write the files (a dialog then gives the path and
 the manual import steps), or *Save the level afterwards* to leave saving to you.
 
+Every new Landscape is set up for the simulator:
+
+- it gets the project's `/Game/Landscape/Landscape_Material`;
+- it is tagged for the rover's object mask (Render CustomDepth on, stencil 10,
+  `landscape` in the GNC mask labels).
+
+If that material is missing, a warning is logged and the engine's default
+material stays. Both defaults are at the top of `unreal_terrain_generator.py`.
+
 **Unreal setup:** enable the *Python Editor Script Plugin* and *Remote Execution*
 in Project Settings. Landscapes larger than 4097 × 4097 vertices, or an
 automatic import that fails, fall back to the manual import (Landscape Mode →
