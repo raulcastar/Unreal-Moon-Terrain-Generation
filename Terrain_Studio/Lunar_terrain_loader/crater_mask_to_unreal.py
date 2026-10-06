@@ -3,7 +3,7 @@ Crater Mask Dispatch
 --------------------
 Sends a crater map (<name>_craterMask.png) to a running Unreal Editor over
 Remote Execution, where unreal_crater_mask makes the rover's object mask show
-craters and rims on the Landscape, and sets up the mask camera.
+craters, rims and shadows on the Landscape, and sets up the mask camera.
 """
 
 import json
@@ -30,11 +30,12 @@ def _crater_call(call):
 
 def send_crater_mask_to_unreal(png_path, width, height, resolution, landscape_label="",
                                landscape_width=0, supersample=1, camera_actor="",
-                               camera_capture="", save_level=False, log=print,
-                               discovery_seconds=2.0):
+                               camera_capture="", save_level=False, shadows=True,
+                               log=print, discovery_seconds=2.0):
     """
-    Imports the crater map, updates the object-mask material and sets up the
-    mask camera. Returns True on success.
+    Imports the crater map, updates the object-mask material (craters and, with
+    `shadows`, the shadow mask in the same frame) and sets up the mask camera.
+    Returns True on success.
     """
     args = ", ".join([repr(png_path.replace("\\", "/")), str(int(width)), str(int(height)),
                       f"resolution={float(resolution)!r}",
@@ -43,7 +44,8 @@ def send_crater_mask_to_unreal(png_path, width, height, resolution, landscape_la
                       f"supersample={int(supersample)}",
                       f"camera_actor={camera_actor!r}",
                       f"camera_capture={camera_capture!r}",
-                      f"save_level={bool(save_level)}"])
+                      f"save_level={bool(save_level)}",
+                      f"shadows={bool(shadows)}"])
     return run_in_unreal(_crater_call(f"apply_crater_mask({args})"), log,
                          "Adding crater ground truth in Unreal", discovery_seconds)
 

@@ -1,6 +1,6 @@
 """
-Unreal Crater Ground Truth
---------------------------
+Unreal Ground Truth: Craters and Shadows
+----------------------------------------
 Executes natively within the Unreal Engine Python environment. Imports the
 studio's crater map (<name>_craterMask.png, cell values = mask ids) and builds
 the object-mask material so landscape pixels take the crater map's id:
@@ -8,11 +8,19 @@ the object-mask material so landscape pixels take the crater map's id:
     stencil == landscape id  and  crater map cell > 0   ->   that cell's id
     otherwise                                          ->   the stencil id
 
+The same image also carries the shadow mask in two flag bits: the lowest bit of
+green marks ground (landscape, craters, rims) and the lowest bit of blue any
+surface the sun does not reach (ground, rocks, rover; never the sky). The colours change by at most 1/255, and the GNC stereo
+node splits the frame into two feeds: object_mask (both bits cleared) and
+shadow_mask (shadow, sunlit ground, sky and other objects). Shadows come from the mask camera's own render: it
+draws every surface white, lit by the sun alone (no bounce or sky light, no
+other lights), so a ground pixel is in shadow exactly when that render is dark.
+
 The material keeps the original colouring (a stable colour hashed from each
-id), so rocks, the rover and bare ground are unchanged. The crater map is read
-with an exact texel fetch at the pixel's world position, using the same DEM
-frame as the rock placer (columns run towards -X); it may hold several cells
-per DEM cell (CraterSupersample).
+id), so rocks and the rover are unchanged. The crater map is read with an exact
+texel fetch at the pixel's world position, using the same DEM frame as the rock
+placer (columns run towards -X); it may hold several cells per DEM cell
+(CraterSupersample).
 """
 
 import json
@@ -28,10 +36,24 @@ MASK_MATERIAL = f"{GROUND_TRUTH_FOLDER}/PPM_ObjectMask"
 BACKUP_MATERIAL = f"{GROUND_TRUTH_FOLDER}/PPM_ObjectMask_Original"
 TEXTURE_FOLDER = GROUND_TRUTH_FOLDER
 LANDSCAPE_STENCIL = 10
+SHADOW_THRESHOLD = 0.5     # Sun-only display value below which a pixel is shadow (half light, so soft tails count)
 
-# Custom node: crater lookup on landscape pixels, then the original id colouring.
+# Mask camera render: surfaces white, lit by the sun only, fixed exposure. The
+# mask material replaces the colours, so only the mask image depends on this.
+MASK_CAMERA_SHOW_FLAGS = (
+    ("LightingOnlyOverride", True), ("GlobalIllumination", False),
+    ("LumenGlobalIllumination", False), ("SkyLighting", False), ("AmbientOcclusion", False),
+    ("DistanceFieldAO", False), ("ReflectionEnvironment", False), ("LumenReflections", False),
+    ("ScreenSpaceReflections", False), ("Fog", False), ("Atmosphere", False),
+    ("SpotLights", False), ("PointLights", False), ("RectLights", False),
+    ("Bloom", False), ("EyeAdaptation", False))
+MASK_CAMERA_EXPOSURE_BIAS = -13.0    # Sunlit white ground displays at ~0.9
+
+# Custom node: crater lookup on landscape pixels, the original id colouring, and
+# the ground and shadow flags in the lowest bits of green and blue.
 MASK_CODE = r"""float v = In;                                         // Stencil value 0..255
-if (abs(v - LandscapeStencil) < 0.5)
+bool ground = abs(v - LandscapeStencil) < 0.5;
+if (ground)
 {
     // Landscape pixel: the crater map's id at this point, if any. DEM cell c
     // spans map cells [c * S, (c + 1) * S), centred on vertex c.
@@ -44,15 +66,26 @@ if (abs(v - LandscapeStencil) < 0.5)
         if (id > 0.5) v = id;
     }
 }
-if (v < 0.5) return float3(0, 0, 0);                  // Untagged pixels are black
-float3 c;
-c.r = frac(sin(v * 12.9898) * 43758.5453);
-c.g = frac(sin(v * 78.2330) * 43758.5453);
-c.b = frac(sin(v * 37.7190) * 43758.5453);
-return c;                                             // Stable distinct colour per id"""
+// Any surface the sun does not reach: ground, rocks or rover (the mask camera
+// renders sunlight only). Untagged pixels are sky.
+float shadow = (v >= 0.5 && ShadowEnabled > 0.5
+                && dot(Scene, float3(0.2126, 0.7152, 0.0722)) < ShadowThreshold) ? 1.0 : 0.0;
+float3 c = float3(0, 0, 0);                           // Untagged pixels are black
+if (v >= 0.5)
+{
+    c.r = frac(sin(v * 12.9898) * 43758.5453);       // Stable distinct colour per id
+    c.g = frac(sin(v * 78.2330) * 43758.5453);
+    c.b = frac(sin(v * 37.7190) * 43758.5453);
+}
+// Quantise to 8 bits; the lowest bits of green and blue flag ground and shadow.
+float3 c8 = round(c * 255.0);
+c8.g = c8.g - fmod(c8.g, 2.0) + (ground ? 1.0 : 0.0);
+c8.b = c8.b - fmod(c8.b, 2.0) + shadow;
+return c8 / 255.0;"""
 
 SCALAR_INPUTS = ("LandscapeStencil", "CraterOriginX", "CraterOriginY", "CraterStepX",
-                 "CraterStepY", "CraterWidth", "CraterHeight", "CraterSupersample")
+                 "CraterStepY", "CraterWidth", "CraterHeight", "CraterSupersample",
+                 "ShadowEnabled", "ShadowThreshold")
 
 
 def _game_landscape(label):
@@ -100,7 +133,7 @@ def _backup_material():
 
 
 def _build_mask_graph(material, texture, values):
-    """Rebuilds the mask material: stencil + world position + crater map -> colour."""
+    """Rebuilds the mask material: stencil + scene + world position + crater map -> colour."""
     lib = unreal.MaterialEditingLibrary
     lib.delete_all_material_expressions(material)
 
@@ -110,6 +143,13 @@ def _build_mask_graph(material, texture, values):
     for channel, keep in (("r", True), ("g", False), ("b", False), ("a", False)):
         red.set_editor_property(channel, keep)
     lib.connect_material_expressions(stencil, "Color", red, "")
+
+    scene = lib.create_material_expression(material, unreal.MaterialExpressionSceneTexture, -900, -140)
+    scene.set_editor_property("scene_texture_id", unreal.SceneTextureId.PPI_POST_PROCESS_INPUT0)
+    rgb = lib.create_material_expression(material, unreal.MaterialExpressionComponentMask, -650, -140)
+    for channel, keep in (("r", True), ("g", True), ("b", True), ("a", False)):
+        rgb.set_editor_property(channel, keep)
+    lib.connect_material_expressions(scene, "Color", rgb, "")
 
     position = lib.create_material_expression(material, unreal.MaterialExpressionWorldPosition, -650, 120)
     crater = lib.create_material_expression(
@@ -121,7 +161,7 @@ def _build_mask_graph(material, texture, values):
     custom.set_editor_property("code", MASK_CODE)
     custom.set_editor_property("description", "ObjectMaskColour")
     custom.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT3)
-    names = ("In", "Pos", "Crater") + SCALAR_INPUTS
+    names = ("In", "Scene", "Pos", "Crater") + SCALAR_INPUTS
     inputs = []
     for name in names:
         entry = unreal.CustomInput()
@@ -130,6 +170,7 @@ def _build_mask_graph(material, texture, values):
     custom.set_editor_property("inputs", inputs)
 
     lib.connect_material_expressions(red, "", custom, "In")
+    lib.connect_material_expressions(rgb, "", custom, "Scene")
     lib.connect_material_expressions(position, "", custom, "Pos")
     lib.connect_material_expressions(crater, "", custom, "Crater")
     for row, name in enumerate(SCALAR_INPUTS):
@@ -190,11 +231,30 @@ def list_mask_cameras():
     return CAMERAS_JSON_PREFIX + json.dumps({"pie": _in_pie(), "actors": found})
 
 
+def _set_mask_render(capture):
+    """Sun-only, lighting-only render with a fixed exposure (what shadow detection reads)."""
+    flags = []
+    for name, enabled in MASK_CAMERA_SHOW_FLAGS:
+        setting = unreal.EngineShowFlagsSetting()
+        setting.set_editor_property("show_flag_name", name)
+        setting.set_editor_property("enabled", enabled)
+        flags.append(setting)
+    capture.set_editor_property("show_flag_settings", flags)
+    settings = capture.get_editor_property("post_process_settings")
+    for prop, value in (("auto_exposure_method", unreal.AutoExposureMethod.AEM_MANUAL),
+                        ("auto_exposure_apply_physical_camera_exposure", False),
+                        ("auto_exposure_bias", MASK_CAMERA_EXPOSURE_BIAS)):
+        settings.set_editor_property("override_" + prop, True)
+        settings.set_editor_property(prop, value)
+    capture.set_editor_property("post_process_settings", settings)
+
+
 def assign_mask_camera(actor_label, capture_name):
     """
     Makes `capture_name` on `actor_label` the object-mask camera: adds
-    PPM_ObjectMask to its post-process materials and, when the actor has a
-    StereoCamStreamer, streams it as the mask. Returns a summary line.
+    PPM_ObjectMask to its post-process materials, sets its sun-only render (for
+    shadows) and, when the actor has a StereoCamStreamer, streams it as the
+    mask. Returns a summary line.
     """
     actor = next((a for a in _actors() if a.get_actor_label() == actor_label), None)
     if actor is None:
@@ -217,6 +277,8 @@ def assign_mask_camera(actor_label, capture_name):
         settings.set_editor_property("weighted_blendables", blendables)
         capture.set_editor_property("post_process_settings", settings)
         notes.append("added PPM_ObjectMask")
+    _set_mask_render(capture)
+    notes.append("sun-only render set for shadows")
     streamer = _streamer(actor)
     if streamer is not None and str(streamer.get_editor_property("mask_capture_name")) != capture_name:
         streamer.set_editor_property("mask_capture_name", capture_name)
@@ -231,11 +293,11 @@ def assign_mask_camera(actor_label, capture_name):
 
 def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="",
                       landscape_width=0, landscape_stencil=LANDSCAPE_STENCIL, supersample=1,
-                      camera_actor="", camera_capture="", save_level=False):
+                      camera_actor="", camera_capture="", save_level=False, shadows=True):
     """
-    Imports the crater map, makes the object mask show it on the Landscape and,
-    when given, sets up `camera_capture` on `camera_actor` as the mask camera.
-    Returns a summary.
+    Imports the crater map and makes the object mask show it on the Landscape;
+    with `shadows`, the frame also carries the shadow mask. When given, sets up
+    `camera_capture` on `camera_actor` as the mask camera. Returns a summary.
     """
     landscape = find_landscape(landscape_label) or _game_landscape(landscape_label)
     if landscape is None:
@@ -251,10 +313,13 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
     _build_mask_graph(material, texture, {
         "LandscapeStencil": landscape_stencil, "CraterOriginX": x0, "CraterOriginY": y0,
         "CraterStepX": step_x, "CraterStepY": step_y,
-        "CraterWidth": width, "CraterHeight": height, "CraterSupersample": supersample})
+        "CraterWidth": width, "CraterHeight": height, "CraterSupersample": supersample,
+        "ShadowEnabled": 1.0 if shadows else 0.0, "ShadowThreshold": SHADOW_THRESHOLD})
     summary = (f"Crater ground truth on '{landscape.get_actor_label()}': {texture.get_path_name()} "
                f"({width} x {height}, {supersample} per DEM cell) in {MASK_MATERIAL}. "
                f"Backup: {BACKUP_MATERIAL}.")
+    summary += ("\nShadow mask: on (flag bits in green and blue; split into its own feed by GNC)."
+                if shadows else "\nShadow mask: off.")
     if camera_actor and camera_capture:
         summary += "\n" + assign_mask_camera(camera_actor, camera_capture)
     if save_level and not _in_pie():

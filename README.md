@@ -94,19 +94,21 @@ rock. The tags are the *Object mask ids*: by default 20 for boulders and 21 for
 small rocks, split at a 0.15 m radius. **Update Mask Ids Only** re-tags rocks
 already placed without moving them.
 
-## 3. Crater masks (optional)
+## 3. Crater and shadow masks (optional)
 
-Shows craters in the rover's object mask, alongside the rocks:
+Shows craters and shadows in the rover's object mask, alongside the rocks:
 
 1. **Find Craters** maps them on the DEM and shows them on the map preview.
 2. **Mask Camera in Unreal** picks the scene capture that renders the mask. The
    list is read from the open level, and the default is the rover's
    `Navcam_Mask`.
-3. **Send Crater Mask to Unreal** does three things:
+3. **Send Masks to Unreal** does three things:
    - exports the crater map;
-   - rebuilds `PPM_ObjectMask` so the Landscape shows the craters;
-   - sets up the chosen camera: it gets `PPM_ObjectMask` and, if its actor has a
-     StereoCamStreamer, becomes the streamed mask camera.
+   - rebuilds `PPM_ObjectMask` so the Landscape shows the craters and, with
+     *Stream a shadow mask feed*, the frame also carries the shadows;
+   - sets up the chosen camera: it gets `PPM_ObjectMask` and the sun-only render
+     shadows need, and, if its actor has a StereoCamStreamer, it becomes the
+     streamed mask camera.
 
    **Restore Original Mask Material** undoes the material change.
 4. **GNC Labels** lists the `mask_labels` that
@@ -153,6 +155,76 @@ How the mask is drawn: the mask camera's material looks at each Landscape pixel
   `/Game/GroundTruth_Masks`;
 - it also works during Play In Editor, although camera changes made then last
   only until it stops.
+
+GNC receives two feeds from the mask camera, taken from the same frame:
+
+| Topic | Contents |
+| --- | --- |
+| `navcam/central/object_mask` | Rover, landscape, rocks, craters and rims, without shadows |
+| `navcam/central/shadow_mask` | Sunlight only: black in shadow (ground, rocks, rover), blue for sunlit ground, grey for sunlit rocks and the rover, black for sky |
+| `navcam/central/shadow_label` | The same classes as ids (mono8), for training; see [Shadow class ids](#shadow-class-ids) |
+| `navcam/central/shadow_label_mapping` | JSON legend of those ids |
+
+The dashboard shows both, as SEGMENTATION and SHADOW MASK. Their legends list
+each class with its id (stencil id, or `shadow_label` id), grouped into ground,
+objects and sky.
+
+Shadows are taken from the engine's own rendering, so they match what the cameras
+see: the rover's and the rocks' shadows, crater walls, hills and slopes facing
+away from the sun.
+
+- The mask camera renders every surface white, lit by the sun alone: no bounce
+  light, no sky light, and no headlights or other lights. Its colours are replaced
+  by the mask material, so this changes nothing else.
+- Any surface this render leaves dark is shadow: ground, the unlit sides of rocks,
+  and the parts of rocks or the rover that another object shades.
+- A patch lit only by the rover's headlights is still shadow, because only the
+  sun counts.
+
+### Shadow threshold
+
+A pixel is shadow when the mask camera's sun-only render shows it at less than
+**half of full sunlight** (display value 0.5 of 1).
+
+- Set by `SHADOW_THRESHOLD` in
+  `Terrain_Studio/Lunar_terrain_loader/unreal_crater_mask.py` and written to the
+  `ShadowThreshold` parameter of `PPM_ObjectMask` on every send. Change it there
+  and send the masks again.
+- That render is almost all black (shadow) or near white (sunlit). The values in
+  between are penumbra: shadow edges and the thin tails of shadows cast by rocks,
+  which at a distance cover only part of a pixel.
+- Half light counts those tails as shadow and matches what the RGB camera shows.
+  A much lower value (for example 0.04) keeps only the solid core of each shadow
+  and drops the tails rocks cast onto the terrain.
+- Checked with the sun at 3°, 6° and 19° elevation: ground lit at a grazing angle
+  stays above the threshold.
+
+### Shadow class ids
+
+`navcam/central/shadow_label` is a mono8 image the size of the mask, aligned
+pixel for pixel with `image_color` and `object_mask`. Each pixel holds one id:
+
+| Id | Class | Meaning |
+| --- | --- | --- |
+| 0 | `sky` | No surface |
+| 1 | `sunlit_ground` | Landscape, crater or rim in sunlight |
+| 2 | `shadowed_ground` | Landscape, crater or rim without sunlight |
+| 3 | `sunlit_object` | Rock or rover in sunlight |
+| 4 | `shadowed_object` | Rock or rover without sunlight, including its unlit side |
+
+- The same legend is published as JSON on `shadow_label_mapping`, and the
+  dashboard's rosbag button records both topics.
+- Store the labels losslessly (PNG or the bag itself); JPEG would change the ids.
+- For finer classes, combine the label with `object_mask` pixel by pixel (for
+  example "boulder in shadow" or "crater in shadow").
+
+How the shadows travel: the mask material stores two flags, *ground* in the
+lowest bit of green and *in shadow* in the lowest bit of blue. That changes the
+mask colours by at most 1/255. The GNC stereo node (`enable_shadow_mask` in
+`component_stereo_depth/config/params.yaml`) paints `shadow_mask` from these flags
+and clears them from `object_mask`. One camera
+therefore gives two exactly aligned feeds, with no change to the StereoCamStreamer
+plugin.
 
 ## 4. Position the sun (optional)
 

@@ -2617,7 +2617,7 @@ class CraterMaskStudio(ttk.Frame):
         top_bar = ttk.Frame(left)
         top_bar.pack(fill="x")
         ttk.Button(top_bar, text="⌂ Home", width=9, command=self.app.show_home).pack(side="left")
-        ttk.Label(top_bar, text="Crater Masks",
+        ttk.Label(top_bar, text="Crater & Shadow Masks",
                   font=("Segoe UI Semibold", 11)).pack(side="left", padx=(8, 0))
 
         actions = ttk.Frame(left)
@@ -2714,6 +2714,19 @@ class CraterMaskStudio(ttk.Frame):
                 "Writes <map>_craterMask.png (mask ids, 4 cells per DEM cell) and its\n"
                 ".json into the map's output folder.")
 
+        # Shadows
+        shadows = self._group(inner, "Shadows")
+        self.shadows_var = tk.BooleanVar(value=True)
+        shadow_check = ttk.Checkbutton(shadows, text="Stream a shadow mask feed",
+                                       variable=self.shadows_var)
+        shadow_check.pack(anchor="w")
+        Tooltip(shadow_check,
+                "A second feed, navcam/central/shadow_mask: white where the ground gets\n"
+                "no sunlight (shadows of the rover, rocks, crater walls and hills, and\n"
+                "slopes facing away). The object mask itself stays free of shadows.")
+        self._hint(shadows, "The mask camera renders sunlight alone for this, so the shadows "
+                            "match what the cameras see. Both feeds come from the same frame.")
+
         # Mask camera and sending
         camera = self._group(inner, "Mask Camera in Unreal")
         self._hint(camera, "The scene capture that renders the object mask. It gets "
@@ -2734,7 +2747,7 @@ class CraterMaskStudio(ttk.Frame):
         self.save_level_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(camera, text="Save the level afterwards",
                         variable=self.save_level_var).pack(anchor="w", pady=(4, 0))
-        self.send_button = ttk.Button(camera, text="Send Crater Mask to Unreal",
+        self.send_button = ttk.Button(camera, text="Send Masks to Unreal",
                                       style="Accent.TButton", command=self.send_crater_map)
         self.send_button.pack(fill="x", pady=(6, 0))
         Tooltip(self.send_button,
@@ -2840,7 +2853,7 @@ class CraterMaskStudio(ttk.Frame):
 
     # ----------------------------------------------------------------- ids
     def _load_ids(self):
-        ids = mask_ids(self.app)
+        ids = dict(DEFAULT_MASK_IDS, **mask_ids(self.app))
         self.crater_var.set(str(ids["crater"]))
         self.rim_var.set(str(ids["rim"]))
 
@@ -2851,7 +2864,7 @@ class CraterMaskStudio(ttk.Frame):
 
     def _read_ids(self):
         """All mask ids: rocks from the shared ids, craters from the fields; None if invalid."""
-        ids = dict(mask_ids(self.app))
+        ids = dict(DEFAULT_MASK_IDS, **mask_ids(self.app))
         try:
             ids["crater"], ids["rim"] = int(self.crater_var.get()), int(self.rim_var.get())
         except ValueError:
@@ -2871,7 +2884,7 @@ class CraterMaskStudio(ttk.Frame):
         self.labels_text.configure(state="normal")
         self.labels_text.delete("1.0", "end")
         if ids is None:
-            self.labels_text.insert("end", "Crater ids must be whole numbers 1-255\n(rim 0-255).")
+            self.labels_text.insert("end", "Crater ids must be different whole numbers\n1-255 (rim 0-255).")
         else:
             lines = ['- "2:rover"', '- "10:landscape"', f'- "{ids["boulder"]}:boulder"']
             if ids["small_rock"] != ids["boulder"]:
@@ -3074,17 +3087,19 @@ class CraterMaskStudio(ttk.Frame):
         width = rocks_to_unreal.heightmap_width(os.path.join(GENERATOR_OUTPUT_DIR, group), stem)
         camera_actor, camera_capture = self._camera()
         save_level = self.save_level_var.get()
+        shadows = self.shadows_var.get()
         self.log(f"Sending {os.path.basename(png)} to Unreal (crater id {meta['crater_id']}, "
-                 f"rim id {meta['rim_id']}; mask camera "
+                 f"rim id {meta['rim_id']}; shadow feed {'on' if shadows else 'off'}; mask camera "
                  f"{camera_actor + ' / ' + camera_capture if camera_actor else 'unchanged'}).")
-        self._run("Sending the crater mask to Unreal...", key="crater_send",
+        self._run("Sending the masks to Unreal...", key="crater_send",
                   work=max(os.path.getsize(png) / 1e6, 0.01),
                   job=
                   lambda log: crater_mask_to_unreal.send_crater_mask_to_unreal(
                       png, meta["width"], meta["height"], meta["resolution_m"],
                       landscape_label=f"{stem}_heightmap", landscape_width=width,
                       supersample=meta.get("supersample", 1), camera_actor=camera_actor,
-                      camera_capture=camera_capture, save_level=save_level, log=log))
+                      camera_capture=camera_capture, save_level=save_level,
+                      shadows=shadows, log=log))
 
     def restore_material(self):
         self._run("Restoring the mask material...",
@@ -4710,8 +4725,9 @@ class TerrainStudio(tk.Tk):
             ("02", "Rocks & Rover Paths",
              "Scatter rocks around drivable rover corridors and place them in Unreal, "
              "tagged for the object mask.", self.enter_rock_planner, True),
-            ("03", "Crater Masks",
-             "Map the craters and show them in the rover's object-mask camera.",
+            ("03", "Crater & Shadow Masks",
+             "Map the craters and shadows and show them in the rover's object-mask "
+             "camera.",
              self.enter_crater_masks, True),
             ("04", "Sun & Shadows",
              "Draw the shadow you want and set a lunar sun in Unreal to cast it.",
@@ -5010,7 +5026,7 @@ class TerrainStudio(tk.Tk):
             self.crater_masks.refresh_ids()
             if source and source != self.crater_masks.dem_path:
                 self.crater_masks.load_dem(source)
-        self.show_view(self.crater_masks, "Crater Masks")
+        self.show_view(self.crater_masks, "Crater & Shadow Masks")
 
     def enter_sun_studio(self):
         """Opens the sun & shadows view, seeded with the last generated / chosen DEM."""
