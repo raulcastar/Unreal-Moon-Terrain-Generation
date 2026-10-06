@@ -7,6 +7,7 @@ then establishes a network connection to Unreal Engine to trigger the landscape 
 """
 
 import unreal_api
+import runtime_sync
 import time
 import os
 import sys
@@ -152,7 +153,8 @@ def send_to_unreal(landscape_config, interpolation_resolution, z_axis_scale, hei
                 f"unreal_terrain_generator.create_landscape({landscape_config}, {interpolation_resolution}, {z_axis_scale}, '{target_r16_path}', {0.0}, {0.0}, {z_offset}, save_level={bool(save_level)})"
             )
 
-            result = remote_exec.run_command(command)
+            # Also refreshes the project's own copy of the editor watcher (runtime_sync).
+            result = remote_exec.run_command(runtime_sync.with_runtime_sync(command))
             print(f"[+] Success: Command dispatched to Node [{node_id}]")
 
             # Relay the Editor's log output (heightmap import, level save).

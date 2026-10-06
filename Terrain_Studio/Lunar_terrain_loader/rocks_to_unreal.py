@@ -10,6 +10,7 @@ import json
 import os
 import time
 
+import runtime_sync
 import unreal_api
 
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__)).replace("\\", "/")
@@ -90,7 +91,8 @@ def run_in_unreal(command, log=print, action="Running in Unreal",
         node_id = node.get("node_id") if isinstance(node, dict) else getattr(node, "node_id", None)
         remote_exec.open_command_connection(node_id)
         log(f"{action} (node {node_id})...")
-        result = remote_exec.run_command(command)
+        # Also refreshes the project's own copy of the editor watcher (runtime_sync).
+        result = remote_exec.run_command(runtime_sync.with_runtime_sync(command))
     finally:
         remote_exec.stop()
 

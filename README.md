@@ -198,7 +198,7 @@ A pixel is shadow when the mask camera's sun-only render shows it at less than
 **half of full sunlight** (display value 0.5 of 1).
 
 - Set by `SHADOW_THRESHOLD` in
-  `Terrain_Studio/Lunar_terrain_loader/unreal_crater_mask.py` and written to the
+  `Terrain_Studio/Unreal_runtime/unreal_crater_mask.py` and written to the
   `ShadowThreshold` parameter of `PPM_GroundTruthMask` on every send. Change it there
   and send the masks again.
 - That render is almost all black (shadow) or near white (sunlit). The values in
@@ -369,13 +369,8 @@ rover's own shadow get id 5 (`rover_shadow`) instead of 2 or 4.
   So **Send Masks to Unreal** and **Find** also install a watcher in the editor.
   About twice a second it checks the helper in the level and in a running game,
   and re-attaches it (the Output Log shows "Rover shadow: re-attached ...").
-  To start it with the editor, copy `Terrain_Studio/unreal_startup/init_unreal.py`
-  to `<UnrealProject>/Content/Python/init_unreal.py` (already done for
-  Moon_Simulator). It finds the studio through `LOADER_DIR` in that file, or the
-  `TERRAIN_STUDIO_LOADER` environment variable; if the studio is not there, the
-  editor starts normally and the Output Log says the watcher was not started.
-  Without the script the watcher starts when the studio sends masks or presses
-  **Find**.
+  The watcher lives in the Unreal project and needs neither Terrain Studio nor
+  this repository (see [Editor watcher](#editor-watcher)).
 - How it is added: Unreal's Python cannot set a capture's hidden actors in the
   editor, so the studio pastes the helper from text with the list already filled
   in, then sets it up. That briefly uses the clipboard; its text is put back
@@ -422,6 +417,45 @@ settings:
 During Play In Editor, only the running game changes; send the sun again after
 stopping it to keep it in the level. **Read Sun from Unreal** loads the level's
 current sun into the sliders.
+
+## Editor watcher
+
+A small Python function runs inside the Unreal Editor on every frame. It:
+
+- keeps each rover-shadow helper attached to its mask camera;
+- keeps `MPC_Sun` pointing at the sun (sun id in the object mask);
+- during Play, lays the wheel tracks and drives the wheel-dust emitters.
+
+It only reads the rover and moves its own objects. It is editor Python, so it
+works in the editor and Play In Editor, not in a packaged game.
+
+**Where it lives:** in the Unreal project, independent of Terrain Studio:
+
+| File | Role |
+| --- | --- |
+| `<Project>/Content/Python/init_unreal.py` | Unreal runs it when the editor opens; it starts the watcher |
+| `<Project>/Content/Python/TerrainStudio/*.py` | The watcher's modules: `unreal_crater_mask`, `unreal_wheel_tracks`, `unreal_wheel_dust`, `unreal_rock_placer`, `unreal_level_saver`, `rock_models` |
+
+**Sources in this repository:**
+
+| Folder | Files |
+| --- | --- |
+| `Terrain_Studio/Unreal_runtime/` | Only for the watcher: `init_unreal.py`, `unreal_crater_mask.py`, `unreal_wheel_tracks.py`, `unreal_wheel_dust.py` |
+| `Terrain_Studio/Lunar_terrain_loader/` | Shared with the studio and its other Unreal scripts: `unreal_rock_placer.py`, `unreal_level_saver.py`, `rock_models.py` |
+
+**Kept up to date:** every time Terrain Studio sends anything to Unreal (map,
+rocks, masks, sun), it first copies these files into the project when they
+differ (`Lunar_terrain_loader/runtime_sync.py`). It also puts the project's copy
+first on Unreal's module path, so the studio's commands and the watcher run the
+same code. The Output Log then shows
+"Terrain Studio: updated Content/Python/...". Files that have not changed are
+left alone. After an update, the running watcher picks up the new code on that
+send; a fresh editor start uses it from the beginning.
+
+**If the folder is missing:** the startup script falls back to the
+`TERRAIN_STUDIO_LOADER` environment variable, then to the studio's folder. If
+none is found, the editor starts normally and the Output Log says the watcher
+was not started.
 
 ## Library: browse maps
 
@@ -503,6 +537,12 @@ Terrain_Studio/
     terrain_files_generator.py   DEM reading, 16-bit conversion, Landscape sizing
     unreal_terrain_generator.py  Runs inside Unreal; spawns the Landscape
     unreal_api.py                Remote Execution client
+    runtime_sync.py              Copies the editor watcher into the Unreal project
+  Unreal_runtime/                The editor watcher (copied to <Project>/Content/Python)
+    init_unreal.py               Unreal startup script: starts the watcher
+    unreal_crater_mask.py        Mask material, rover-shadow helper, sun mask, the watcher
+    unreal_wheel_tracks.py       Wheel-track decals
+    unreal_wheel_dust.py         Wheel-dust Niagara emitters
 config/  input_maps/  outputs/
 docs/images/                     README screenshots
 ```
