@@ -96,6 +96,15 @@ def supersample_for(shape):
     return max(1, min(SUPERSAMPLE, MAX_MAP_SIDE // max(shape)))
 
 
+def load_crater_list(path):
+    """
+    Craters as [(row, col, radius)] in DEM cells from a generator crater list
+    (<group>_craters.csv, see terrain_core.export_crater_list).
+    """
+    data = np.loadtxt(path, delimiter=",", skiprows=1, usecols=(1, 2, 3), ndmin=2)
+    return [(float(r), float(c), float(radius)) for r, c, radius in data]
+
+
 def find_craters(dem, resolution, min_depth_m, progress=None):
     """
     Craters as [(row, col, radius)] in DEM cells: the circle through each rim
@@ -201,7 +210,7 @@ def crater_labels(dem, resolution, min_depth_m, crater_id=CRATER_ID, rim_id=RIM_
 
 def export_crater_mask(labels, output_dir, base_name, resolution, min_depth_m,
                        crater_id=CRATER_ID, rim_id=RIM_ID, rim_fraction=RIM_FRACTION,
-                       supersample=1):
+                       supersample=1, source="detected"):
     """
     Writes <group>_craterMask.png (8-bit, values are mask ids, row 0 = DEM row 0,
     `supersample` cells per DEM cell) and <group>_craterMask.json beside the
@@ -217,6 +226,7 @@ def export_crater_mask(labels, output_dir, base_name, resolution, min_depth_m,
         json.dump({
             "width": int(labels.shape[1]), "height": int(labels.shape[0]),
             "supersample": int(supersample),
+            "source": source,
             "resolution_m": float(resolution), "min_depth_m": float(min_depth_m),
             "crater_id": int(crater_id), "rim_id": int(rim_id),
             "rim_fraction": float(rim_fraction),

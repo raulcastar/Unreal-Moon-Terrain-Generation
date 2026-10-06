@@ -371,6 +371,35 @@ def generate_terrain(params, rows=None, cols=None, crater_count=None,
     }
 
 
+def export_crater_list(craters, path, params):
+    """
+    Writes the craters stamped by generate_terrain, one row each:
+        id, row, col, radius_px         centre and bowl radius in DEM cells
+        x_m, y_m, radius_m              the same in metres from the map corner
+        depth_m, rim_height_m           bowl depth below and rim crest above the
+                                        terrain the crater was stamped on
+        ejecta_radius_m                 where the ejecta rim fades out (1.5 x radius)
+    The rim crest is at radius_m (see add_crater). Returns `path`.
+    """
+    resolution = float(params['RESOLUTION_M_PER_PX'])
+    craters = np.asarray(craters, dtype=float).reshape(-1, 3)
+    depth = craters[:, 2] * float(params['CRATER_DEPTH_RATIO'])
+    frame = pd.DataFrame({
+        'id': np.arange(len(craters), dtype=int),
+        'row': craters[:, 0].astype(int),
+        'col': craters[:, 1].astype(int),
+        'radius_px': craters[:, 2],
+        'x_m': craters[:, 1] * resolution,
+        'y_m': craters[:, 0] * resolution,
+        'radius_m': craters[:, 2] * resolution,
+        'depth_m': depth,
+        'rim_height_m': depth * float(params['CRATER_RIM_HEIGHT_RATIO']),
+        'ejecta_radius_m': craters[:, 2] * 1.5 * resolution,
+    })
+    frame.to_csv(path, index=False, float_format='%.4f')
+    return path
+
+
 def full_crater_count(params):
     """
     Crater count for the full-resolution map.
@@ -387,13 +416,18 @@ def full_crater_count(params):
 # =========================================================================
 
 def export_outputs(elevation_matrix, output_dir, base_name='generated_elevationMap_moon',
-                   export_csv=True, export_npy=True, progress=None, cancel_check=None):
+                   export_csv=True, export_npy=True, progress=None, cancel_check=None,
+                   craters=None, params=None):
     """
     Serializes the elevation matrix to the formats consumed downstream.
 
     All files for one run are written to a per-group subfolder of `output_dir`,
     named after `base_name` with any `_elevationMap` tag removed. Returns a dict
     mapping each format key to its absolute path.
+
+    With `craters` (generate_terrain's (row, col, radius) registry) and the
+    generation `params`, also writes <group>_craters.csv: the exact crater list,
+    used as ground truth instead of detecting craters in the DEM.
     """
     def report(message, fraction):
         if cancel_check and cancel_check():
@@ -424,6 +458,11 @@ def export_outputs(elevation_matrix, output_dir, base_name='generated_elevationM
         elevation_npy = os.path.join(target_dir, f"{base_name}.npy")
         np.save(elevation_npy, elevation_matrix)
         written['elevation_npy'] = elevation_npy
+
+    if craters is not None and params is not None:
+        report("Writing the crater list", 0.9)
+        written['craters_csv'] = export_crater_list(
+            craters, os.path.join(target_dir, f"{group}_craters.csv"), params)
 
     report("Export complete", 1.0)
     return written

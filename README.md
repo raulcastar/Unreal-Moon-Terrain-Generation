@@ -34,7 +34,9 @@ Every view opens in the same window and has a **⌂ Home** button to return.
 - **Readouts** (right): surface statistics and the resulting Unreal Landscape
   topology, which warns if the map exceeds a single Landscape's 50×50 components.
 - **Generate Full Resolution** writes the DEM to `outputs/<name>/`; the panel
-  lists the exact filenames before you run.
+  lists the exact filenames before you run. It also writes `<name>_craters.csv`,
+  every crater it placed (`id, row, col, radius_px, x_m, y_m, radius_m, depth_m,
+  rim_height_m, ejecta_radius_m`), which step 3 uses as exact crater ground truth.
 
 Column widths are adjustable with the drag handles.
 
@@ -102,9 +104,21 @@ Shows craters in the rover's object mask, alongside the rocks:
    `GNC-Moon-Simulator/component_stereo_depth/config/params.yaml` needs, for the
    rock and crater ids together, ready to copy.
 
-How craters are found:
+Where the craters come from:
 
-- They start from the closed depressions the rock planner treats as impassable.
+- **Terrains generated in the studio** come with `<name>_craters.csv`, and step 3
+  uses it by default (*Exact, from the generator*). Centres and radii are the
+  ones the generator stamped: the crater is the bowl inside the rim crest, at the
+  crater radius, and the generator's ejecta rim reaches 1.5 × the radius (rim
+  width 0.5).
+- **Other maps** are *Detected in the DEM*, as follows. On generated terrain,
+  detection sizes large craters (radius ≥ 10 px) within 3%, but makes small ones
+  (5–10 px) about 40% too small. That is the reason to prefer the generator's
+  list when there is one.
+
+How detection works:
+
+- It starts from the closed depressions the rock planner treats as impassable.
 - Each crater is the circle fitted through its rim crest, so it covers the whole
   bowl even on sloping ground.
 - Shallow or elongated basins are rejected.

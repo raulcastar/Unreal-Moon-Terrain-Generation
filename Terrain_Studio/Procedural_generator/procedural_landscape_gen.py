@@ -88,6 +88,8 @@ def generate_and_save_data():
         export_csv=config['EXPORT_CSV'],
         export_npy=config['EXPORT_NPY'],
         progress=log_progress,
+        craters=result['craters'],
+        params=config,
     )
 
     print(f"[+] Done. Craters placed: {result['crater_count']}")

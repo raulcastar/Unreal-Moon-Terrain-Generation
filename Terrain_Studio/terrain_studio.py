@@ -744,7 +744,9 @@ def planned_output_files(base_name, export_csv):
     """
     elevation_name = f"{base_name}_elevationMap"
     files = [(f"{elevation_name}.npy",
-              "Elevation grid as a NumPy binary; the input for Send to Unreal.")]
+              "Elevation grid as a NumPy binary; the input for Send to Unreal."),
+             (f"{base_name}_craters.csv",
+              "Every crater placed (centre, radius, depth): exact crater ground truth.")]
     if export_csv:
         files += [
             (f"{elevation_name}.csv",
@@ -2585,8 +2587,9 @@ class CraterMaskStudio(ttk.Frame):
         self.figure_dpi = figure_dpi
         self.dem = None
         self.dem_path = None
-        self.craters = None           # find_craters() result for the loaded DEM
-        self._crater_depth = None     # Min depth the craters were found with
+        self.craters = None           # [(row, col, radius)] for the loaded DEM
+        self._crater_depth = None     # Min depth they were found with, or "generator"
+        self.crater_list_path = None  # The generator's crater list for this map, if any
         self._cameras_listed = False
         self._queue = queue.Queue()
         self._worker = None
@@ -2595,6 +2598,7 @@ class CraterMaskStudio(ttk.Frame):
         self.resolution_var.set(f"{resolution:g}")
         self._load_ids()
         self.after(80, self._drain_queue)
+        self._source_changed()
         self.log("Find the craters, pick the mask camera, then send them to Unreal.")
         if source_path and os.path.exists(source_path):
             self.load_dem(source_path)
@@ -2663,6 +2667,24 @@ class CraterMaskStudio(ttk.Frame):
 
         # Craters
         craters = self._group(inner, "Craters")
+        self.crater_source_var = tk.StringVar(value="detect")
+        self.generator_radio = ttk.Radiobutton(
+            craters, text="Exact, from the generator", value="generator",
+            variable=self.crater_source_var, command=self._source_changed)
+        self.generator_radio.pack(anchor="w")
+        Tooltip(self.generator_radio,
+                "Terrains generated in this studio list every crater they placed\n"
+                "(<map>_craters.csv): centres and radii are exact, nothing is guessed.\n"
+                "The rim crest is at the crater radius; the ejecta rim reaches 1.5 x.")
+        detect_radio = ttk.Radiobutton(
+            craters, text="Detected in the DEM", value="detect",
+            variable=self.crater_source_var, command=self._source_changed)
+        detect_radio.pack(anchor="w")
+        Tooltip(detect_radio,
+                "For maps from elsewhere: closed depressions are fitted to their rim\n"
+                "crests (min depth below).")
+        self.crater_source_info_var = tk.StringVar()
+        self._readout(craters, self.crater_source_info_var)
         self.depth_row = ParamRow(craters, (
             "MIN_CRATER_DEPTH_M", "Min crater depth (m)", 0.05, 20.0, 'log',
             "Closed depressions at least this deep seed a crater; each is then\n"
@@ -2883,6 +2905,10 @@ class CraterMaskStudio(ttk.Frame):
         self.dem_path = path
         self.source_var.set(os.path.basename(path))
         self.craters = None
+        candidate = os.path.join(os.path.dirname(path), f"{dem_group_name(path)}_craters.csv")
+        self.crater_list_path = candidate if os.path.isfile(candidate) else None
+        self.crater_source_var.set("generator" if self.crater_list_path else "detect")
+        self._source_changed()
         self.log(f"Loading DEM: {os.path.basename(path)} ...")
         self._message(f"Loading {os.path.basename(path)} ...")
         self.progress.start(f"Loading {os.path.basename(path)}", "load_dem",
@@ -2936,6 +2962,36 @@ class CraterMaskStudio(ttk.Frame):
         self._worker = threading.Thread(target=worker, daemon=True)
         self._worker.start()
 
+    def _from_generator(self):
+        return self.crater_source_var.get() == "generator" and self.crater_list_path is not None
+
+    def _source_changed(self):
+        """Shows which crater source is in use and enables what it needs."""
+        has_list = self.crater_list_path is not None
+        self.generator_radio.state(["!disabled"] if has_list else ["disabled"])
+        if not has_list and self.crater_source_var.get() == "generator":
+            self.crater_source_var.set("detect")
+        generator = self._from_generator()
+        for widget in (self.depth_row.slider, self.depth_row.entry):
+            widget.state(["disabled"] if generator else ["!disabled"])
+        self.find_button.configure(text="Load Craters" if generator else "Find Craters")
+        if generator:
+            self.crater_source_info_var.set(
+                f"Generated here: using {os.path.basename(self.crater_list_path)}.")
+        elif has_list:
+            self.crater_source_info_var.set("A generator crater list exists; detecting anyway.")
+        else:
+            self.crater_source_info_var.set("No generator crater list for this map: detecting.")
+        if self.craters is not None and self._crater_depth != self._crater_key():
+            self.craters = None
+            self.crater_info_var.set("Crater source changed: press "
+                                     f"{self.find_button.cget('text')}.")
+            self._redraw()
+
+    def _crater_key(self):
+        """What the current craters must have been made with to be reused."""
+        return "generator" if self._from_generator() else self.depth_row.get()
+
     def _craters_changed(self):
         if self.craters is not None:
             self.crater_info_var.set("Depth changed: Find Craters again.")
@@ -2943,6 +2999,15 @@ class CraterMaskStudio(ttk.Frame):
     def find_craters(self, then=None):
         if self.dem is None:
             self.log("Load a DEM first.", level="warn")
+            return
+        if self._from_generator():
+            path = self.crater_list_path
+
+            def load(log):
+                craters = crater_mask.load_crater_list(path)
+                log(f"Loaded the generator's crater list: {os.path.basename(path)}")
+                self._queue.put(("craters", (craters, "generator", then)))
+            self._run("Loading craters...", load, "load_crater_list")
             return
         dem, resolution, depth = self.dem, self._resolution(), self.depth_row.get()
 
@@ -2964,7 +3029,7 @@ class CraterMaskStudio(ttk.Frame):
         if self._read_ids() is None:
             self.log("Fix the ids first (1-255, rim 0-255).", level="error")
             return
-        if self.craters is None or self._crater_depth != self.depth_row.get():
+        if self.craters is None or self._crater_depth != self._crater_key():
             self.find_craters(then=lambda: self.export_crater_map(then))
             return
         k = crater_mask.supersample_for(self.dem.shape)
@@ -2972,14 +3037,16 @@ class CraterMaskStudio(ttk.Frame):
         rim_fraction = self.rim_row.get()
         rim = ids["rim"] if rim_fraction > 0 else 0
         shape, craters, group = self.dem.shape, self.craters, self._group_name()
-        resolution, depth = self._resolution(), self._crater_depth
+        resolution = self._resolution()
+        source = "generator" if self._crater_depth == "generator" else "detected"
+        depth = 0.0 if source == "generator" else self._crater_depth
 
         def job(log):
             labels = crater_mask.render_labels(shape, craters, ids["crater"], rim,
                                                rim_fraction, k)
             written = crater_mask.export_crater_mask(
                 labels, GENERATOR_OUTPUT_DIR, group, resolution, depth,
-                ids["crater"], rim, rim_fraction, supersample=k)
+                ids["crater"], rim, rim_fraction, supersample=k, source=source)
             log(f"Crater map written ({labels.shape[1]} x {labels.shape[0]}, {k} per DEM cell):",
                 "ok")
             for path in written.values():
@@ -3128,8 +3195,10 @@ class CraterMaskStudio(ttk.Frame):
                     self.craters, self._crater_depth, then = payload
                     labels, ids = self._labels()
                     cover = 100.0 * (labels == ids["crater"]).mean()
-                    self.crater_info_var.set(f"{len(self.craters)} craters, {cover:.1f}% of the map.")
-                    self.log(f"Found {len(self.craters)} craters.", level="ok")
+                    origin = "from the generator" if self._crater_depth == "generator" else "detected"
+                    self.crater_info_var.set(f"{len(self.craters)} craters ({origin}), "
+                                             f"{cover:.1f}% of the map.")
+                    self.log(f"{len(self.craters)} craters {origin}.", level="ok")
                     self._redraw()
                     if then:
                         self.after(250, then)   # Once the worker thread has ended
@@ -5754,7 +5823,8 @@ class TerrainStudio(tk.Tk):
             written = terrain_core.export_outputs(
                 result['elevation'], GENERATOR_OUTPUT_DIR, base_name=elevation_name,
                 export_csv=params['EXPORT_CSV'], export_npy=True,
-                progress=self._progress_hook, cancel_check=self._cancel_event.is_set)
+                progress=self._progress_hook, cancel_check=self._cancel_event.is_set,
+                craters=result['craters'], params=params)
             self.exported_paths = written
             self._post("full", result)
             self._log_from_worker(
