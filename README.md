@@ -257,7 +257,19 @@ to `mask_labels` (the GNC Labels box lists it).
 
 With *Rover leaves wheel tracks* (Wheel Tracks group, on by default), each wheel of
 the mask camera's actor leaves a track on the Landscape during Play: a shallow
-rut with tread ribs across it, and slightly darker, smoother regolith. Track
+rut with tread ribs across it, in packed-down regolith. The decal redraws the
+Landscape's own regolith texture at the same place (same tiling, desaturation
+and near/far blend as `Landscape_Material`, read from it on each send). The
+regolith's surface is matched too, so a track keeps the ground's grain and colour
+and blends into it:
+  - **Normal:** the Landscape's normal map at both tilings, in the Landscape's own
+    frame and on the slope under the track, so the grain is lit as around it,
+    pressed to 60% by the wheel, plus the rut and the tread: square lug imprints
+    every 3 cm with sloped flanks, which catch the sun like a tyre print.
+  - **Roughness:** the Landscape's roughness texture at both tilings, 10% smoother.
+  - **Specular:** the Landscape's (0), so tracks do not shine.
+  - **Colour:** the lug imprints are 8% darker, so the tread also shows under a high sun.
+  - Result: about 9% darker than the ground beside them. Track
 pixels get id 60 (`wheel_track`) in `object_mask`; add `"60:wheel_track"` to
 `mask_labels`.
 
