@@ -2569,6 +2569,7 @@ GNC_MASK_LABELS = "GNC-Moon-Simulator/component_stereo_depth/config/params.yaml"
 SUN_MASK_ID = 50   # The sun's disc in the object mask (SUN_ID in unreal_crater_mask)
 SUN_GLARE_ID = 51  # Its glare ring (SUN_GLARE_ID there)
 TRACK_MASK_ID = 60  # Wheel tracks (TRACK_ID there)
+DUST_MASK_ID = 70   # Wheel dust grains (unreal_wheel_dust.DUST_ID)
 # Tread looks (unreal_wheel_tracks.TRACK_PATTERNS) and lug spacings that divide its
 # 12 cm decal spacing.
 TRACK_PATTERNS = (("Straight lugs", "straight"), ("Chevron", "chevron"),
@@ -2815,6 +2816,26 @@ class CraterMaskStudio(ttk.Frame):
         self.track_preview = tk.Canvas(tracks, height=46, highlightthickness=0, background="#d9d6d0")
         self.track_preview.pack(fill="x", pady=(4, 0))
         Tooltip(self.track_preview, "Preview of one wheel's track from above (18 cm, travel left to right).")
+        self.dust_var = tk.BooleanVar(value=True)
+        self.dust_amount_var = tk.DoubleVar(value=1.0)
+        dust_check = ttk.Checkbutton(tracks, text=f"Wheels kick up lunar dust (id {DUST_MASK_ID})",
+                                     variable=self.dust_var)
+        dust_check.pack(anchor="w", pady=(6, 0))
+        Tooltip(dust_check,
+                "Each wheel on the ground runs the Niagara dust system /Game/Landscape/NS_LunarDust\n"
+                "while it rolls, pointed backwards (local +X back, +Z up). For lunar dust set it to\n"
+                "Gravity Force (0, 0, -162) and no Drag: with no air, grains fly ballistic arcs\n"
+                "and drop back, nothing stays suspended. Dust gets its own id in object_mask.\n"
+                "Needs the wheel tracks.")
+        dust_row = ttk.Frame(tracks)
+        dust_row.pack(fill="x", pady=(2, 0))
+        dust_label = ttk.Label(dust_row, text="Dust amount", font=("Segoe UI", 8))
+        dust_label.pack(side="left")
+        ttk.Scale(dust_row, variable=self.dust_amount_var, from_=0.0, to=3.0).pack(
+            side="left", fill="x", expand=True, padx=(6, 0))
+        Tooltip(dust_label, "Passed to the Niagara system as the user parameter DustAmount (1 = default),\n"
+                            "for its spawn rate; WheelSpeed (cm/s) is passed too.")
+        self.dust_var.trace_add("write", self._ids_changed)
         self.track_style_button = ttk.Button(tracks, text="Apply Track Look", command=self.apply_track_style)
         self.track_style_button.pack(fill="x", pady=(4, 0))
         Tooltip(self.track_style_button,
@@ -2999,6 +3020,8 @@ class CraterMaskStudio(ttk.Frame):
                     lines.append(f'- "{SUN_GLARE_ID}:sun_glare"')
             if self.tracks_var.get():
                 lines.append(f'- "{TRACK_MASK_ID}:wheel_track"')
+                if self.dust_var.get():
+                    lines.append(f'- "{DUST_MASK_ID}:dust"')
             self.labels_text.insert("end", "\n".join(lines))
         self.labels_text.configure(state="disabled")
 
@@ -3225,6 +3248,8 @@ class CraterMaskStudio(ttk.Frame):
         sun_glare = self._glare_deg()
         wheel_tracks = self.tracks_var.get()
         track_style = self._track_style()
+        wheel_dust = wheel_tracks and self.dust_var.get()
+        dust_amount = round(float(self.dust_amount_var.get()), 2)
         self.log(f"Sending {os.path.basename(png)} to Unreal (crater id {meta['crater_id']}, "
                  f"rim id {meta['rim_id']}; shadow feed {'on' if shadows else 'off'}, rover "
                  f"shadow {'on' if rover_shadow else 'off'}; mask camera "
@@ -3239,7 +3264,8 @@ class CraterMaskStudio(ttk.Frame):
                       camera_capture=camera_capture, save_level=save_level,
                       shadows=shadows, rover_shadow=rover_shadow, sun=sun,
                       sun_glare_deg=sun_glare, wheel_tracks=wheel_tracks,
-                      track_style=track_style, log=log))
+                      track_style=track_style, wheel_dust=wheel_dust,
+                      dust_amount=dust_amount, log=log))
 
     def _track_style(self):
         """The tread look chosen in the Wheel Tracks group (unreal_wheel_tracks style)."""

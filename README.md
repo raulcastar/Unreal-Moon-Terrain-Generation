@@ -300,6 +300,48 @@ pixels get id 60 (`wheel_track`) in `object_mask`; add `"60:wheel_track"` to
   Play); **Send Masks to Unreal** applies it too.
 - Unticking the option and sending again removes the decals.
 
+### Wheel dust
+
+With *Wheels kick up lunar dust* (Wheel Tracks group; needs the tracks), each
+wheel runs the Niagara system `/Game/Landscape/NS_LunarDust` while it rolls on the
+ground. Dust pixels get id 70 (`dust`) in `object_mask`; add `"70:dust"` to
+`mask_labels`.
+
+- During Play the editor watcher gives each wheel its own emitter. They are
+  spawned in the game, never attached to the rover, and kept at the wheel's
+  ground contact, with local +X pointing backwards along the travel and +Z up.
+- They are activated once and stay running for the whole Play, because switching
+  a Niagara system off and on ends and restarts it, emptied. Dust is controlled
+  through two float user parameters, set every frame:
+  - `WheelSpeed`: the wheel's measured speed in cm/s, smoothed;
+  - `DustAmount`: the studio's Dust amount.
+
+  Both are 0 while the wheel stands still or is off the ground, so the system's
+  **Spawn Rate must be multiplied by `User.DustAmount`** (and may scale with
+  `User.WheelSpeed`). Give both parameters non-zero defaults (e.g. 35 and 1) for
+  the Niagara editor preview.
+- **Send Masks to Unreal** creates the sprite material
+  `/Game/GroundTruth_Masks/M_LunarDustSprite` (soft, round, translucent, regolith
+  colour, writes CustomDepth) and sets the system to write stencil 70.
+- The look and physics are set inside the Niagara system. For lunar dust (no
+  air, so nothing stays suspended):
+
+  | Module / setting | Value |
+  | --- | --- |
+  | User parameters | add floats `WheelSpeed` and `DustAmount` |
+  | Emitter Properties | Local Space off (particles stay where thrown) |
+  | Spawn Rate | e.g. 600 per second, times `DustAmount` (required, so dust stops with the wheel) |
+  | Add Velocity (in Cone) | axis (1, 0, 1) in local space (back and up); speed 0.6-2.2 x `WheelSpeed` |
+  | Gravity Force | (0, 0, -162) cm/s^2, the Moon's gravity |
+  | Drag | delete the module (no air) |
+  | Lifetime | 0.6-1.5 s; fade alpha out at the end |
+  | Collision (optional) | restitution 0, so grains settle on the ground |
+  | Sprite Renderer | material `M_LunarDustSprite`, size 1-3 cm |
+  | System bounds | fixed bounds at least +/-300 cm, or off |
+
+- The navcams look forward, so dust thrown behind the wheels shows mostly when
+  reversing or turning, as on a real rover.
+
 ### Rover shadow
 
 With *Tag the rover's shadow separately* (on by default), ground and rocks in the

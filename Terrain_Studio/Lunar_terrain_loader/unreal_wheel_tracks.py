@@ -391,19 +391,28 @@ def setup_wheel_tracks(actor, pool_size=POOL_SIZE, style=None):
                   f"{describe_style(style)}); they appear during Play.")
 
 
+def _alive(obj):
+    """True if `obj` still exists. (is_valid raises, not returns False, for an object
+    of an earlier Play session.)"""
+    try:
+        return obj is not None and unreal.SystemLibrary.is_valid(obj)
+    except Exception:
+        return False
+
+
 def _game_state(world, state):
     """
     Wheels, rover and pool of `world` (a running game), cached in `state`. Every
     Play reuses the same world name, so the cache is checked object by object.
     """
-    valid = unreal.SystemLibrary.is_valid
+    valid = _alive
     cached = ([state.get("track_rover")] + [w for w, _ in state.get("track_wheels", [])]
               + state.get("track_pool", [])[:1])
     if (state.get("track_world") == world.get_path_name() and cached[0] is not None
             and all(valid(o) for o in cached)):
         return state
     state.update(track_world=world.get_path_name(), track_wheels=[], track_next=0, track_last={},
-                 track_pending=[])
+                 track_pending=[], track_time={})
     pool = _pool(world)
     if not pool:
         state["track_pool"] = []
@@ -421,6 +430,18 @@ def _game_state(world, state):
     return state
 
 
+def _kick_dust(state, world, now, ground, direction, speed):
+    """A wheel on the ground rolled on by one piece: throw its dust (unreal_wheel_dust)."""
+    if not state.get("dust_on", True):
+        return
+    try:
+        import unreal_wheel_dust
+        unreal_wheel_dust.kick(state, world, now, ground, direction, speed)
+    except Exception as error:      # Report once; tracks carry on without dust
+        unreal.log_warning(f"Wheel dust: {error}")
+        state["dust_on"] = False
+
+
 def update_wheel_tracks(world, state):
     """Called every frame by the editor watcher while a game runs."""
     if world is None or not unreal.get_editor_subsystem(
@@ -431,19 +452,24 @@ def update_wheel_tracks(world, state):
     if not pool or not state["track_wheels"]:
         return
     ignore = [state["track_rover"]]
+    now = unreal.GameplayStatics.get_time_seconds(world)
     centres = [wheel.get_world_location() for wheel, _ in state["track_wheels"]]
     pending = state["track_pending"]
     for (wheel, radius), centre in zip(state["track_wheels"], centres):
         key = wheel.get_name()
         last = state["track_last"].get(key)
         if last is None:
-            state["track_last"][key] = centre
+            state["track_last"][key], state["track_time"][key] = centre, now
             continue
         travel = unreal.Vector(centre.x - last.x, centre.y - last.y, 0.0)
         distance = math.hypot(travel.x, travel.y)
         if distance < TRACK_SPACING_CM:
             continue
         direction = unreal.Vector(travel.x / distance, travel.y / distance, 0.0)
+        state["dust_current_wheel"] = key                       # For the dust kicked below
+        elapsed = now - state["track_time"].get(key, now)
+        speed = distance / elapsed if elapsed > 1e-3 else 0.0   # cm/s since the last piece
+        state["track_time"][key] = now
         steps = min(int(distance // TRACK_SPACING_CM), 8)     # Catch up after a fast frame
         for step in range(1, steps + 1):
             point = unreal.Vector(last.x + direction.x * TRACK_SPACING_CM * step,
@@ -461,6 +487,7 @@ def update_wheel_tracks(world, state):
                 continue                                # In the air, or on a rock
             pending.append((ground, unreal.MathLibrary.make_rot_from_xz(
                 unreal.Vector(-normal.x, -normal.y, -normal.z), direction)))
+            _kick_dust(state, world, now, ground, direction, speed)
         state["track_last"][key] = unreal.Vector(last.x + direction.x * TRACK_SPACING_CM * steps,
                                                  last.y + direction.y * TRACK_SPACING_CM * steps,
                                                  centre.z) if steps < 8 else centre

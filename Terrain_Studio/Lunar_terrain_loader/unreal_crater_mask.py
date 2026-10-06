@@ -198,6 +198,15 @@ def import_mask_texture(png_path, name):
     return texture
 
 
+def _alive(obj):
+    """True if `obj` still exists. (is_valid raises, not returns False, for an object
+    of an earlier Play session.)"""
+    try:
+        return obj is not None and unreal.SystemLibrary.is_valid(obj)
+    except Exception:
+        return False
+
+
 def _sun_light(world):
     """The level's sun: the Directional Light linked to the sky atmosphere, else the first."""
     lights = list(unreal.GameplayStatics.get_all_actors_of_class(world, unreal.DirectionalLight))
@@ -238,7 +247,7 @@ def update_sun_mask(world, state=None):
         return
     state["sun_collection"] = collection
     light = state.get("sun_light")
-    if light is None or not unreal.SystemLibrary.is_valid(light) or state.get("sun_world") != world:
+    if not _alive(light) or state.get("sun_world") != world:
         light = state["sun_light"] = _sun_light(world)
         state["sun_world"], state["sun_value"] = world, None
     if light is None:
@@ -679,12 +688,22 @@ def _watch_tick(delta_seconds):
         import unreal_wheel_tracks
         game = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_game_world()
         if game is not None:
-            unreal_wheel_tracks.update_wheel_tracks(game, state)
+            unreal_wheel_tracks.update_wheel_tracks(game, state)     # Also reports rolling wheels
         state["track_error"] = None
     except Exception as error:          # Report each new error once; rebuild the cache
         if state.get("track_error") != str(error):
             unreal.log_warning(f"Wheel tracks: {error}")
         state["track_error"], state["track_world"] = str(error), None
+    try:                                # Dust separately: it must never stop the tracks
+        import unreal_wheel_dust
+        game = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_game_world()
+        if game is not None:
+            unreal_wheel_dust.update_wheel_dust(game, state)
+        state["dust_error"] = None
+    except Exception as error:
+        if state.get("dust_error") != str(error):
+            unreal.log_warning(f"Wheel dust: {error}")
+        state["dust_error"], state["dust_emitters"] = str(error), None
     state["elapsed"] += delta_seconds
     state["since_scan"] += delta_seconds
     if state["elapsed"] < WATCH_INTERVAL:
@@ -695,7 +714,7 @@ def _watch_tick(delta_seconds):
         world = editor.get_game_world() or editor.get_editor_world()
         if world is None:
             return
-        valid = unreal.SystemLibrary.is_valid
+        valid = _alive
         stale = (state["world"] != world.get_path_name()
                  or not all(valid(h) and valid(c) for h, c in state["pairs"])
                  or (not state["pairs"] and state["since_scan"] >= WATCH_RESCAN))
@@ -780,7 +799,7 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
                       landscape_width=0, landscape_stencil=LANDSCAPE_STENCIL, supersample=1,
                       camera_actor="", camera_capture="", save_level=False, shadows=True,
                       rover_shadow=True, sun=True, sun_glare_deg=SUN_GLARE_DEG,
-                      wheel_tracks=True, track_style=None):
+                      wheel_tracks=True, track_style=None, wheel_dust=True, dust_amount=1.0):
     """
     Imports the crater map and makes the object mask show it on the Landscape;
     with `shadows`, the frame also carries the shadow mask and, with
@@ -788,7 +807,8 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
     the sun's disc gets id SUN_ID in the object mask and the sky around it out to
     `sun_glare_deg` gets SUN_GLARE_ID (0 for none); with `wheel_tracks`, the mask
     camera's actor leaves wheel tracks (TRACK_ID) during Play, with the tread look
-    `track_style` (unreal_wheel_tracks.DEFAULT_STYLE). When given,
+    `track_style` (unreal_wheel_tracks.DEFAULT_STYLE) and, with `wheel_dust`,
+    kicks up lunar dust (DUST_ID; `dust_amount` scales it). When given,
     sets up `camera_capture` on `camera_actor` as the mask camera. Returns a
     summary.
     """
@@ -845,6 +865,19 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
     elif not _in_pie() and unreal_wheel_tracks.remove_wheel_tracks():
         track_note = "Wheel tracks: off (decals removed)."
 
+    # Wheel dust: instanced grains for the same actor (editor only); needs the tracks.
+    import unreal_wheel_dust
+    importlib.reload(unreal_wheel_dust)
+    dust_note, dust_on = "", False
+    if wheel_dust and tracks_on and found is not None and not _in_pie():
+        dust_on, dust_note = unreal_wheel_dust.setup_wheel_dust(found[0])
+    elif wheel_dust and tracks_on and _in_pie():
+        dust_on = unreal.EditorAssetLibrary.does_asset_exist(unreal_wheel_dust.DUST_SYSTEM)
+    elif not wheel_dust and not _in_pie() and unreal_wheel_dust.remove_wheel_dust():
+        dust_note = "Wheel dust: off."
+    elif wheel_dust and not tracks_on:
+        dust_note = "Wheel dust: off, it needs the wheel tracks."
+
     _build_mask_graph(material, texture, {
         "LandscapeStencil": landscape_stencil, "CraterOriginX": x0, "CraterOriginY": y0,
         "CraterStepX": step_x, "CraterStepY": step_y,
@@ -869,6 +902,8 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
     if track_note:
         summary += "\n" + track_note + (f" Track pixels are id {TRACK_ID} in the object mask."
                                         if tracks_on else "")
+    if dust_note:
+        summary += "\n" + dust_note
     if renamed:
         summary += "\nAssets: " + "; ".join(renamed) + "."
     if camera_actor and camera_capture:
@@ -890,6 +925,10 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
         install_rover_shadow_watch()
     elif not _in_pie():
         uninstall_rover_shadow_watch()
+    state = getattr(builtins, "_rover_shadow_watch", None)    # After the watcher (re)starts
+    if state is not None:
+        state["dust_on"] = dust_on
+        state["dust_amount"] = max(0.0, float(dust_amount))
     if save_level and not _in_pie():
         import unreal_level_saver
         summary += "\n" + unreal_level_saver.save_current_level()
