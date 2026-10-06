@@ -256,8 +256,13 @@ rover's own shadow get id 5 (`rover_shadow`) instead of 2 or 4.
   So **Send Masks to Unreal** and **Find** also install a watcher in the editor.
   About twice a second it checks the helper in the level and in a running game,
   and re-attaches it (the Output Log shows "Rover shadow: re-attached ...").
-  The watcher lasts until the editor closes. After a restart, press **Find** or
-  send once to start it again; until then **Find** still re-attaches on the spot.
+  To start it with the editor, copy `Terrain_Studio/unreal_startup/init_unreal.py`
+  to `<UnrealProject>/Content/Python/init_unreal.py` (already done for
+  Moon_Simulator). It finds the studio through `LOADER_DIR` in that file, or the
+  `TERRAIN_STUDIO_LOADER` environment variable; if the studio is not there, the
+  editor starts normally and the Output Log says the watcher was not started.
+  Without the script the watcher starts when the studio sends masks or presses
+  **Find**.
 - How it is added: Unreal's Python cannot set a capture's hidden actors in the
   editor, so the studio pastes the helper from text with the list already filled
   in, then sets it up. That briefly uses the clipboard; its text is put back
