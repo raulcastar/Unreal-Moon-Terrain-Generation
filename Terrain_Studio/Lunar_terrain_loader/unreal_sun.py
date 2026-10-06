@@ -3,8 +3,8 @@ Unreal Lunar Sun
 ----------------
 Executes natively within the Unreal Engine Python environment. Points a
 Directional Light at the sun chosen in the studio, with lunar settings: white
-light at any elevation (no atmosphere), a 0.53 degree solar disc and long
-dynamic shadows.
+light, a 0.53 degree solar disc and long dynamic shadows. The light stays the
+SkyAtmosphere's sun (Atmosphere Sun Light, index 0), so the sky draws its disc.
 
 Azimuth is clockwise from the top of the DEM image: 0 = -Y, 90 = -X. DEM
 columns run towards -X and rows towards +Y (unreal_rock_placer.landscape_frame).
@@ -78,7 +78,8 @@ def _apply_editor(light, rotation, intensity_lux, source_angle_deg):
     comp.set_editor_property("use_temperature", False)
     comp.set_editor_property("light_source_angle", float(source_angle_deg))
     comp.set_editor_property("light_source_soft_angle", 0.0)
-    comp.set_editor_property("atmosphere_sun_light", False)
+    comp.set_editor_property("atmosphere_sun_light", True)      # Linked to the SkyAtmosphere
+    comp.set_editor_property("atmosphere_sun_light_index", 0)
     comp.set_editor_property("cast_shadows", True)
     distance = comp.get_editor_property("dynamic_shadow_distance_movable_light")
     comp.set_editor_property("dynamic_shadow_distance_movable_light",
@@ -94,7 +95,8 @@ def _apply_runtime(light, rotation, intensity_lux, source_angle_deg):
     comp.set_use_temperature(False)
     comp.set_light_source_angle(float(source_angle_deg))
     comp.set_light_source_soft_angle(0.0)
-    comp.set_atmosphere_sun_light(False)
+    comp.set_atmosphere_sun_light(True)
+    comp.set_atmosphere_sun_light_index(0)
     comp.set_cast_shadows(True)
     distance = comp.get_editor_property("dynamic_shadow_distance_movable_light")
     comp.set_dynamic_shadow_distance_movable_light(max(float(distance), SHADOW_DISTANCE_CM))
