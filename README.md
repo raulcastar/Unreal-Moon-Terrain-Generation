@@ -126,6 +126,8 @@ How the mask is drawn: the mask camera's material looks at each Landscape pixel
 - rocks and the rover keep their own ids;
 - craters hidden behind terrain stay hidden;
 - the original material is kept as `PPM_ObjectMask_Original`;
+- the mask material, its backup and the crater maps all live in
+  `/Game/GroundTruth_Masks`;
 - it also works during Play In Editor, although camera changes made then last
   only until it stops.
 

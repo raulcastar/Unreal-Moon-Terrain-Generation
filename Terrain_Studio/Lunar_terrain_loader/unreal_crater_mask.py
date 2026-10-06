@@ -23,9 +23,10 @@ from unreal_rock_placer import find_landscape, landscape_frame
 
 CAMERAS_JSON_PREFIX = "CAMERAS_JSON "
 
-MASK_MATERIAL = "/Game/Blueprints/PPM_ObjectMask"
-BACKUP_MATERIAL = "/Game/Blueprints/PPM_ObjectMask_Original"
-TEXTURE_FOLDER = "/Game/GroundTruth"
+GROUND_TRUTH_FOLDER = "/Game/GroundTruth_Masks"   # Mask material, its backup and crater maps
+MASK_MATERIAL = f"{GROUND_TRUTH_FOLDER}/PPM_ObjectMask"
+BACKUP_MATERIAL = f"{GROUND_TRUTH_FOLDER}/PPM_ObjectMask_Original"
+TEXTURE_FOLDER = GROUND_TRUTH_FOLDER
 LANDSCAPE_STENCIL = 10
 
 # Custom node: crater lookup on landscape pixels, then the original id colouring.
