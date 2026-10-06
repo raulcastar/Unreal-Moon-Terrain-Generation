@@ -104,9 +104,11 @@ Shows craters and shadows in the rover's object mask, alongside the rocks:
    `Navcam_Mask`.
 3. **Send Masks to Unreal** does three things:
    - exports the crater map;
-   - rebuilds `PPM_ObjectMask` so the Landscape shows the craters and, with
-     *Stream a shadow mask feed*, the frame also carries the shadows;
-   - sets up the chosen camera: it gets `PPM_ObjectMask` and the sun-only render
+   - rebuilds `PPM_GroundTruthMask` so the Landscape shows the craters and, with
+     *Stream a shadow mask feed*, the frame also carries the shadows and, with
+     *Tag the rover's shadow separately*, the rover's own shadow
+     ([Rover shadow](#rover-shadow));
+   - sets up the chosen camera: it gets `PPM_GroundTruthMask` and the sun-only render
      shadows need, and, if its actor has a StereoCamStreamer, it becomes the
      streamed mask camera.
 
@@ -150,9 +152,17 @@ How the mask is drawn: the mask camera's material looks at each Landscape pixel
 
 - rocks and the rover keep their own ids;
 - craters hidden behind terrain stay hidden;
-- the original material is kept as `PPM_ObjectMask_Original`;
-- the mask material, its backup and the crater maps all live in
-  `/Game/GroundTruth_Masks`;
+- everything lives in `/Game/GroundTruth_Masks`:
+
+  | Asset | What it is |
+  | --- | --- |
+  | `PPM_GroundTruthMask` | Post-process material on the mask camera: object ids, crater ids on the Landscape, shadow flag bits |
+  | `PPM_GroundTruthMask_Backup` | That material as it was before the studio first changed it; **Restore Original Mask Material** puts it back |
+  | `T_CraterIds_<map>` | Crater map: crater or rim id per cell |
+  | `RT_SunOnly_RoverHidden` | The rover-shadow helper's sun-only render, with the rover hidden |
+
+  Assets with the earlier names (`PPM_ObjectMask`, `PPM_ObjectMask_Original`,
+  `RT_SunWithoutRover`) are renamed on the next send;
 - it also works during Play In Editor, although camera changes made then last
   only until it stops.
 
@@ -161,7 +171,7 @@ GNC receives two feeds from the mask camera, taken from the same frame:
 | Topic | Contents |
 | --- | --- |
 | `navcam/central/object_mask` | Rover, landscape, rocks, craters and rims, without shadows |
-| `navcam/central/shadow_mask` | Sunlight only: black in shadow (ground, rocks, rover), blue for sunlit ground, grey for sunlit rocks and the rover, black for sky |
+| `navcam/central/shadow_mask` | Sunlight only: black in shadow (ground, rocks, rover), orange for the rover's own shadow, blue for sunlit ground, grey for sunlit rocks and the rover, black for sky |
 | `navcam/central/shadow_label` | The same classes as ids (mono8), for training; see [Shadow class ids](#shadow-class-ids) |
 | `navcam/central/shadow_label_mapping` | JSON legend of those ids |
 
@@ -188,7 +198,7 @@ A pixel is shadow when the mask camera's sun-only render shows it at less than
 
 - Set by `SHADOW_THRESHOLD` in
   `Terrain_Studio/Lunar_terrain_loader/unreal_crater_mask.py` and written to the
-  `ShadowThreshold` parameter of `PPM_ObjectMask` on every send. Change it there
+  `ShadowThreshold` parameter of `PPM_GroundTruthMask` on every send. Change it there
   and send the masks again.
 - That render is almost all black (shadow) or near white (sunlit). The values in
   between are penumbra: shadow edges and the thin tails of shadows cast by rocks,
@@ -211,6 +221,7 @@ pixel for pixel with `image_color` and `object_mask`. Each pixel holds one id:
 | 2 | `shadowed_ground` | Landscape, crater or rim without sunlight |
 | 3 | `sunlit_object` | Rock or rover in sunlight |
 | 4 | `shadowed_object` | Rock or rover without sunlight, including its unlit side |
+| 5 | `rover_shadow` | Ground or rock in the rover's own shadow |
 
 - The same legend is published as JSON on `shadow_label_mapping`, and the
   dashboard's rosbag button records both topics.
@@ -218,13 +229,47 @@ pixel for pixel with `image_color` and `object_mask`. Each pixel holds one id:
 - For finer classes, combine the label with `object_mask` pixel by pixel (for
   example "boulder in shadow" or "crater in shadow").
 
-How the shadows travel: the mask material stores two flags, *ground* in the
-lowest bit of green and *in shadow* in the lowest bit of blue. That changes the
-mask colours by at most 1/255. The GNC stereo node (`enable_shadow_mask` in
-`component_stereo_depth/config/params.yaml`) paints `shadow_mask` from these flags
-and clears them from `object_mask`. One camera
-therefore gives two exactly aligned feeds, with no change to the StereoCamStreamer
-plugin.
+### Rover shadow
+
+With *Tag the rover's shadow separately* (on by default), ground and rocks in the
+rover's own shadow get id 5 (`rover_shadow`) instead of 2 or 4.
+
+- **Send Masks to Unreal** adds a helper capture to the level,
+  `<actor>_RoverShadowCapture`, attached to the mask camera. It renders the same
+  sun-only view into `/Game/GroundTruth_Masks/RT_SunOnly_RoverHidden`, with the mask
+  camera's actor (the rover) hidden. Hiding an actor from a capture also removes
+  its shadow there.
+- A pixel that is shadow in the mask camera but sunlit in the helper's render is
+  the rover's shadow. The rover itself is never tagged: its unlit side stays
+  `shadowed_object`.
+- Where the rover's shadow overlaps a rock's shadow or a slope facing away from
+  the sun, the pixel stays plain shadow, because it is dark without the rover too.
+- The helper renders before the mask camera each frame, so both views match. It
+  costs one more sun-only render per frame. Unticking the option and sending
+  again removes it, as does **Restore Original Mask Material**.
+- Add it in the editor, not during Play: the helper must be in the level, so save
+  the level (Ctrl+S) to keep it.
+- The helper must stay attached to the mask camera, which rides the rover's
+  physics body. Recompiling the rover's Blueprint (for example after renaming an
+  asset it uses) can re-attach it to the rover's root; it would then see a
+  slightly different view, and rock shadows would wrongly turn orange (id 5).
+  So **Send Masks to Unreal** and **Find** also install a watcher in the editor.
+  About twice a second it checks the helper in the level and in a running game,
+  and re-attaches it (the Output Log shows "Rover shadow: re-attached ...").
+  The watcher lasts until the editor closes. After a restart, press **Find** or
+  send once to start it again; until then **Find** still re-attaches on the spot.
+- How it is added: Unreal's Python cannot set a capture's hidden actors in the
+  editor, so the studio pastes the helper from text with the list already filled
+  in, then sets it up. That briefly uses the clipboard; its text is put back
+  afterwards (other clipboard content, such as an image, is not).
+
+How the shadows travel: the mask material stores three flags in the lowest bit of
+each channel: *ground* in green, *in shadow* in blue and *rover shadow* in red.
+That changes the mask colours by at most 1/255. The GNC stereo node
+(`enable_shadow_mask` in `component_stereo_depth/config/params.yaml`) paints
+`shadow_mask` and `shadow_label` from these flags and clears them from
+`object_mask`. One camera therefore gives exactly aligned feeds, with no change
+to the StereoCamStreamer plugin.
 
 ## 4. Position the sun (optional)
 

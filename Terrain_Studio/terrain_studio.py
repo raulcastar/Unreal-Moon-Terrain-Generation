@@ -2721,16 +2721,32 @@ class CraterMaskStudio(ttk.Frame):
                                        variable=self.shadows_var)
         shadow_check.pack(anchor="w")
         Tooltip(shadow_check,
-                "A second feed, navcam/central/shadow_mask: white where the ground gets\n"
-                "no sunlight (shadows of the rover, rocks, crater walls and hills, and\n"
-                "slopes facing away). The object mask itself stays free of shadows.")
+                "Extra feeds, navcam/central/shadow_mask (colours) and shadow_label (ids):\n"
+                "every surface without sunlight (shadows of the rover, rocks, crater walls\n"
+                "and hills, and slopes facing away). The object mask stays free of shadows.")
+        self.rover_shadow_var = tk.BooleanVar(value=True)
+        rover_check = ttk.Checkbutton(shadows, text="Tag the rover's shadow separately (id 5)",
+                                      variable=self.rover_shadow_var)
+        rover_check.pack(anchor="w")
+        Tooltip(rover_check,
+                "Adds a helper capture to the level, attached to the mask camera, that\n"
+                "renders the same view without the mask camera's actor (the rover). A\n"
+                "pixel in shadow but sunlit without the rover is the rover's shadow.\n"
+                "Costs one more sun-only render per frame. Needs the editor (not Play).")
         self._hint(shadows, "The mask camera renders sunlight alone for this, so the shadows "
                             "match what the cameras see. Both feeds come from the same frame.")
+        self._hint(shadows, "Shadow ids (navcam/central/shadow_label):", pady=(6, 0))
+        self.shadow_ids_text = tk.Text(shadows, height=6, font=("Consolas", 8), relief="solid",
+                                       borderwidth=1, wrap="none")
+        self.shadow_ids_text.pack(fill="x", pady=(4, 0))
+        for var in (self.shadows_var, self.rover_shadow_var):
+            var.trace_add("write", self._refresh_shadow_ids)
+        self._refresh_shadow_ids()
 
         # Mask camera and sending
         camera = self._group(inner, "Mask Camera in Unreal")
         self._hint(camera, "The scene capture that renders the object mask. It gets "
-                           "PPM_ObjectMask and, if its actor has a StereoCamStreamer, is "
+                           "PPM_GroundTruthMask and, if its actor has a StereoCamStreamer, is "
                            "streamed as the mask camera.")
         camera_row = ttk.Frame(camera)
         camera_row.pack(fill="x", pady=(4, 0))
@@ -2751,13 +2767,15 @@ class CraterMaskStudio(ttk.Frame):
                                       style="Accent.TButton", command=self.send_crater_map)
         self.send_button.pack(fill="x", pady=(6, 0))
         Tooltip(self.send_button,
-                "Exports the crater map if needed, rebuilds PPM_ObjectMask so Landscape\n"
+                "Exports the crater map if needed, rebuilds PPM_GroundTruthMask so Landscape\n"
                 "pixels take the crater ids (rocks keep theirs), and sets up the mask\n"
-                "camera above. The original material is kept as PPM_ObjectMask_Original.")
+                "camera above. The original material is kept as PPM_GroundTruthMask_Backup.")
         self.restore_button = ttk.Button(camera, text="Restore Original Mask Material",
                                          command=self.restore_material)
         self.restore_button.pack(fill="x", pady=(4, 0))
-        Tooltip(self.restore_button, "Puts back PPM_ObjectMask as it was before the crater map.")
+        Tooltip(self.restore_button,
+                "Puts back PPM_GroundTruthMask as it was before the studio first changed it\n"
+                "(from PPM_GroundTruthMask_Backup) and removes the rover-shadow helper.")
 
         # GNC labels
         labels = self._group(inner, "GNC Labels")
@@ -2894,6 +2912,24 @@ class CraterMaskStudio(ttk.Frame):
                 lines.append(f'- "{ids["rim"]}:crater_rim"')
             self.labels_text.insert("end", "\n".join(lines))
         self.labels_text.configure(state="disabled")
+
+    # Shadow class ids published by the GNC stereo node (SHADOW_IDS there).
+    SHADOW_IDS = ((0, "sky"), (1, "sunlit ground"), (2, "shadowed ground"),
+                  (3, "sunlit rock / rover"), (4, "shadowed rock / rover"),
+                  (5, "rover shadow (on ground or rocks)"))
+
+    def _refresh_shadow_ids(self, *_trace_args):
+        shadows, rover = self.shadows_var.get(), self.rover_shadow_var.get()
+        if not shadows:
+            lines = ["Shadow feed off."]
+        else:
+            lines = [f"{i}  {name}" for i, name in self.SHADOW_IDS if i != 5 or rover]
+            if not rover:
+                lines.append("(5 rover shadow: off)")
+        self.shadow_ids_text.configure(state="normal", height=len(lines))
+        self.shadow_ids_text.delete("1.0", "end")
+        self.shadow_ids_text.insert("end", "\n".join(lines))
+        self.shadow_ids_text.configure(state="disabled")
 
     def copy_labels(self):
         self.clipboard_clear()
@@ -3088,8 +3124,10 @@ class CraterMaskStudio(ttk.Frame):
         camera_actor, camera_capture = self._camera()
         save_level = self.save_level_var.get()
         shadows = self.shadows_var.get()
+        rover_shadow = shadows and self.rover_shadow_var.get()
         self.log(f"Sending {os.path.basename(png)} to Unreal (crater id {meta['crater_id']}, "
-                 f"rim id {meta['rim_id']}; shadow feed {'on' if shadows else 'off'}; mask camera "
+                 f"rim id {meta['rim_id']}; shadow feed {'on' if shadows else 'off'}, rover "
+                 f"shadow {'on' if rover_shadow else 'off'}; mask camera "
                  f"{camera_actor + ' / ' + camera_capture if camera_actor else 'unchanged'}).")
         self._run("Sending the masks to Unreal...", key="crater_send",
                   work=max(os.path.getsize(png) / 1e6, 0.01),
@@ -3099,7 +3137,7 @@ class CraterMaskStudio(ttk.Frame):
                       landscape_label=f"{stem}_heightmap", landscape_width=width,
                       supersample=meta.get("supersample", 1), camera_actor=camera_actor,
                       camera_capture=camera_capture, save_level=save_level,
-                      shadows=shadows, log=log))
+                      shadows=shadows, rover_shadow=rover_shadow, log=log))
 
     def restore_material(self):
         self._run("Restoring the mask material...",
@@ -3130,12 +3168,23 @@ class CraterMaskStudio(ttk.Frame):
                 self.log("No answer from Unreal: is the editor running with Remote Execution?",
                          level="warn")
             return
-        options, streamed = [], None
+        options, streamed, loose, fixed = [], None, [], []
         for actor in found.get("actors", []):
             for capture in actor["captures"]:
                 options.append(f"{actor['actor']} / {capture}")
             if actor.get("streamer_mask"):
                 streamed = f"{actor['actor']} / {actor['streamer_mask']}"
+            if actor.get("rover_shadow_helper") == "detached":
+                loose.append(actor["actor"])
+            elif actor.get("rover_shadow_helper") == "reattached":
+                fixed.append(actor["actor"])
+        for name in fixed:
+            self.log(f"Re-attached the rover-shadow helper of {name} to its mask camera "
+                     "(its Blueprint had been recompiled).", level="ok")
+        for name in loose:
+            self.log(f"The rover-shadow helper of {name} is not attached to its mask camera "
+                     "and could not be re-attached, so rocks would be tagged as rover "
+                     "shadow. Send the masks again.", level="warn")
         self.camera_box.configure(values=options)
         if streamed and (self.camera_var.get() not in options):
             self.camera_var.set(streamed)
