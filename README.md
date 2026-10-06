@@ -253,6 +253,30 @@ to `mask_labels` (the GNC Labels box lists it).
 - The material flags the disc with red but not blue, so the shadow feeds keep it
   as sky (black, `shadow_label` 0).
 
+### Wheel tracks
+
+With *Rover leaves wheel tracks* (Wheel Tracks group, on by default), each wheel of
+the mask camera's actor leaves a track on the Landscape during Play: a shallow
+rut with tread ribs across it, and slightly darker, smoother regolith. Track
+pixels get id 60 (`wheel_track`) in `object_mask`; add `"60:wheel_track"` to
+`mask_labels`.
+
+- **Send Masks to Unreal** places a pool of 2000 hidden track decals in the level
+  (Outliner folder `WheelTracks`, material
+  `/Game/GroundTruth_Masks/M_WheelTrackDecal`). The first time takes about
+  two minutes; later sends reuse them. Save the level to keep them.
+- During Play the editor watcher lays the next decal under each wheel that
+  touches the Landscape, every 12 cm along its path. A piece is laid once every
+  wheel has rolled off it, so no track lands on a wheel. About 60 m per wheel are
+  kept, the oldest reused. Tracks start afresh each time Play starts. No tracks
+  are left on rocks or while a wheel is in the air.
+- The rover itself is only read, never changed, while the game runs. Changing a
+  simulating part's properties rebuilds its physics and breaks the wheel
+  constraints.
+- The decal writes a tiny metallic value (0.05) that the regolith never has. The
+  mask material reads it to tag the track. It also works on craters and rims.
+- Unticking the option and sending again removes the decals.
+
 ### Rover shadow
 
 With *Tag the rover's shadow separately* (on by default), ground and rocks in the

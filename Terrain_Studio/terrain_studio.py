@@ -2568,6 +2568,7 @@ DEFAULT_MASK_IDS = {"boulder": 20, "small_rock": 21, "boulder_radius_m": 0.15,
 GNC_MASK_LABELS = "GNC-Moon-Simulator/component_stereo_depth/config/params.yaml"
 SUN_MASK_ID = 50   # The sun's disc in the object mask (SUN_ID in unreal_crater_mask)
 SUN_GLARE_ID = 51  # Its glare ring (SUN_GLARE_ID there)
+TRACK_MASK_ID = 60  # Wheel tracks (TRACK_ID there)
 
 
 def mask_ids(app):
@@ -2764,6 +2765,20 @@ class CraterMaskStudio(ttk.Frame):
         self.sun_var.trace_add("write", self._ids_changed)
         self.sun_glare_var.trace_add("write", self._ids_changed)
 
+        # Wheel tracks
+        tracks = self._group(inner, "Wheel Tracks")
+        self.tracks_var = tk.BooleanVar(value=True)
+        tracks_check = ttk.Checkbutton(
+            tracks, text=f"Rover leaves wheel tracks (id {TRACK_MASK_ID})", variable=self.tracks_var)
+        tracks_check.pack(anchor="w")
+        Tooltip(tracks_check,
+                "Places a pool of track decals in the level (hidden). During Play each wheel\n"
+                "of the mask camera's actor that touches the Landscape leaves a track: a\n"
+                "shallow rut with tread ribs, darker and smoother regolith. About 60 m are kept\n"
+                "per wheel, the oldest reused; tracks start afresh each Play. Track pixels\n"
+                "get their own id in object_mask.")
+        self.tracks_var.trace_add("write", self._ids_changed)
+
         # Mask camera and sending
         camera = self._group(inner, "Mask Camera in Unreal")
         self._hint(camera, "The scene capture that renders the object mask. It gets "
@@ -2935,6 +2950,8 @@ class CraterMaskStudio(ttk.Frame):
                 lines.append(f'- "{SUN_MASK_ID}:sun"')
                 if self._glare_deg() > 0:
                     lines.append(f'- "{SUN_GLARE_ID}:sun_glare"')
+            if self.tracks_var.get():
+                lines.append(f'- "{TRACK_MASK_ID}:wheel_track"')
             self.labels_text.insert("end", "\n".join(lines))
         self.labels_text.configure(state="disabled")
 
@@ -3159,6 +3176,7 @@ class CraterMaskStudio(ttk.Frame):
         rover_shadow = shadows and self.rover_shadow_var.get()
         sun = self.sun_var.get()
         sun_glare = self._glare_deg()
+        wheel_tracks = self.tracks_var.get()
         self.log(f"Sending {os.path.basename(png)} to Unreal (crater id {meta['crater_id']}, "
                  f"rim id {meta['rim_id']}; shadow feed {'on' if shadows else 'off'}, rover "
                  f"shadow {'on' if rover_shadow else 'off'}; mask camera "
@@ -3172,7 +3190,7 @@ class CraterMaskStudio(ttk.Frame):
                       supersample=meta.get("supersample", 1), camera_actor=camera_actor,
                       camera_capture=camera_capture, save_level=save_level,
                       shadows=shadows, rover_shadow=rover_shadow, sun=sun,
-                      sun_glare_deg=sun_glare, log=log))
+                      sun_glare_deg=sun_glare, wheel_tracks=wheel_tracks, log=log))
 
     def restore_material(self):
         self._run("Restoring the mask material...",

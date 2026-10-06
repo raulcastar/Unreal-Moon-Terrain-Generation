@@ -22,6 +22,9 @@ gets SUN_GLARE_ID: the sky the navcam washes out with bloom around the sun. That
 the level's Directional Light through MPC_Sun, which the editor watcher keeps
 current (also in a running game). The shadow feeds treat the disc as sky.
 
+Wheel tracks (unreal_wheel_tracks) are decals that write a small metallic value
+regolith never has; ground pixels carrying it get TRACK_ID.
+
 The colours change by at most 1/255, and the GNC stereo node splits the frame
 into object_mask (flag bits cleared) and the shadow feeds. Shadows come from the
 mask camera's own render: it draws every surface white, lit by the sun alone (no
@@ -65,6 +68,7 @@ SUN_PARAMETER = "SunDirection"   # xyz: unit vector towards the sun; w: cos(disc
 SUN_ID = 50
 SUN_GLARE_ID = 51
 SUN_GLARE_DEG = 1.1    # Glare ring radius: the navcam's saturated core (~8 px of 640 at 90 deg)
+TRACK_ID = 60
 TEXTURE_FOLDER = GROUND_TRUTH_FOLDER
 # Earlier names, renamed on the next send.
 OLD_ASSET_NAMES = {
@@ -106,6 +110,8 @@ if (ground)
         float id = round(Crater.Load(int3(cell, 0)).r * 255.0);
         if (id > 0.5) v = id;
     }
+    // Wheel track: its decal leaves a metallic marker regolith never has.
+    if (TrackEnabled > 0.5 && Metal >= TrackMetallic * 0.5) v = TrackId;
 }
 // Any surface the sun does not reach: ground, rocks or rover (the mask camera
 // renders sunlight only). Untagged pixels are sky.
@@ -149,7 +155,8 @@ return c8 / 255.0;"""
 SCALAR_INPUTS = ("LandscapeStencil", "CraterOriginX", "CraterOriginY", "CraterStepX",
                  "CraterStepY", "CraterWidth", "CraterHeight", "CraterSupersample",
                  "ShadowEnabled", "ShadowThreshold", "RoverShadowEnabled", "RoverStencil",
-                 "SunEnabled", "SunId", "SunGlareId", "SunGlareCos")
+                 "SunEnabled", "SunId", "SunGlareId", "SunGlareCos",
+                 "TrackEnabled", "TrackId", "TrackMetallic")
 
 
 def _game_landscape(label):
@@ -292,6 +299,12 @@ def _build_mask_graph(material, texture, values, no_rover, sun_collection):
     helper.set_editor_property("texture", no_rover)
     screen = lib.create_material_expression(material, unreal.MaterialExpressionScreenPosition, -650, -380)
     camera = lib.create_material_expression(material, unreal.MaterialExpressionCameraVectorWS, -650, -460)
+    metallic = lib.create_material_expression(material, unreal.MaterialExpressionSceneTexture, -900, -620)
+    metallic.set_editor_property("scene_texture_id", unreal.SceneTextureId.PPI_METALLIC)
+    metal = lib.create_material_expression(material, unreal.MaterialExpressionComponentMask, -650, -620)
+    for channel, keep in (("r", True), ("g", False), ("b", False), ("a", False)):
+        metal.set_editor_property(channel, keep)
+    lib.connect_material_expressions(metallic, "Color", metal, "")
     sun = lib.create_material_expression(material, unreal.MaterialExpressionCollectionParameter, -650, -540)
     sun.set_editor_property("collection", sun_collection)
     sun.set_editor_property("parameter_name", SUN_PARAMETER)
@@ -300,7 +313,8 @@ def _build_mask_graph(material, texture, values, no_rover, sun_collection):
     custom.set_editor_property("code", MASK_CODE)
     custom.set_editor_property("description", "ObjectMaskColour")
     custom.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT3)
-    names = ("In", "Scene", "Pos", "Crater", "NoRover", "UV", "CamVec", "SunDir") + SCALAR_INPUTS
+    names = ("In", "Scene", "Pos", "Crater", "NoRover", "UV", "CamVec", "SunDir",
+             "Metal") + SCALAR_INPUTS
     inputs = []
     for name in names:
         entry = unreal.CustomInput()
@@ -316,6 +330,7 @@ def _build_mask_graph(material, texture, values, no_rover, sun_collection):
     lib.connect_material_expressions(screen, "ViewportUV", custom, "UV")
     lib.connect_material_expressions(camera, "", custom, "CamVec")
     lib.connect_material_expressions(sun, "", custom, "SunDir")
+    lib.connect_material_expressions(metal, "", custom, "Metal")
     for row, name in enumerate(SCALAR_INPUTS):
         scalar = lib.create_material_expression(
             material, unreal.MaterialExpressionScalarParameter, -650, 360 + 70 * row)
@@ -654,12 +669,22 @@ def _watch_tick(delta_seconds):
     """
     Editor tick: keeps each rover-shadow helper attached to its mask camera, in
     the level and in a running game (Blueprint recompiles, also the one that can
-    run when Play starts, re-attach it to the actor's root), and keeps MPC_Sun
-    pointing at the sun.
+    run when Play starts, re-attach it to the actor's root), keeps MPC_Sun
+    pointing at the sun, and, every frame of a running game, lays wheel tracks.
     """
     state = getattr(builtins, "_rover_shadow_watch", None)
     if state is None:
         return
+    try:
+        import unreal_wheel_tracks
+        game = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_game_world()
+        if game is not None:
+            unreal_wheel_tracks.update_wheel_tracks(game, state)
+        state["track_error"] = None
+    except Exception as error:          # Report each new error once; rebuild the cache
+        if state.get("track_error") != str(error):
+            unreal.log_warning(f"Wheel tracks: {error}")
+        state["track_error"], state["track_world"] = str(error), None
     state["elapsed"] += delta_seconds
     state["since_scan"] += delta_seconds
     if state["elapsed"] < WATCH_INTERVAL:
@@ -754,13 +779,15 @@ def setup_rover_shadow(actor, capture, target):
 def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="",
                       landscape_width=0, landscape_stencil=LANDSCAPE_STENCIL, supersample=1,
                       camera_actor="", camera_capture="", save_level=False, shadows=True,
-                      rover_shadow=True, sun=True, sun_glare_deg=SUN_GLARE_DEG):
+                      rover_shadow=True, sun=True, sun_glare_deg=SUN_GLARE_DEG,
+                      wheel_tracks=True):
     """
     Imports the crater map and makes the object mask show it on the Landscape;
     with `shadows`, the frame also carries the shadow mask and, with
     `rover_shadow`, flags the shadow of the mask camera's own actor; with `sun`,
     the sun's disc gets id SUN_ID in the object mask and the sky around it out to
-    `sun_glare_deg` gets SUN_GLARE_ID (0 for none). When given,
+    `sun_glare_deg` gets SUN_GLARE_ID (0 for none); with `wheel_tracks`, the mask
+    camera's actor leaves wheel tracks (TRACK_ID) during Play. When given,
     sets up `camera_capture` on `camera_actor` as the mask camera. Returns a
     summary.
     """
@@ -796,6 +823,25 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
     elif not _in_pie() and _remove_rover_shadow_captures():
         rover_note = "Rover shadow: off (helper capture removed)."
 
+    # Wheel tracks: decal pool for the mask camera's actor (editor only).
+    import importlib
+    import unreal_wheel_tracks
+    importlib.reload(unreal_wheel_tracks)
+    track_note, tracks_on = "", False
+    if wheel_tracks:
+        found = (_find_capture(camera_actor, camera_capture) if camera_actor and camera_capture
+                 else _current_mask_camera())
+        if _in_pie():
+            tracks_on = bool(unreal_wheel_tracks._pool(_current_world()))
+            track_note = ("" if tracks_on else "Wheel tracks: stop Play In Editor and send again "
+                          "to place their decals.")
+        elif found is None:
+            track_note = "Wheel tracks: off, no mask camera found (choose one and send again)."
+        else:
+            tracks_on, track_note = unreal_wheel_tracks.setup_wheel_tracks(found[0])
+    elif not _in_pie() and unreal_wheel_tracks.remove_wheel_tracks():
+        track_note = "Wheel tracks: off (decals removed)."
+
     _build_mask_graph(material, texture, {
         "LandscapeStencil": landscape_stencil, "CraterOriginX": x0, "CraterOriginY": y0,
         "CraterStepX": step_x, "CraterStepY": step_y,
@@ -803,7 +849,9 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
         "ShadowEnabled": 1.0 if shadows else 0.0, "ShadowThreshold": SHADOW_THRESHOLD,
         "RoverShadowEnabled": 1.0 if rover_on else 0.0, "RoverStencil": rover_stencil,
         "SunEnabled": 1.0 if sun else 0.0, "SunId": SUN_ID, "SunGlareId": SUN_GLARE_ID,
-        "SunGlareCos": math.cos(math.radians(max(float(sun_glare_deg), 0.0)))},
+        "SunGlareCos": math.cos(math.radians(max(float(sun_glare_deg), 0.0))),
+        "TrackEnabled": 1.0 if tracks_on else 0.0, "TrackId": TRACK_ID,
+        "TrackMetallic": unreal_wheel_tracks.TRACK_METALLIC},
         no_rover, _sun_collection(_current_world()))
     summary = (f"Crater ground truth on '{landscape.get_actor_label()}': {texture.get_path_name()} "
                f"({width} x {height}, {supersample} per DEM cell) in {MASK_MATERIAL}. "
@@ -815,12 +863,17 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
     summary += (f"\nSun: its disc is id {SUN_ID} and its glare (to {sun_glare_deg:g} deg) id "
                 f"{SUN_GLARE_ID} in the object mask (sky in the shadow feeds)."
                 if sun else "\nSun: not tagged.")
+    if track_note:
+        summary += "\n" + track_note + (f" Track pixels are id {TRACK_ID} in the object mask."
+                                        if tracks_on else "")
     if renamed:
         summary += "\nAssets: " + "; ".join(renamed) + "."
     if camera_actor and camera_capture:
         summary += "\n" + assign_mask_camera(camera_actor, camera_capture)
     if sun:
         update_sun_mask(_current_world())
+    if tracks_on and not rover_on:
+        install_rover_shadow_watch()
     if rover_on:
         helper = next((a for a in _actors() if a.get_actor_label()
                        == f"{actor.get_actor_label()}_{ROVER_SHADOW_CAPTURE}"), None)
@@ -830,7 +883,7 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
         install_rover_shadow_watch()
         summary += ("\nRover shadow: a watcher keeps the helper attached to the mask camera "
                     "until the editor closes.")
-    elif sun:
+    elif sun or tracks_on:
         install_rover_shadow_watch()
     elif not _in_pie():
         uninstall_rover_shadow_watch()
