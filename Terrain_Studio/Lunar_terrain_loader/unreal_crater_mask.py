@@ -532,14 +532,24 @@ def _helper_status(actor):
 
 
 def _helper_pairs(world):
-    """(helper, mask capture) for every rover-shadow helper in `world`."""
-    actors = {a.get_actor_label(): a for a in
-              unreal.GameplayStatics.get_all_actors_of_class(world, unreal.Actor)}
-    pairs = []
-    for label, helper in actors.items():
+    """
+    (helper, mask capture) for every rover-shadow helper in `world`. Looks only
+    at SceneCapture2D actors (a few), not the whole level, which can hold
+    thousands of rocks; the helper's owner is its attach-parent actor (it stays
+    the rover even when re-attached to the root).
+    """
+    pairs, everything = [], None
+    for helper in unreal.GameplayStatics.get_all_actors_of_class(world, unreal.SceneCapture2D):
+        label = helper.get_actor_label()
         if not label.endswith("_" + ROVER_SHADOW_CAPTURE):
             continue
-        owner = actors.get(label[:-len(ROVER_SHADOW_CAPTURE) - 1])
+        owner_label = label[:-len(ROVER_SHADOW_CAPTURE) - 1]
+        owner = helper.get_attach_parent_actor()
+        if owner is None or owner.get_actor_label() != owner_label:
+            if everything is None:      # Fully detached: fall back to a full scan
+                everything = {a.get_actor_label(): a for a in
+                              unreal.GameplayStatics.get_all_actors_of_class(world, unreal.Actor)}
+            owner = everything.get(owner_label)
         streamer = _streamer(owner) if owner else None
         if streamer is None:
             continue
