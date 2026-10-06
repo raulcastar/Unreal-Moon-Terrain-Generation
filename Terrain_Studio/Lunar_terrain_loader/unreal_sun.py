@@ -68,6 +68,30 @@ def _spawn_sun():
     return light
 
 
+# SkyAtmosphere as lunar vacuum: nothing scatters or absorbs, so sunlight reaches
+# the ground white and undimmed at any elevation, the sky stays black and distant
+# terrain has no haze; the atmosphere still draws the sun's disc. The planet has
+# the Moon's radius: with a small one the atmosphere tilts "up" across the map
+# (45 degrees 1 km from the origin with a 1 km planet) and dims or hides the sun.
+MOON_RADIUS_KM = 1737.4
+LUNAR_ATMOSPHERE = (
+    ("bottom_radius", MOON_RADIUS_KM),
+    ("rayleigh_scattering_scale", 0.0), ("mie_scattering_scale", 0.0),
+    ("mie_absorption_scale", 0.0), ("other_absorption_scale", 0.0),
+    ("multi_scattering_factor", 0.0), ("height_fog_contribution", 0.0),
+    ("transmittance_min_light_elevation_angle", -90.0))
+
+
+def lunar_atmosphere(world):
+    """Sets every SkyAtmosphere in `world` to lunar vacuum. Returns how many."""
+    atmospheres = unreal.GameplayStatics.get_all_actors_of_class(world, unreal.SkyAtmosphere)
+    for actor in atmospheres:
+        component = actor.get_component_by_class(unreal.SkyAtmosphereComponent)
+        for prop, value in LUNAR_ATMOSPHERE:
+            component.set_editor_property(prop, value)
+    return len(atmospheres)
+
+
 def _apply_editor(light, rotation, intensity_lux, source_angle_deg):
     """Sets the light through editor properties, so the change is saved with the level."""
     light.set_actor_rotation(rotation, False)
@@ -119,6 +143,7 @@ def set_sun(azimuth_deg, elevation_deg, intensity_lux=120000.0,
             return ("Play In Editor is running and its world has no single Directional "
                     "Light to move; stop it and send the sun again.")
         _apply_runtime(light, rotation, intensity_lux, source_angle_deg)
+        lunar_atmosphere(world)
         unreal.log_warning("Play In Editor is running: the sun was changed in the running "
                            "game only. Stop it and send the sun again to keep it in the level.")
         return f"Sun set in the running game on '{light.get_actor_label()}': {sun}."
@@ -135,8 +160,11 @@ def set_sun(azimuth_deg, elevation_deg, intensity_lux=120000.0,
                                f"'{SUN_LABEL}'. Remove the others to avoid double shadows.")
         light, action = _spawn_sun(), "Spawned"
     _apply_editor(light, rotation, intensity_lux, source_angle_deg)
+    atmospheres = lunar_atmosphere(world)
 
     summary = f"{action} '{light.get_actor_label()}': {sun}, {intensity_lux:.0f} lux."
+    if atmospheres:
+        summary += " SkyAtmosphere set to lunar vacuum (Moon radius, no scattering)."
     if save_level:
         import unreal_level_saver
         summary += " " + unreal_level_saver.save_current_level()
