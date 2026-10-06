@@ -160,6 +160,7 @@ How the mask is drawn: the mask camera's material looks at each Landscape pixel
   | `PPM_GroundTruthMask_Backup` | That material as it was before the studio first changed it; **Restore Original Mask Material** puts it back |
   | `T_CraterIds_<map>` | Crater map: crater or rim id per cell |
   | `RT_SunOnly_RoverHidden` | The rover-shadow helper's sun-only render, with the rover hidden |
+  | `MPC_Sun` | The sun's direction and disc size, for its id in the object mask |
 
   Assets with the earlier names (`PPM_ObjectMask`, `PPM_ObjectMask_Original`,
   `RT_SunWithoutRover`) are renamed on the next send;
@@ -228,6 +229,29 @@ pixel for pixel with `image_color` and `object_mask`. Each pixel holds one id:
 - Store the labels losslessly (PNG or the bag itself); JPEG would change the ids.
 - For finer classes, combine the label with `object_mask` pixel by pixel (for
   example "boulder in shadow" or "crater in shadow").
+
+### Sun
+
+With *Tag the sun's disc in the object mask* (Sun group, on by default), sky
+pixels within the sun's disc get id 50 (`sun`) in `object_mask`; add `"50:sun"`
+to `mask_labels` (the GNC Labels box lists it).
+
+- The disc follows the level's Directional Light: its direction, and its size from
+  *Source Angle* (0.53 degrees, about 4 pixels on the navcam). Terrain or rocks in
+  front of the sun hide it, as in the RGB image.
+- The navcam's bloom makes the sun look much bigger. So the sky around the disc,
+  out to *Glare radius* (Sun group, default 1.1 degrees), gets id 51
+  (`sun_glare`); add `"51:sun_glare"` to `mask_labels`. 1.1 degrees matches the
+  camera's saturated core: measured 17.2 px across, against 17.4 px for disc plus
+  glare, with 91% of the saturated pixels covered. Half brightness reaches about
+  3.5 degrees, and faint glare spikes about 6 degrees; set a larger radius to
+  include them, or 0 for no glare ring. Like the disc, the glare is only tagged on
+  sky; terrain and rocks keep their ids.
+- The light's direction reaches the material through `/Game/GroundTruth_Masks/MPC_Sun`.
+  The editor watcher (see Rover shadow) keeps it current, also during Play, so
+  moving the sun by hand or from the studio needs no new send.
+- The material flags the disc with red but not blue, so the shadow feeds keep it
+  as sky (black, `shadow_label` 0).
 
 ### Rover shadow
 

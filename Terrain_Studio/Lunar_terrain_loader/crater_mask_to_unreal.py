@@ -31,7 +31,8 @@ def _crater_call(call):
 def send_crater_mask_to_unreal(png_path, width, height, resolution, landscape_label="",
                                landscape_width=0, supersample=1, camera_actor="",
                                camera_capture="", save_level=False, shadows=True,
-                               rover_shadow=True, log=print, discovery_seconds=2.0):
+                               rover_shadow=True, sun=True, sun_glare_deg=1.1, log=print,
+                               discovery_seconds=2.0):
     """
     Imports the crater map, updates the object-mask material (craters and, with
     `shadows`, the shadow mask in the same frame; with `rover_shadow`, the
@@ -47,7 +48,9 @@ def send_crater_mask_to_unreal(png_path, width, height, resolution, landscape_la
                       f"camera_capture={camera_capture!r}",
                       f"save_level={bool(save_level)}",
                       f"shadows={bool(shadows)}",
-                      f"rover_shadow={bool(rover_shadow)}"])
+                      f"rover_shadow={bool(rover_shadow)}",
+                      f"sun={bool(sun)}",
+                      f"sun_glare_deg={float(sun_glare_deg)!r}"])
     return run_in_unreal(_crater_call(f"apply_crater_mask({args})"), log,
                          "Adding crater ground truth in Unreal", discovery_seconds)
 

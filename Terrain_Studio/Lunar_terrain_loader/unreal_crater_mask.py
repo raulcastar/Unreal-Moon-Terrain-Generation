@@ -14,6 +14,13 @@ of each channel:
     green   ground (landscape, craters, rims)
     blue    in shadow: any surface the sun does not reach (never the sky)
     red     in the rover's shadow: the shadow cast by the mask camera's own actor
+            (with blue); without blue, the sun's disc
+
+The sun's disc gets its own id in the object mask (SUN_ID): sky pixels within
+the sun's angular radius of its direction. A ring around it out to a glare radius
+gets SUN_GLARE_ID: the sky the navcam washes out with bloom around the sun. That direction and radius come from
+the level's Directional Light through MPC_Sun, which the editor watcher keeps
+current (also in a running game). The shadow feeds treat the disc as sky.
 
 The colours change by at most 1/255, and the GNC stereo node splits the frame
 into object_mask (flag bits cleared) and the shadow feeds. Shadows come from the
@@ -32,6 +39,7 @@ placer (columns run towards -X); it may hold several cells per DEM cell
 
 import builtins
 import json
+import math
 
 import unreal
 
@@ -46,11 +54,17 @@ CAMERAS_JSON_PREFIX = "CAMERAS_JSON "
 #                               changed it (Restore Original Mask Material)
 #   T_CraterIds_<map>           crater map: crater / rim id per cell
 #   RT_SunOnly_RoverHidden      helper capture's sun-only render without the rover
+#   MPC_Sun                     sun direction and disc size for the sun's id
 GROUND_TRUTH_FOLDER = "/Game/GroundTruth_Masks"
 MASK_MATERIAL = f"{GROUND_TRUTH_FOLDER}/PPM_GroundTruthMask"
 BACKUP_MATERIAL = f"{GROUND_TRUTH_FOLDER}/PPM_GroundTruthMask_Backup"
 ROVER_SHADOW_TARGET = f"{GROUND_TRUTH_FOLDER}/RT_SunOnly_RoverHidden"
 CRATER_TEXTURE_PREFIX = "T_CraterIds_"
+SUN_MPC = f"{GROUND_TRUTH_FOLDER}/MPC_Sun"
+SUN_PARAMETER = "SunDirection"   # xyz: unit vector towards the sun; w: cos(disc radius)
+SUN_ID = 50
+SUN_GLARE_ID = 51
+SUN_GLARE_DEG = 1.1    # Glare ring radius: the navcam's saturated core (~8 px of 640 at 90 deg)
 TEXTURE_FOLDER = GROUND_TRUTH_FOLDER
 # Earlier names, renamed on the next send.
 OLD_ASSET_NAMES = {
@@ -107,6 +121,16 @@ if (shadow > 0.5 && RoverShadowEnabled > 0.5 && abs(v - RoverStencil) >= 0.5)
     int2 p = int2(min(UV * float2(w, h), float2(w, h) - 1.0));
     if (dot(NoRover.Load(int3(p, 0)).rgb, luma) >= ShadowThreshold) roverShadow = 1.0;
 }
+// The sun's disc, then its glare ring: untagged (sky) pixels within their
+// angular radius. Flagged with red but not blue, so the shadow feeds keep them
+// as sky.
+float sun = 0.0;
+if (v < 0.5 && SunEnabled > 0.5)
+{
+    float toSun = dot(-CamVec, SunDir.xyz);
+    if (toSun >= SunDir.w) { v = SunId; sun = 1.0; }
+    else if (toSun >= SunGlareCos) { v = SunGlareId; sun = 1.0; }
+}
 float3 c = float3(0, 0, 0);                           // Untagged pixels are black
 if (v >= 0.5)
 {
@@ -114,16 +138,18 @@ if (v >= 0.5)
     c.g = frac(sin(v * 78.2330) * 43758.5453);
     c.b = frac(sin(v * 37.7190) * 43758.5453);
 }
-// Quantise to 8 bits; the lowest bits flag ground (g), shadow (b), rover shadow (r).
+// Quantise to 8 bits; the lowest bits flag ground (g), shadow (b), rover shadow
+// (r with b) and the sun (r without b).
 float3 c8 = round(c * 255.0);
-c8.r = c8.r - fmod(c8.r, 2.0) + roverShadow;
+c8.r = c8.r - fmod(c8.r, 2.0) + max(roverShadow, sun);
 c8.g = c8.g - fmod(c8.g, 2.0) + (ground ? 1.0 : 0.0);
 c8.b = c8.b - fmod(c8.b, 2.0) + shadow;
 return c8 / 255.0;"""
 
 SCALAR_INPUTS = ("LandscapeStencil", "CraterOriginX", "CraterOriginY", "CraterStepX",
                  "CraterStepY", "CraterWidth", "CraterHeight", "CraterSupersample",
-                 "ShadowEnabled", "ShadowThreshold", "RoverShadowEnabled", "RoverStencil")
+                 "ShadowEnabled", "ShadowThreshold", "RoverShadowEnabled", "RoverStencil",
+                 "SunEnabled", "SunId", "SunGlareId", "SunGlareCos")
 
 
 def _game_landscape(label):
@@ -165,6 +191,58 @@ def import_mask_texture(png_path, name):
     return texture
 
 
+def _sun_light(world):
+    """The level's sun: the Directional Light linked to the sky atmosphere, else the first."""
+    lights = list(unreal.GameplayStatics.get_all_actors_of_class(world, unreal.DirectionalLight))
+    linked = [l for l in lights if l.light_component.get_editor_property("atmosphere_sun_light")]
+    return (linked or lights or [None])[0]
+
+
+def _sun_vector(light):
+    """LinearColor(towards-sun x, y, z, cos(disc radius)) for `light`."""
+    import math
+    forward = light.get_actor_forward_vector()
+    radius = math.radians(light.light_component.get_editor_property("light_source_angle") / 2.0)
+    return unreal.LinearColor(-forward.x, -forward.y, -forward.z, math.cos(max(radius, 1e-4)))
+
+
+def _sun_collection(world):
+    """MPC_Sun (created if needed) with its default set to the level's sun now."""
+    collection = unreal.load_asset(SUN_MPC)
+    if collection is None:
+        collection = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+            SUN_MPC.rsplit("/", 1)[-1], GROUND_TRUTH_FOLDER, unreal.MaterialParameterCollection,
+            unreal.MaterialParameterCollectionFactoryNew())
+    light = _sun_light(world)
+    parameter = unreal.CollectionVectorParameter()
+    parameter.set_editor_property("parameter_name", SUN_PARAMETER)
+    parameter.set_editor_property("default_value", _sun_vector(light) if light
+                                  else unreal.LinearColor(0.0, 0.0, 1.0, 1.0))
+    collection.set_editor_property("vector_parameters", [parameter])
+    unreal.EditorAssetLibrary.save_loaded_asset(collection)
+    return collection
+
+
+def update_sun_mask(world, state=None):
+    """Points MPC_Sun in `world` at its sun; skips the write when nothing changed."""
+    state = state if state is not None else {}
+    collection = state.get("sun_collection") or unreal.load_asset(SUN_MPC)
+    if collection is None:
+        return
+    state["sun_collection"] = collection
+    light = state.get("sun_light")
+    if light is None or not unreal.SystemLibrary.is_valid(light) or state.get("sun_world") != world:
+        light = state["sun_light"] = _sun_light(world)
+        state["sun_world"], state["sun_value"] = world, None
+    if light is None:
+        return
+    value = _sun_vector(light)
+    key = tuple(round(x, 6) for x in (value.r, value.g, value.b, value.a))
+    if key != state.get("sun_value"):
+        unreal.MaterialLibrary.set_vector_parameter_value(world, collection, SUN_PARAMETER, value)
+        state["sun_value"] = key
+
+
 def _rename_old_assets():
     """Renames assets still under their earlier names (references follow). Returns notes."""
     notes = []
@@ -181,10 +259,10 @@ def _backup_material():
         unreal.EditorAssetLibrary.duplicate_asset(MASK_MATERIAL, BACKUP_MATERIAL)
 
 
-def _build_mask_graph(material, texture, values, no_rover):
+def _build_mask_graph(material, texture, values, no_rover, sun_collection):
     """
     Rebuilds the mask material: stencil + scene + world position + crater map
-    + rover-less render (`no_rover`, a texture) -> colour.
+    + rover-less render (`no_rover`, a texture) + sun direction (MPC_Sun) -> colour.
     """
     lib = unreal.MaterialEditingLibrary
     lib.delete_all_material_expressions(material)
@@ -213,12 +291,16 @@ def _build_mask_graph(material, texture, values, no_rover):
     helper.set_editor_property("parameter_name", "SunWithoutRover")
     helper.set_editor_property("texture", no_rover)
     screen = lib.create_material_expression(material, unreal.MaterialExpressionScreenPosition, -650, -380)
+    camera = lib.create_material_expression(material, unreal.MaterialExpressionCameraVectorWS, -650, -460)
+    sun = lib.create_material_expression(material, unreal.MaterialExpressionCollectionParameter, -650, -540)
+    sun.set_editor_property("collection", sun_collection)
+    sun.set_editor_property("parameter_name", SUN_PARAMETER)
 
     custom = lib.create_material_expression(material, unreal.MaterialExpressionCustom, -300, 0)
     custom.set_editor_property("code", MASK_CODE)
     custom.set_editor_property("description", "ObjectMaskColour")
     custom.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT3)
-    names = ("In", "Scene", "Pos", "Crater", "NoRover", "UV") + SCALAR_INPUTS
+    names = ("In", "Scene", "Pos", "Crater", "NoRover", "UV", "CamVec", "SunDir") + SCALAR_INPUTS
     inputs = []
     for name in names:
         entry = unreal.CustomInput()
@@ -232,6 +314,8 @@ def _build_mask_graph(material, texture, values, no_rover):
     lib.connect_material_expressions(crater, "", custom, "Crater")
     lib.connect_material_expressions(helper, "", custom, "NoRover")
     lib.connect_material_expressions(screen, "ViewportUV", custom, "UV")
+    lib.connect_material_expressions(camera, "", custom, "CamVec")
+    lib.connect_material_expressions(sun, "", custom, "SunDir")
     for row, name in enumerate(SCALAR_INPUTS):
         scalar = lib.create_material_expression(
             material, unreal.MaterialExpressionScalarParameter, -650, 360 + 70 * row)
@@ -246,6 +330,11 @@ def _build_mask_graph(material, texture, values, no_rover):
 
 def _in_pie():
     return unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).is_in_play_in_editor()
+
+
+def _current_world():
+    editor = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
+    return editor.get_game_world() or editor.get_editor_world()
 
 
 def _actors():
@@ -307,7 +396,7 @@ def list_mask_cameras():
             "with_mask": [c.get_name() for c in captures if _has_mask_material(c)],
             "streamer_mask": str(streamer.get_editor_property("mask_capture_name")) if streamer else None,
             "rover_shadow_helper": status})
-    if helpers:
+    if helpers or unreal.EditorAssetLibrary.does_asset_exist(SUN_MPC):
         install_rover_shadow_watch()
     return CAMERAS_JSON_PREFIX + json.dumps({"pie": _in_pie(), "actors": found})
 
@@ -564,8 +653,9 @@ def _helper_pairs(world):
 def _watch_tick(delta_seconds):
     """
     Editor tick: keeps each rover-shadow helper attached to its mask camera, in
-    the level and in a running game. Blueprint recompiles (also the one that can
-    run when Play starts) re-attach it to the actor's root.
+    the level and in a running game (Blueprint recompiles, also the one that can
+    run when Play starts, re-attach it to the actor's root), and keeps MPC_Sun
+    pointing at the sun.
     """
     state = getattr(builtins, "_rover_shadow_watch", None)
     if state is None:
@@ -593,6 +683,7 @@ def _watch_tick(delta_seconds):
                 attached = _attach_helper(helper, capture)
                 unreal.log(f"Rover shadow: re-attached {helper.get_actor_label()} to "
                            f"{capture.get_name()}" + ("" if attached else " (failed)"))
+        update_sun_mask(world, state)
         state["failed"] = False
     except Exception as error:      # Never let the tick raise; report once
         if not state.get("failed"):
@@ -663,11 +754,13 @@ def setup_rover_shadow(actor, capture, target):
 def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="",
                       landscape_width=0, landscape_stencil=LANDSCAPE_STENCIL, supersample=1,
                       camera_actor="", camera_capture="", save_level=False, shadows=True,
-                      rover_shadow=True):
+                      rover_shadow=True, sun=True, sun_glare_deg=SUN_GLARE_DEG):
     """
     Imports the crater map and makes the object mask show it on the Landscape;
     with `shadows`, the frame also carries the shadow mask and, with
-    `rover_shadow`, flags the shadow of the mask camera's own actor. When given,
+    `rover_shadow`, flags the shadow of the mask camera's own actor; with `sun`,
+    the sun's disc gets id SUN_ID in the object mask and the sky around it out to
+    `sun_glare_deg` gets SUN_GLARE_ID (0 for none). When given,
     sets up `camera_capture` on `camera_actor` as the mask camera. Returns a
     summary.
     """
@@ -708,8 +801,10 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
         "CraterStepX": step_x, "CraterStepY": step_y,
         "CraterWidth": width, "CraterHeight": height, "CraterSupersample": supersample,
         "ShadowEnabled": 1.0 if shadows else 0.0, "ShadowThreshold": SHADOW_THRESHOLD,
-        "RoverShadowEnabled": 1.0 if rover_on else 0.0, "RoverStencil": rover_stencil},
-        no_rover)
+        "RoverShadowEnabled": 1.0 if rover_on else 0.0, "RoverStencil": rover_stencil,
+        "SunEnabled": 1.0 if sun else 0.0, "SunId": SUN_ID, "SunGlareId": SUN_GLARE_ID,
+        "SunGlareCos": math.cos(math.radians(max(float(sun_glare_deg), 0.0)))},
+        no_rover, _sun_collection(_current_world()))
     summary = (f"Crater ground truth on '{landscape.get_actor_label()}': {texture.get_path_name()} "
                f"({width} x {height}, {supersample} per DEM cell) in {MASK_MATERIAL}. "
                f"Backup: {BACKUP_MATERIAL}.")
@@ -717,10 +812,15 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
                 if shadows else "\nShadow mask: off.")
     if rover_note:
         summary += "\n" + rover_note
+    summary += (f"\nSun: its disc is id {SUN_ID} and its glare (to {sun_glare_deg:g} deg) id "
+                f"{SUN_GLARE_ID} in the object mask (sky in the shadow feeds)."
+                if sun else "\nSun: not tagged.")
     if renamed:
         summary += "\nAssets: " + "; ".join(renamed) + "."
     if camera_actor and camera_capture:
         summary += "\n" + assign_mask_camera(camera_actor, camera_capture)
+    if sun:
+        update_sun_mask(_current_world())
     if rover_on:
         helper = next((a for a in _actors() if a.get_actor_label()
                        == f"{actor.get_actor_label()}_{ROVER_SHADOW_CAPTURE}"), None)
@@ -730,6 +830,8 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
         install_rover_shadow_watch()
         summary += ("\nRover shadow: a watcher keeps the helper attached to the mask camera "
                     "until the editor closes.")
+    elif sun:
+        install_rover_shadow_watch()
     elif not _in_pie():
         uninstall_rover_shadow_watch()
     if save_level and not _in_pie():

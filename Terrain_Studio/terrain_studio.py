@@ -2566,6 +2566,8 @@ class RockPlannerStudio(ttk.Frame):
 DEFAULT_MASK_IDS = {"boulder": 20, "small_rock": 21, "boulder_radius_m": 0.15,
                     "crater": crater_mask.CRATER_ID, "rim": crater_mask.RIM_ID}
 GNC_MASK_LABELS = "GNC-Moon-Simulator/component_stereo_depth/config/params.yaml"
+SUN_MASK_ID = 50   # The sun's disc in the object mask (SUN_ID in unreal_crater_mask)
+SUN_GLARE_ID = 51  # Its glare ring (SUN_GLARE_ID there)
 
 
 def mask_ids(app):
@@ -2743,6 +2745,25 @@ class CraterMaskStudio(ttk.Frame):
             var.trace_add("write", self._refresh_shadow_ids)
         self._refresh_shadow_ids()
 
+        # Sun
+        sun = self._group(inner, "Sun")
+        self.sun_var = tk.BooleanVar(value=True)
+        sun_check = ttk.Checkbutton(sun, text=f"Tag the sun's disc in the object mask (id {SUN_MASK_ID})",
+                                    variable=self.sun_var)
+        sun_check.pack(anchor="w")
+        Tooltip(sun_check,
+                "Sky pixels within the sun's disc get their own id in object_mask.\n"
+                "Its direction and size (Source Angle) come from the level's Directional\n"
+                "Light and follow it live, also during Play. The shadow feeds keep it as sky.")
+        self.sun_glare_var = tk.StringVar(value="1.1")
+        self._id_rows(sun, (
+            ("Glare radius (deg)", self.sun_glare_var,
+             f"Sky around the disc out to this angle gets id {SUN_GLARE_ID} (sun_glare): the part\n"
+             "the navcam washes out with bloom. 1.1 matches its saturated core (about\n"
+             "16 px across); half brightness reaches about 3.5 deg. 0 for no glare ring."),))
+        self.sun_var.trace_add("write", self._ids_changed)
+        self.sun_glare_var.trace_add("write", self._ids_changed)
+
         # Mask camera and sending
         camera = self._group(inner, "Mask Camera in Unreal")
         self._hint(camera, "The scene capture that renders the object mask. It gets "
@@ -2910,6 +2931,10 @@ class CraterMaskStudio(ttk.Frame):
             lines.append(f'- "{ids["crater"]}:crater"')
             if ids["rim"]:
                 lines.append(f'- "{ids["rim"]}:crater_rim"')
+            if self.sun_var.get():
+                lines.append(f'- "{SUN_MASK_ID}:sun"')
+                if self._glare_deg() > 0:
+                    lines.append(f'- "{SUN_GLARE_ID}:sun_glare"')
             self.labels_text.insert("end", "\n".join(lines))
         self.labels_text.configure(state="disabled")
 
@@ -2930,6 +2955,13 @@ class CraterMaskStudio(ttk.Frame):
         self.shadow_ids_text.delete("1.0", "end")
         self.shadow_ids_text.insert("end", "\n".join(lines))
         self.shadow_ids_text.configure(state="disabled")
+
+    def _glare_deg(self):
+        """Glare ring radius in degrees from the field; 0 when blank or invalid."""
+        try:
+            return max(float(self.sun_glare_var.get()), 0.0)
+        except ValueError:
+            return 0.0
 
     def copy_labels(self):
         self.clipboard_clear()
@@ -3125,6 +3157,8 @@ class CraterMaskStudio(ttk.Frame):
         save_level = self.save_level_var.get()
         shadows = self.shadows_var.get()
         rover_shadow = shadows and self.rover_shadow_var.get()
+        sun = self.sun_var.get()
+        sun_glare = self._glare_deg()
         self.log(f"Sending {os.path.basename(png)} to Unreal (crater id {meta['crater_id']}, "
                  f"rim id {meta['rim_id']}; shadow feed {'on' if shadows else 'off'}, rover "
                  f"shadow {'on' if rover_shadow else 'off'}; mask camera "
@@ -3137,7 +3171,8 @@ class CraterMaskStudio(ttk.Frame):
                       landscape_label=f"{stem}_heightmap", landscape_width=width,
                       supersample=meta.get("supersample", 1), camera_actor=camera_actor,
                       camera_capture=camera_capture, save_level=save_level,
-                      shadows=shadows, rover_shadow=rover_shadow, log=log))
+                      shadows=shadows, rover_shadow=rover_shadow, sun=sun,
+                      sun_glare_deg=sun_glare, log=log))
 
     def restore_material(self):
         self._run("Restoring the mask material...",
