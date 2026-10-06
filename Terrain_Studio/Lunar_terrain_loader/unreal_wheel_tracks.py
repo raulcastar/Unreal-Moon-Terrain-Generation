@@ -35,7 +35,12 @@ TRACK_DEPTH_CM = 8.0             # Projection depth, centred on the ground point
 CLEARANCE_CM = 22.0              # A track piece is laid once every wheel is this far from it,
                                  # so no decal lands on a wheel (the rover is never modified)
 MAX_PENDING = 256                # Track pieces waiting for the wheels to roll off
-TREAD_PERIOD_CM = 3.0            # Tread rib spacing
+TREAD_PERIOD_CM = 3.0            # Default tread lug spacing
+# Tread look, chosen in Terrain Studio. Lug spacings divide TRACK_SPACING_CM, so the
+# tread stays continuous from one decal to the next.
+TRACK_PATTERNS = {"straight": 0, "chevron": 1, "blocks": 2, "smooth": 3}
+LUG_SPACINGS_CM = (2.0, 3.0, 4.0, 6.0)
+DEFAULT_STYLE = {"pattern": "straight", "period_cm": TREAD_PERIOD_CM, "relief": 1.0, "shade": 0.7}
 TRACK_METALLIC = 0.05            # Mask marker; regolith is 0, visually negligible
 CONTACT_TOLERANCE_CM = 3.0       # A wheel leaves a track within this of the ground
 HIDDEN_Z_CM = -1.0e6             # Where unused decals wait
@@ -59,11 +64,15 @@ float3 T = normalize(float3(1.0, 0.0, 0.0) - N * N.x);
 float3 B = cross(N, T);
 float3 n = g.x * T + g.y * B + g.z * N;
 float across = (UV.y - 0.5) * 2.0;
-// Tread lug imprint: square lugs with sloped flanks, one per tread period.
-#define LUG(f) (smoothstep(0.12, 0.28, f) - smoothstep(0.62, 0.78, f))
-float lugF = frac(UV.x * Ribs);
-float lug = LUG(lugF);
-float slope = (LUG(frac(UV.x * Ribs + 0.02)) - lug) / 0.02;   // d(height)/d(period)
+// Tread lug imprint, one per tread period, square with sloped flanks. Pattern:
+// 0 straight lugs, 1 chevron, 2 staggered blocks, 3 smooth (no tread).
+#define LUG(f) (Pattern > 2.5 ? 0.0 : smoothstep(0.12, 0.28, f) - smoothstep(0.62, 0.78, f))
+float lugAcross = (UV.y - 0.5) * 2.0;
+float lugShift = Pattern < 0.5 ? 0.0 : (Pattern < 1.5 ? abs(lugAcross) * 0.5
+                                                       : (lugAcross > 0.0 ? 0.5 : 0.0));
+float lugGap = (Pattern > 1.5 && Pattern < 2.5) ? smoothstep(0.06, 0.16, abs(lugAcross)) : 1.0;
+float lug = LUG(frac(UV.x * Ribs + lugShift)) * lugGap;
+float slope = (LUG(frac(UV.x * Ribs + lugShift + 0.02)) * lugGap - lug) / 0.02;   // d(height)/d(period)
 float edge = 1.0 - smoothstep(0.8, 0.95, abs(across));           // lugs stop short of the edge
 n += normalize(Along) * (-slope * LugSlope * edge) + normalize(Across) * (-across * Rut);
 return normalize(n);"""
@@ -83,10 +92,14 @@ COLOUR_CODE = r"""float3 lum = float3(0.3, 0.59, 0.11);
 float3 n = lerp(Near, dot(Near, lum).xxx, Desaturation);
 float3 f = lerp(Far, dot(Far, lum).xxx, Desaturation);
 float t = saturate((Depth - DistanceOffset) / FadeSharpness);
-// Tread lug imprint: square lugs with sloped flanks, one per tread period.
-#define LUG(f) (smoothstep(0.12, 0.28, f) - smoothstep(0.62, 0.78, f))
-float lugF = frac(UV.x * Ribs);
-float lug = LUG(lugF);
+// Tread lug imprint, one per tread period, square with sloped flanks. Pattern:
+// 0 straight lugs, 1 chevron, 2 staggered blocks, 3 smooth (no tread).
+#define LUG(f) (Pattern > 2.5 ? 0.0 : smoothstep(0.12, 0.28, f) - smoothstep(0.62, 0.78, f))
+float lugAcross = (UV.y - 0.5) * 2.0;
+float lugShift = Pattern < 0.5 ? 0.0 : (Pattern < 1.5 ? abs(lugAcross) * 0.5
+                                                       : (lugAcross > 0.0 ? 0.5 : 0.0));
+float lugGap = (Pattern > 1.5 && Pattern < 2.5) ? smoothstep(0.06, 0.16, abs(lugAcross)) : 1.0;
+float lug = LUG(frac(UV.x * Ribs + lugShift)) * lugGap;
 float edge = 1.0 - smoothstep(0.8, 0.95, abs((UV.y - 0.5) * 2.0));
 return lerp(n, f, t) * Whiteness * Shade * (1.0 - LugShade * lug * edge);"""
 
@@ -127,12 +140,25 @@ def _landscape_specular():
         return 0.5 if node is None and material is None else 0.0
 
 
-def _track_material():
+def _style(style):
+    """DEFAULT_STYLE updated with `style`, checked: known pattern, a lug spacing that divides the decal spacing."""
+    merged = dict(DEFAULT_STYLE, **(style or {}))
+    if merged["pattern"] not in TRACK_PATTERNS:
+        merged["pattern"] = DEFAULT_STYLE["pattern"]
+    merged["period_cm"] = min(LUG_SPACINGS_CM, key=lambda p: abs(p - float(merged["period_cm"])))
+    merged["relief"] = max(0.0, min(3.0, float(merged["relief"])))
+    merged["shade"] = max(0.3, min(1.0, float(merged["shade"])))
+    return merged
+
+
+def _track_material(style=None):
     """
-    The track decal material (created or rebuilt). It draws the Landscape's own
-    regolith texture at the same place, a little darker, with the rut and tread,
-    so a track blends into the ground around it.
+    The track decal material (created or rebuilt) with the tread look `style`
+    (see DEFAULT_STYLE). It draws the Landscape's own regolith texture at the
+    same place, a little darker, with the rut and tread, so a track blends into
+    the ground around it.
     """
+    style = _style(style)
     lib = unreal.MaterialEditingLibrary
     material = unreal.load_asset(TRACK_MATERIAL)
     if material is None:
@@ -216,11 +242,14 @@ def _track_material():
 
     colour = custom(COLOUR_CODE, unreal.CustomMaterialOutputType.CMOT_FLOAT3,
                     ("Near", "Far", "Depth", "Desaturation", "Whiteness", "DistanceOffset",
-                     "FadeSharpness", "Shade", "UV", "Ribs", "LugShade"), -400, -400)
-    ribs = scalar("Ribs", TRACK_LENGTH_CM / TREAD_PERIOD_CM, -700, 300)
+                     "FadeSharpness", "Shade", "UV", "Ribs", "LugShade", "Pattern"), -400, -400)
+    ribs = scalar("Ribs", TRACK_LENGTH_CM / style["period_cm"], -700, 300)
+    pattern = scalar("Pattern", TRACK_PATTERNS[style["pattern"]], -700, 160)
     lib.connect_material_expressions(uv, "", colour, "UV")
     lib.connect_material_expressions(ribs, "", colour, "Ribs")
-    lib.connect_material_expressions(scalar("LugShade", 0.08, -700, 40), "", colour, "LugShade")
+    lib.connect_material_expressions(pattern, "", colour, "Pattern")
+    lib.connect_material_expressions(scalar("LugShade", 0.08 * style["relief"], -700, 40), "",
+                                     colour, "LugShade")
     lib.connect_material_expressions(near, "RGB", colour, "Near")
     lib.connect_material_expressions(far, "RGB", colour, "Far")
     lib.connect_material_expressions(depth, "", colour, "Depth")
@@ -228,7 +257,7 @@ def _track_material():
                            ("Whiteness", _landscape_scalar("Whiteness_Multiplier", 1.0), -200),
                            ("DistanceOffset", _landscape_scalar("DistanceOffset", 1000.0), -140),
                            ("FadeSharpness", _landscape_scalar("FadeSharpness", 5000.0), -80),
-                           ("Shade", 0.7, -20)):
+                           ("Shade", style["shade"], -20)):
         lib.connect_material_expressions(scalar(name, value, -700, y), "", colour, name)
 
     distance = {name: scalar(name, value, -1200, y) for name, value, y in (
@@ -248,7 +277,8 @@ def _track_material():
     lib.connect_material_expressions(uv, "", opacity, "UV")
     normal = custom(NORMAL_CODE, unreal.CustomMaterialOutputType.CMOT_FLOAT3,
                     ("UV", "Ribs", "Rut", "LugSlope", "GroundNear", "GroundFar", "Grain", "Depth",
-                     "DistanceOffset", "FadeSharpness", "Up", "Along", "Across"), -400, 300)
+                     "DistanceOffset", "FadeSharpness", "Up", "Along", "Across", "Pattern"), -400, 300)
+    lib.connect_material_expressions(pattern, "", normal, "Pattern")
     lib.connect_material_expressions(uv, "", normal, "UV")
     lib.connect_material_expressions(relief_near, "RGB", normal, "GroundNear")
     lib.connect_material_expressions(relief_far, "RGB", normal, "GroundFar")
@@ -260,7 +290,8 @@ def _track_material():
         lib.connect_material_expressions(node, "", normal, name)
     lib.connect_material_expressions(ribs, "", normal, "Ribs")
     lib.connect_material_expressions(scalar("Rut", 0.2, -700, 370), "", normal, "Rut")
-    lib.connect_material_expressions(scalar("LugSlope", 0.09, -700, 440), "", normal, "LugSlope")
+    lib.connect_material_expressions(scalar("LugSlope", 0.09 * style["relief"], -700, 440), "",
+                                     normal, "LugSlope")
     strength = lib.create_material_expression(material, unreal.MaterialExpressionMultiply, -200, 200)
     lib.connect_material_expressions(opacity, "", strength, "A")
     lib.connect_material_expressions(scalar("TrackOpacity", 0.95, -400, 220), "", strength, "B")
@@ -308,16 +339,28 @@ def remove_wheel_tracks(world=None):
     return len(decals)
 
 
-def setup_wheel_tracks(actor, pool_size=POOL_SIZE):
+def describe_style(style):
+    style = _style(style)
+    return (f"{style['pattern']} tread, lugs every {style['period_cm']:g} cm, relief "
+            f"{style['relief']:g}, regolith x{style['shade']:g}")
+
+
+def apply_track_style(style=None):
+    """Rebuilds the track decal material with the tread look `style`. Returns a summary line."""
+    _track_material(style)
+    return f"Wheel tracks: {describe_style(style)} ({TRACK_MATERIAL})."
+
+
+def setup_wheel_tracks(actor, pool_size=POOL_SIZE, style=None):
     """
     Places (or refreshes) the hidden track decals for `actor`'s wheels in the open
-    level. Editor only. Returns (ready, summary line).
+    level, with the tread look `style`. Editor only. Returns (ready, summary line).
     """
     wheels = _wheels(actor)
     if not wheels:
         return False, f"Wheel tracks: off, '{actor.get_actor_label()}' has no '*{WHEEL_SUFFIX}' meshes."
     world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
-    material = _track_material()
+    material = _track_material(style)
     radius, width = _wheel_size(wheels[0])
     size = unreal.Vector(TRACK_DEPTH_CM, width, TRACK_LENGTH_CM)
     label = actor.get_actor_label()
@@ -344,8 +387,8 @@ def setup_wheel_tracks(actor, pool_size=POOL_SIZE):
         decal.set_actor_location(unreal.Vector(0, 0, HIDDEN_Z_CM), False, False)
     per_wheel = pool_size * TRACK_SPACING_CM / len(wheels) / 100.0
     return True, (f"Wheel tracks: {pool_size} decals for {len(wheels)} wheels of {label} "
-                  f"({width:.1f} cm wide, about {per_wheel:.0f} m kept per wheel); they appear "
-                  "during Play.")
+                  f"({width:.1f} cm wide, about {per_wheel:.0f} m kept per wheel; "
+                  f"{describe_style(style)}); they appear during Play.")
 
 
 def _game_state(world, state):

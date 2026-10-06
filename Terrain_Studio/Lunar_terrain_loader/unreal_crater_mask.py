@@ -780,14 +780,15 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
                       landscape_width=0, landscape_stencil=LANDSCAPE_STENCIL, supersample=1,
                       camera_actor="", camera_capture="", save_level=False, shadows=True,
                       rover_shadow=True, sun=True, sun_glare_deg=SUN_GLARE_DEG,
-                      wheel_tracks=True):
+                      wheel_tracks=True, track_style=None):
     """
     Imports the crater map and makes the object mask show it on the Landscape;
     with `shadows`, the frame also carries the shadow mask and, with
     `rover_shadow`, flags the shadow of the mask camera's own actor; with `sun`,
     the sun's disc gets id SUN_ID in the object mask and the sky around it out to
     `sun_glare_deg` gets SUN_GLARE_ID (0 for none); with `wheel_tracks`, the mask
-    camera's actor leaves wheel tracks (TRACK_ID) during Play. When given,
+    camera's actor leaves wheel tracks (TRACK_ID) during Play, with the tread look
+    `track_style` (unreal_wheel_tracks.DEFAULT_STYLE). When given,
     sets up `camera_capture` on `camera_actor` as the mask camera. Returns a
     summary.
     """
@@ -833,12 +834,14 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
                  else _current_mask_camera())
         if _in_pie():
             tracks_on = bool(unreal_wheel_tracks._pool(_current_world()))
-            track_note = ("" if tracks_on else "Wheel tracks: stop Play In Editor and send again "
-                          "to place their decals.")
+            track_note = (unreal_wheel_tracks.apply_track_style(track_style) if tracks_on
+                          else "Wheel tracks: stop Play In Editor and send again to place their "
+                               "decals.")
         elif found is None:
             track_note = "Wheel tracks: off, no mask camera found (choose one and send again)."
         else:
-            tracks_on, track_note = unreal_wheel_tracks.setup_wheel_tracks(found[0])
+            tracks_on, track_note = unreal_wheel_tracks.setup_wheel_tracks(found[0],
+                                                                           style=track_style)
     elif not _in_pie() and unreal_wheel_tracks.remove_wheel_tracks():
         track_note = "Wheel tracks: off (decals removed)."
 

@@ -287,6 +287,17 @@ pixels get id 60 (`wheel_track`) in `object_mask`; add `"60:wheel_track"` to
   constraints.
 - The decal writes a tiny metallic value (0.05) that the regolith never has. The
   mask material reads it to tag the track. It also works on craters and rims.
+- **Tread look** (Wheel Tracks group, with a preview):
+
+  | Setting | Choices |
+  | --- | --- |
+  | Tread pattern | Straight lugs (default), Chevron, Staggered blocks, Smooth (no tread) |
+  | Lug spacing | 2, 3 (default), 4 or 6 cm; all divide the 12 cm decal spacing, so the tread stays continuous |
+  | Tread relief | 0 (none) to 2 (deep); 1 default |
+  | Regolith shade | 0.5 (dark tracks) to 1 (same as the ground); 0.7 default |
+
+  **Apply Track Look** updates only the track material in Unreal (also during
+  Play); **Send Masks to Unreal** applies it too.
 - Unticking the option and sending again removes the decals.
 
 ### Rover shadow

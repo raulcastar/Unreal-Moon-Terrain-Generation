@@ -2569,6 +2569,11 @@ GNC_MASK_LABELS = "GNC-Moon-Simulator/component_stereo_depth/config/params.yaml"
 SUN_MASK_ID = 50   # The sun's disc in the object mask (SUN_ID in unreal_crater_mask)
 SUN_GLARE_ID = 51  # Its glare ring (SUN_GLARE_ID there)
 TRACK_MASK_ID = 60  # Wheel tracks (TRACK_ID there)
+# Tread looks (unreal_wheel_tracks.TRACK_PATTERNS) and lug spacings that divide its
+# 12 cm decal spacing.
+TRACK_PATTERNS = (("Straight lugs", "straight"), ("Chevron", "chevron"),
+                  ("Staggered blocks", "blocks"), ("Smooth (no tread)", "smooth"))
+LUG_SPACINGS_CM = ("2", "3", "4", "6")
 
 
 def mask_ids(app):
@@ -2774,10 +2779,52 @@ class CraterMaskStudio(ttk.Frame):
         Tooltip(tracks_check,
                 "Places a pool of track decals in the level (hidden). During Play each wheel\n"
                 "of the mask camera's actor that touches the Landscape leaves a track: a\n"
-                "shallow rut with tread ribs, darker and smoother regolith. About 60 m are kept\n"
-                "per wheel, the oldest reused; tracks start afresh each Play. Track pixels\n"
-                "get their own id in object_mask.")
+                "shallow rut with the tread below, in packed regolith that keeps the ground's\n"
+                "grain. About 60 m are kept per wheel, the oldest reused; tracks start afresh\n"
+                "each Play. Track pixels get their own id in object_mask.")
         self.tracks_var.trace_add("write", self._ids_changed)
+
+        self.track_pattern_var = tk.StringVar(value=TRACK_PATTERNS[0][0])
+        self.track_spacing_var = tk.StringVar(value="3")
+        self.track_relief_var = tk.DoubleVar(value=1.0)
+        self.track_shade_var = tk.DoubleVar(value=0.7)
+        form = ttk.Frame(tracks)
+        form.pack(fill="x", pady=(4, 0))
+        form.columnconfigure(1, weight=1)
+        rows = (
+            ("Tread pattern", ttk.Combobox(form, textvariable=self.track_pattern_var, state="readonly",
+                                           values=[label for label, _ in TRACK_PATTERNS], width=16),
+             "The imprint the wheels leave: straight lugs across the track, chevrons (V),\n"
+             "staggered blocks (left and right halves offset), or a smooth band."),
+            ("Lug spacing (cm)", ttk.Combobox(form, textvariable=self.track_spacing_var, state="readonly",
+                                              values=LUG_SPACINGS_CM, width=16),
+             "Distance between lugs along the track. These all divide the 12 cm decal\n"
+             "spacing, so the tread stays continuous."),
+            ("Tread relief", ttk.Scale(form, variable=self.track_relief_var, from_=0.0, to=2.0),
+             "How strongly the lugs show: 0 none, 1 default, 2 deep imprints."),
+            ("Regolith shade", ttk.Scale(form, variable=self.track_shade_var, from_=0.5, to=1.0),
+             "Colour of the packed regolith relative to the ground's texture: 1 the same,\n"
+             "0.7 default (tracks read about 9% darker), 0.5 dark tracks."))
+        for row, (label, widget, tip) in enumerate(rows):
+            name = ttk.Label(form, text=label, font=("Segoe UI", 8))
+            name.grid(row=row, column=0, sticky="w", pady=1)
+            widget.grid(row=row, column=1, sticky="ew", padx=(6, 0), pady=1)
+            Tooltip(name, tip)
+        self.track_style_info = tk.StringVar()
+        self._readout(tracks, self.track_style_info)
+        self.track_preview = tk.Canvas(tracks, height=46, highlightthickness=0, background="#d9d6d0")
+        self.track_preview.pack(fill="x", pady=(4, 0))
+        Tooltip(self.track_preview, "Preview of one wheel's track from above (18 cm, travel left to right).")
+        self.track_style_button = ttk.Button(tracks, text="Apply Track Look", command=self.apply_track_style)
+        self.track_style_button.pack(fill="x", pady=(4, 0))
+        Tooltip(self.track_style_button,
+                "Updates only the tread look in Unreal (the track decal material), also during\n"
+                "Play. Send Masks to Unreal applies it too.")
+        for var in (self.track_pattern_var, self.track_spacing_var, self.track_relief_var,
+                    self.track_shade_var):
+            var.trace_add("write", self._refresh_track_preview)
+        self.track_preview.bind("<Configure>", self._refresh_track_preview)
+        self._refresh_track_preview()
 
         # Mask camera and sending
         camera = self._group(inner, "Mask Camera in Unreal")
@@ -2823,7 +2870,7 @@ class CraterMaskStudio(ttk.Frame):
 
         for var in (self.crater_var, self.rim_var):
             var.trace_add("write", self._ids_changed)
-        self._unreal_buttons = (self.send_button, self.restore_button)
+        self._unreal_buttons = (self.send_button, self.restore_button, self.track_style_button)
         if not LOADER_AVAILABLE:
             for button in self._unreal_buttons:
                 button.state(["disabled"])
@@ -3177,6 +3224,7 @@ class CraterMaskStudio(ttk.Frame):
         sun = self.sun_var.get()
         sun_glare = self._glare_deg()
         wheel_tracks = self.tracks_var.get()
+        track_style = self._track_style()
         self.log(f"Sending {os.path.basename(png)} to Unreal (crater id {meta['crater_id']}, "
                  f"rim id {meta['rim_id']}; shadow feed {'on' if shadows else 'off'}, rover "
                  f"shadow {'on' if rover_shadow else 'off'}; mask camera "
@@ -3190,7 +3238,55 @@ class CraterMaskStudio(ttk.Frame):
                       supersample=meta.get("supersample", 1), camera_actor=camera_actor,
                       camera_capture=camera_capture, save_level=save_level,
                       shadows=shadows, rover_shadow=rover_shadow, sun=sun,
-                      sun_glare_deg=sun_glare, wheel_tracks=wheel_tracks, log=log))
+                      sun_glare_deg=sun_glare, wheel_tracks=wheel_tracks,
+                      track_style=track_style, log=log))
+
+    def _track_style(self):
+        """The tread look chosen in the Wheel Tracks group (unreal_wheel_tracks style)."""
+        pattern = dict(TRACK_PATTERNS).get(self.track_pattern_var.get(), "straight")
+        return {"pattern": pattern, "period_cm": float(self.track_spacing_var.get() or 3),
+                "relief": round(float(self.track_relief_var.get()), 2),
+                "shade": round(float(self.track_shade_var.get()), 2)}
+
+    def _refresh_track_preview(self, *_args):
+        """Draws one wheel's track from above: 18 cm of tread, travel left to right."""
+        style = self._track_style()
+        self.track_style_info.set(
+            f"{self.track_pattern_var.get()}, lugs every {style['period_cm']:g} cm, relief "
+            f"{style['relief']:.1f}, shade {style['shade']:.2f}")
+        canvas = self.track_preview
+        canvas.delete("all")
+        width, height = max(canvas.winfo_width(), 160), 46
+        grey = int(208 * (0.85 + 0.15 * style["shade"]))
+        top, bottom = 8, height - 8
+        canvas.create_rectangle(0, top, width, bottom, outline="", fill=f"#{grey:02x}{grey:02x}{grey - 6:02x}")
+        if style["pattern"] == "smooth" or style["relief"] <= 0.01:
+            return
+        dark = max(0, grey - int(60 * min(style["relief"], 2.0)))
+        colour = f"#{dark:02x}{dark:02x}{max(dark - 6, 0):02x}"
+        cm = width / 18.0                       # 18 cm of track across the preview
+        period, lug = style["period_cm"] * cm, 0.4 * style["period_cm"] * cm
+        middle, inset = (top + bottom) / 2, 3
+        x = 0.0
+        while x < width + period:
+            if style["pattern"] == "straight":
+                canvas.create_rectangle(x, top + inset, x + lug, bottom - inset, outline="", fill=colour)
+            elif style["pattern"] == "chevron":
+                skew = 0.5 * period
+                canvas.create_polygon(x + skew, top + inset, x + skew + lug, top + inset, x + lug, middle,
+                                      x + skew + lug, bottom - inset, x + skew, bottom - inset, x, middle,
+                                      outline="", fill=colour)
+            else:                                # staggered blocks
+                canvas.create_rectangle(x, top + inset, x + lug, middle - 2, outline="", fill=colour)
+                canvas.create_rectangle(x + period / 2, middle + 2, x + period / 2 + lug, bottom - inset,
+                                        outline="", fill=colour)
+            x += period
+
+    def apply_track_style(self):
+        style = self._track_style()
+        self.log(f"Updating the wheel-track look in Unreal: {self.track_style_info.get()}.")
+        self._run("Updating the track look...",
+                  lambda log: crater_mask_to_unreal.send_track_style(style, log=log), "track_style")
 
     def restore_material(self):
         self._run("Restoring the mask material...",
