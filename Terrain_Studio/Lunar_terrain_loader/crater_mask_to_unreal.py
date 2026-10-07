@@ -68,9 +68,9 @@ def send_track_style(track_style, log=print, discovery_seconds=2.0):
     code = (
         f"import sys, importlib\n"
         f"if {BASE_DIRECTORY!r} not in sys.path: sys.path.append({BASE_DIRECTORY!r})\n"
-        f"import unreal_wheel_tracks\n"
-        f"importlib.reload(unreal_wheel_tracks)\n"
-        f"print(unreal_wheel_tracks.apply_track_style({dict(track_style or {})!r}))\n"
+        f"import unreal_track_setup\n"
+        f"importlib.reload(unreal_track_setup)\n"
+        f"print(unreal_track_setup.apply_track_style({dict(track_style or {})!r}))\n"
     )
     return run_in_unreal(code, log, "Updating the wheel-track look in Unreal", discovery_seconds)
 

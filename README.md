@@ -198,7 +198,7 @@ A pixel is shadow when the mask camera's sun-only render shows it at less than
 **half of full sunlight** (display value 0.5 of 1).
 
 - Set by `SHADOW_THRESHOLD` in
-  `Terrain_Studio/Unreal_runtime/unreal_crater_mask.py` and written to the
+  `Terrain_Studio/Lunar_terrain_loader/unreal_crater_mask.py` and written to the
   `ShadowThreshold` parameter of `PPM_GroundTruthMask` on every send. Change it there
   and send the masks again.
 - That render is almost all black (shadow) or near white (sunlit). The values in
@@ -282,6 +282,10 @@ pixels get id 60 (`wheel_track`) in `object_mask`; add `"60:wheel_track"` to
   wheel has rolled off it, so no track lands on a wheel. About 60 m per wheel are
   kept, the oldest reused. Tracks start afresh each time Play starts. No tracks
   are left on rocks or while a wheel is in the air.
+- For the first 3 s of Play (`SETTLE_TIME_S` in
+  `Unreal_runtime/unreal_wheel_tracks.py`) the rover settles onto the ground, and
+  its movement is ignored: no tracks are laid and the dust parameters stay at 0.
+  This keeps the settling from leaving tracks or throwing dust into the air.
 - The rover itself is only read, never changed, while the game runs. Changing a
   simulating part's properties rebuilds its physics and breaks the wheel
   constraints.
@@ -434,20 +438,21 @@ works in the editor and Play In Editor, not in a packaged game.
 | File | Role |
 | --- | --- |
 | `<Project>/Content/Python/init_unreal.py` | Unreal runs it when the editor opens; it starts the watcher |
-| `<Project>/Content/Python/TerrainStudio/*.py` | The watcher's modules: `unreal_crater_mask`, `unreal_wheel_tracks`, `unreal_wheel_dust`, `unreal_rock_placer`, `unreal_level_saver`, `rock_models` |
+| `<Project>/Content/Python/TerrainStudio/*.py` | The watcher's modules: `unreal_watcher`, `unreal_wheel_tracks`, `unreal_wheel_dust` |
 
-**Sources in this repository:**
+**Sources in this repository:** the watcher and the studio are kept apart.
 
-| Folder | Files |
-| --- | --- |
-| `Terrain_Studio/Unreal_runtime/` | Only for the watcher: `init_unreal.py`, `unreal_crater_mask.py`, `unreal_wheel_tracks.py`, `unreal_wheel_dust.py` |
-| `Terrain_Studio/Lunar_terrain_loader/` | Shared with the studio and its other Unreal scripts: `unreal_rock_placer.py`, `unreal_level_saver.py`, `rock_models.py` |
+| Folder | Files | Role |
+| --- | --- | --- |
+| `Terrain_Studio/Unreal_runtime/` | `init_unreal.py`, `unreal_watcher.py`, `unreal_wheel_tracks.py`, `unreal_wheel_dust.py` | Only the watcher's per-frame work. Copied into the project; imports nothing from the studio |
+| `Terrain_Studio/Lunar_terrain_loader/` | `unreal_crater_mask.py`, `unreal_track_setup.py`, `unreal_dust_setup.py`, ... | The studio's Unreal-side setup, run when it sends: mask material, cameras, rover-shadow helper, track decals and material, dust sprite. Uses the watcher's helpers and constants, never the other way round |
 
 **Kept up to date:** every time Terrain Studio sends anything to Unreal (map,
 rocks, masks, sun), it first copies these files into the project when they
-differ (`Lunar_terrain_loader/runtime_sync.py`). It also puts the project's copy
-first on Unreal's module path, so the studio's commands and the watcher run the
-same code. The Output Log then shows
+differ (`Lunar_terrain_loader/runtime_sync.py`), and removes anything else from
+`Content/Python/TerrainStudio`. It also puts the project's copy first on
+Unreal's module path and reloads the modules it just updated, so the studio's
+commands and the watcher run the same code. The Output Log then shows
 "Terrain Studio: updated Content/Python/...". Files that have not changed are
 left alone. After an update, the running watcher picks up the new code on that
 send; a fresh editor start uses it from the beginning.
@@ -538,11 +543,14 @@ Terrain_Studio/
     unreal_terrain_generator.py  Runs inside Unreal; spawns the Landscape
     unreal_api.py                Remote Execution client
     runtime_sync.py              Copies the editor watcher into the Unreal project
-  Unreal_runtime/                The editor watcher (copied to <Project>/Content/Python)
+    unreal_crater_mask.py        Runs inside Unreal: mask material, cameras, rover-shadow helper, sun mask
+    unreal_track_setup.py        Runs inside Unreal: track decal pool and material
+    unreal_dust_setup.py         Runs inside Unreal: dust sprite and Niagara stencil
+  Unreal_runtime/                The editor watcher only (copied to <Project>/Content/Python)
     init_unreal.py               Unreal startup script: starts the watcher
-    unreal_crater_mask.py        Mask material, rover-shadow helper, sun mask, the watcher
-    unreal_wheel_tracks.py       Wheel-track decals
-    unreal_wheel_dust.py         Wheel-dust Niagara emitters
+    unreal_watcher.py            Per-frame: rover-shadow helper attachment, sun direction
+    unreal_wheel_tracks.py       Per-frame: lays the wheel tracks during Play
+    unreal_wheel_dust.py         Per-frame: drives the wheel-dust emitters during Play
 config/  input_maps/  outputs/
 docs/images/                     README screenshots
 ```

@@ -22,7 +22,7 @@ gets SUN_GLARE_ID: the sky the navcam washes out with bloom around the sun. That
 the level's Directional Light through MPC_Sun, which the editor watcher keeps
 current (also in a running game). The shadow feeds treat the disc as sky.
 
-Wheel tracks (unreal_wheel_tracks) are decals that write a small metallic value
+Wheel tracks (unreal_track_setup, laid by the watcher's unreal_wheel_tracks) are decals that write a small metallic value
 regolith never has; ground pixels carrying it get TRACK_ID.
 
 The colours change by at most 1/255, and the GNC stereo node splits the frame
@@ -47,6 +47,9 @@ import math
 import unreal
 
 from unreal_rock_placer import find_landscape, landscape_frame
+from unreal_watcher import (ROVER_SHADOW_CAPTURE, SUN_MPC, SUN_PARAMETER, attach_helper,
+                            find_streamer, install_watcher, sun_light, sun_vector,
+                            uninstall_watcher, update_sun_mask)
 
 CAMERAS_JSON_PREFIX = "CAMERAS_JSON "
 
@@ -63,8 +66,6 @@ MASK_MATERIAL = f"{GROUND_TRUTH_FOLDER}/PPM_GroundTruthMask"
 BACKUP_MATERIAL = f"{GROUND_TRUTH_FOLDER}/PPM_GroundTruthMask_Backup"
 ROVER_SHADOW_TARGET = f"{GROUND_TRUTH_FOLDER}/RT_SunOnly_RoverHidden"
 CRATER_TEXTURE_PREFIX = "T_CraterIds_"
-SUN_MPC = f"{GROUND_TRUTH_FOLDER}/MPC_Sun"
-SUN_PARAMETER = "SunDirection"   # xyz: unit vector towards the sun; w: cos(disc radius)
 SUN_ID = 50
 SUN_GLARE_ID = 51
 SUN_GLARE_DEG = 1.1    # Glare ring radius: the navcam's saturated core (~8 px of 640 at 90 deg)
@@ -76,9 +77,6 @@ OLD_ASSET_NAMES = {
     f"{GROUND_TRUTH_FOLDER}/PPM_ObjectMask_Original": BACKUP_MATERIAL,
     f"{GROUND_TRUTH_FOLDER}/RT_SunWithoutRover": ROVER_SHADOW_TARGET,
 }
-ROVER_SHADOW_CAPTURE = "RoverShadowCapture"   # Helper actor label: <actor>_RoverShadowCapture
-WATCH_INTERVAL = 0.5       # Seconds between the watcher's attachment checks
-WATCH_RESCAN = 10.0        # Seconds between level scans while no helper is found
 DEFAULT_ROVER_STENCIL = 2
 LANDSCAPE_STENCIL = 10
 SHADOW_THRESHOLD = 0.5     # Sun-only display value below which a pixel is shadow (half light, so soft tails count)
@@ -198,30 +196,6 @@ def import_mask_texture(png_path, name):
     return texture
 
 
-def _alive(obj):
-    """True if `obj` still exists. (is_valid raises, not returns False, for an object
-    of an earlier Play session.)"""
-    try:
-        return obj is not None and unreal.SystemLibrary.is_valid(obj)
-    except Exception:
-        return False
-
-
-def _sun_light(world):
-    """The level's sun: the Directional Light linked to the sky atmosphere, else the first."""
-    lights = list(unreal.GameplayStatics.get_all_actors_of_class(world, unreal.DirectionalLight))
-    linked = [l for l in lights if l.light_component.get_editor_property("atmosphere_sun_light")]
-    return (linked or lights or [None])[0]
-
-
-def _sun_vector(light):
-    """LinearColor(towards-sun x, y, z, cos(disc radius)) for `light`."""
-    import math
-    forward = light.get_actor_forward_vector()
-    radius = math.radians(light.light_component.get_editor_property("light_source_angle") / 2.0)
-    return unreal.LinearColor(-forward.x, -forward.y, -forward.z, math.cos(max(radius, 1e-4)))
-
-
 def _sun_collection(world):
     """MPC_Sun (created if needed) with its default set to the level's sun now."""
     collection = unreal.load_asset(SUN_MPC)
@@ -229,34 +203,14 @@ def _sun_collection(world):
         collection = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
             SUN_MPC.rsplit("/", 1)[-1], GROUND_TRUTH_FOLDER, unreal.MaterialParameterCollection,
             unreal.MaterialParameterCollectionFactoryNew())
-    light = _sun_light(world)
+    light = sun_light(world)
     parameter = unreal.CollectionVectorParameter()
     parameter.set_editor_property("parameter_name", SUN_PARAMETER)
-    parameter.set_editor_property("default_value", _sun_vector(light) if light
+    parameter.set_editor_property("default_value", sun_vector(light) if light
                                   else unreal.LinearColor(0.0, 0.0, 1.0, 1.0))
     collection.set_editor_property("vector_parameters", [parameter])
     unreal.EditorAssetLibrary.save_loaded_asset(collection)
     return collection
-
-
-def update_sun_mask(world, state=None):
-    """Points MPC_Sun in `world` at its sun; skips the write when nothing changed."""
-    state = state if state is not None else {}
-    collection = state.get("sun_collection") or unreal.load_asset(SUN_MPC)
-    if collection is None:
-        return
-    state["sun_collection"] = collection
-    light = state.get("sun_light")
-    if not _alive(light) or state.get("sun_world") != world:
-        light = state["sun_light"] = _sun_light(world)
-        state["sun_world"], state["sun_value"] = world, None
-    if light is None:
-        return
-    value = _sun_vector(light)
-    key = tuple(round(x, 6) for x in (value.r, value.g, value.b, value.a))
-    if key != state.get("sun_value"):
-        unreal.MaterialLibrary.set_vector_parameter_value(world, collection, SUN_PARAMETER, value)
-        state["sun_value"] = key
 
 
 def _rename_old_assets():
@@ -377,13 +331,6 @@ def _is_helper(actor):
     return actor.get_actor_label().endswith("_" + ROVER_SHADOW_CAPTURE)
 
 
-def _streamer(actor):
-    for component in actor.get_components_by_class(unreal.ActorComponent):
-        if component.get_class().get_name() == "StereoCamStreamer":
-            return component
-    return None
-
-
 def _has_mask_material(capture):
     settings = capture.get_editor_property("post_process_settings")
     blends = settings.get_editor_property("weighted_blendables").get_editor_property("array")
@@ -405,14 +352,14 @@ def list_mask_cameras():
             helpers = True
         if not captures or _is_helper(actor):
             continue
-        streamer = _streamer(actor)
+        streamer = find_streamer(actor)
         status = _helper_status(actor)
         if status == "detached":
             capture = next((c for c in captures if c.get_name()
                             == str(streamer.get_editor_property("mask_capture_name"))), None)
             helper = next(a for a in _actors() if a.get_actor_label()
                           == f"{actor.get_actor_label()}_{ROVER_SHADOW_CAPTURE}")
-            if capture is not None and _attach_helper(helper, capture):
+            if capture is not None and attach_helper(helper, capture):
                 status = "reattached"
         found.append({
             "actor": actor.get_actor_label(),
@@ -421,7 +368,7 @@ def list_mask_cameras():
             "streamer_mask": str(streamer.get_editor_property("mask_capture_name")) if streamer else None,
             "rover_shadow_helper": status})
     if helpers or unreal.EditorAssetLibrary.does_asset_exist(SUN_MPC):
-        install_rover_shadow_watch()
+        install_watcher()
     return CAMERAS_JSON_PREFIX + json.dumps({"pie": _in_pie(), "actors": found})
 
 
@@ -473,7 +420,7 @@ def assign_mask_camera(actor_label, capture_name):
         notes.append("added PPM_GroundTruthMask")
     _set_mask_render(capture)
     notes.append("sun-only render set for shadows")
-    streamer = _streamer(actor)
+    streamer = find_streamer(actor)
     if streamer is not None and str(streamer.get_editor_property("mask_capture_name")) != capture_name:
         streamer.set_editor_property("mask_capture_name", capture_name)
         notes.append(f"streamer now streams it as mask camera {streamer.get_editor_property('mask_cam_id')}")
@@ -495,7 +442,7 @@ def _find_capture(actor_label, capture_name):
 def _current_mask_camera():
     """(actor, capture) of the capture a StereoCamStreamer streams as the mask, or None."""
     for actor in _actors():
-        streamer = _streamer(actor)
+        streamer = find_streamer(actor)
         if streamer is not None:
             found = _find_capture(actor.get_actor_label(),
                                   str(streamer.get_editor_property("mask_capture_name")))
@@ -620,138 +567,16 @@ def _paste_helper(actor, label):
     return next((a for a in _level_actors() if a.get_actor_label() == label), None)
 
 
-def _attach_helper(helper, capture):
-    """
-    Snaps the helper onto the mask camera. The camera may ride a physics body
-    that moves away from the actor's root in play, so the helper must follow the
-    camera itself. Recompiling the actor's Blueprint can re-attach it to the
-    root; sending again fixes that. Returns True when attached to `capture`.
-    """
-    rule = unreal.AttachmentRule.SNAP_TO_TARGET
-    helper.attach_to_component(capture, "", rule, rule, rule, False)
-    return helper.get_editor_property("root_component").get_attach_parent() == capture
-
-
 def _helper_status(actor):
     """'attached', 'detached' or None: the actor's rover-shadow helper and its mask camera."""
     helper = next((a for a in _actors() if a.get_actor_label()
                    == f"{actor.get_actor_label()}_{ROVER_SHADOW_CAPTURE}"), None)
-    streamer = _streamer(actor)
+    streamer = find_streamer(actor)
     if helper is None or streamer is None:
         return None
     parent = helper.get_editor_property("root_component").get_attach_parent()
     name = str(streamer.get_editor_property("mask_capture_name"))
     return "attached" if parent is not None and parent.get_name() == name else "detached"
-
-
-def _helper_pairs(world):
-    """
-    (helper, mask capture) for every rover-shadow helper in `world`. Looks only
-    at SceneCapture2D actors (a few), not the whole level, which can hold
-    thousands of rocks; the helper's owner is its attach-parent actor (it stays
-    the rover even when re-attached to the root).
-    """
-    pairs, everything = [], None
-    for helper in unreal.GameplayStatics.get_all_actors_of_class(world, unreal.SceneCapture2D):
-        label = helper.get_actor_label()
-        if not label.endswith("_" + ROVER_SHADOW_CAPTURE):
-            continue
-        owner_label = label[:-len(ROVER_SHADOW_CAPTURE) - 1]
-        owner = helper.get_attach_parent_actor()
-        if owner is None or owner.get_actor_label() != owner_label:
-            if everything is None:      # Fully detached: fall back to a full scan
-                everything = {a.get_actor_label(): a for a in
-                              unreal.GameplayStatics.get_all_actors_of_class(world, unreal.Actor)}
-            owner = everything.get(owner_label)
-        streamer = _streamer(owner) if owner else None
-        if streamer is None:
-            continue
-        name = str(streamer.get_editor_property("mask_capture_name"))
-        capture = next((c for c in owner.get_components_by_class(unreal.SceneCaptureComponent2D)
-                        if c.get_name() == name), None)
-        if capture is not None:
-            pairs.append((helper, capture))
-    return pairs
-
-
-def _watch_tick(delta_seconds):
-    """
-    Editor tick: keeps each rover-shadow helper attached to its mask camera, in
-    the level and in a running game (Blueprint recompiles, also the one that can
-    run when Play starts, re-attach it to the actor's root), keeps MPC_Sun
-    pointing at the sun, and, every frame of a running game, lays wheel tracks.
-    """
-    state = getattr(builtins, "_rover_shadow_watch", None)
-    if state is None:
-        return
-    try:
-        import unreal_wheel_tracks
-        game = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_game_world()
-        if game is not None:
-            unreal_wheel_tracks.update_wheel_tracks(game, state)     # Also reports rolling wheels
-        state["track_error"] = None
-    except Exception as error:          # Report each new error once; rebuild the cache
-        if state.get("track_error") != str(error):
-            unreal.log_warning(f"Wheel tracks: {error}")
-        state["track_error"], state["track_world"] = str(error), None
-    try:                                # Dust separately: it must never stop the tracks
-        import unreal_wheel_dust
-        game = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_game_world()
-        if game is not None:
-            unreal_wheel_dust.update_wheel_dust(game, state)
-        state["dust_error"] = None
-    except Exception as error:
-        if state.get("dust_error") != str(error):
-            unreal.log_warning(f"Wheel dust: {error}")
-        state["dust_error"], state["dust_emitters"] = str(error), None
-    state["elapsed"] += delta_seconds
-    state["since_scan"] += delta_seconds
-    if state["elapsed"] < WATCH_INTERVAL:
-        return
-    state["elapsed"] = 0.0
-    try:
-        editor = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
-        world = editor.get_game_world() or editor.get_editor_world()
-        if world is None:
-            return
-        valid = _alive
-        stale = (state["world"] != world.get_path_name()
-                 or not all(valid(h) and valid(c) for h, c in state["pairs"])
-                 or (not state["pairs"] and state["since_scan"] >= WATCH_RESCAN))
-        if stale:
-            state["pairs"] = _helper_pairs(world)
-            state["world"] = world.get_path_name()
-            state["since_scan"] = 0.0
-        for helper, capture in state["pairs"]:
-            if helper.get_editor_property("root_component").get_attach_parent() != capture:
-                attached = _attach_helper(helper, capture)
-                unreal.log(f"Rover shadow: re-attached {helper.get_actor_label()} to "
-                           f"{capture.get_name()}" + ("" if attached else " (failed)"))
-        update_sun_mask(world, state)
-        state["failed"] = False
-    except Exception as error:      # Never let the tick raise; report once
-        if not state.get("failed"):
-            unreal.log_warning(f"Rover shadow watcher: {error}")
-        state["failed"] = True
-
-
-def install_rover_shadow_watch():
-    """
-    Registers the attachment watcher for this editor session (replacing an
-    earlier one). It lasts until the editor closes; sending masks or Find in the
-    studio installs it again.
-    """
-    uninstall_rover_shadow_watch()
-    state = {"elapsed": 0.0, "since_scan": 0.0, "world": None, "pairs": [], "failed": False}
-    state["handle"] = unreal.register_slate_post_tick_callback(_watch_tick)
-    builtins._rover_shadow_watch = state
-
-
-def uninstall_rover_shadow_watch():
-    state = getattr(builtins, "_rover_shadow_watch", None)
-    if state is not None:
-        unreal.unregister_slate_post_tick_callback(state["handle"])
-        builtins._rover_shadow_watch = None
 
 
 def _hides(helper, actor):
@@ -782,7 +607,7 @@ def setup_rover_shadow(actor, capture, target):
             reason = "the editor did not paste it"
         if helper is None or not _hides(helper, actor):
             return False, f"Rover shadow: off, could not add its helper capture ({reason})."
-    _attach_helper(helper, capture)
+    attach_helper(helper, capture)
     component = helper.get_component_by_class(unreal.SceneCaptureComponent2D)
     component.set_editor_property("fov_angle", capture.get_editor_property("fov_angle"))
     component.set_editor_property("texture_target", target)
@@ -807,7 +632,7 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
     the sun's disc gets id SUN_ID in the object mask and the sky around it out to
     `sun_glare_deg` gets SUN_GLARE_ID (0 for none); with `wheel_tracks`, the mask
     camera's actor leaves wheel tracks (TRACK_ID) during Play, with the tread look
-    `track_style` (unreal_wheel_tracks.DEFAULT_STYLE) and, with `wheel_dust`,
+    `track_style` (unreal_track_setup.DEFAULT_STYLE) and, with `wheel_dust`,
     kicks up lunar dust (DUST_ID; `dust_amount` scales it). When given,
     sets up `camera_capture` on `camera_actor` as the mask camera. Returns a
     summary.
@@ -846,34 +671,34 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
 
     # Wheel tracks: decal pool for the mask camera's actor (editor only).
     import importlib
-    import unreal_wheel_tracks
-    importlib.reload(unreal_wheel_tracks)
+    import unreal_track_setup
+    importlib.reload(unreal_track_setup)
     track_note, tracks_on = "", False
     if wheel_tracks:
         found = (_find_capture(camera_actor, camera_capture) if camera_actor and camera_capture
                  else _current_mask_camera())
         if _in_pie():
-            tracks_on = bool(unreal_wheel_tracks._pool(_current_world()))
-            track_note = (unreal_wheel_tracks.apply_track_style(track_style) if tracks_on
+            tracks_on = bool(unreal_track_setup.track_pool(_current_world()))
+            track_note = (unreal_track_setup.apply_track_style(track_style) if tracks_on
                           else "Wheel tracks: stop Play In Editor and send again to place their "
                                "decals.")
         elif found is None:
             track_note = "Wheel tracks: off, no mask camera found (choose one and send again)."
         else:
-            tracks_on, track_note = unreal_wheel_tracks.setup_wheel_tracks(found[0],
+            tracks_on, track_note = unreal_track_setup.setup_wheel_tracks(found[0],
                                                                            style=track_style)
-    elif not _in_pie() and unreal_wheel_tracks.remove_wheel_tracks():
+    elif not _in_pie() and unreal_track_setup.remove_wheel_tracks():
         track_note = "Wheel tracks: off (decals removed)."
 
     # Wheel dust: instanced grains for the same actor (editor only); needs the tracks.
-    import unreal_wheel_dust
-    importlib.reload(unreal_wheel_dust)
+    import unreal_dust_setup
+    importlib.reload(unreal_dust_setup)
     dust_note, dust_on = "", False
     if wheel_dust and tracks_on and found is not None and not _in_pie():
-        dust_on, dust_note = unreal_wheel_dust.setup_wheel_dust(found[0])
+        dust_on, dust_note = unreal_dust_setup.setup_wheel_dust(found[0])
     elif wheel_dust and tracks_on and _in_pie():
-        dust_on = unreal.EditorAssetLibrary.does_asset_exist(unreal_wheel_dust.DUST_SYSTEM)
-    elif not wheel_dust and not _in_pie() and unreal_wheel_dust.remove_wheel_dust():
+        dust_on = unreal.EditorAssetLibrary.does_asset_exist(unreal_dust_setup.DUST_SYSTEM)
+    elif not wheel_dust and not _in_pie() and unreal_dust_setup.remove_wheel_dust():
         dust_note = "Wheel dust: off."
     elif wheel_dust and not tracks_on:
         dust_note = "Wheel dust: off, it needs the wheel tracks."
@@ -887,7 +712,7 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
         "SunEnabled": 1.0 if sun else 0.0, "SunId": SUN_ID, "SunGlareId": SUN_GLARE_ID,
         "SunGlareCos": math.cos(math.radians(max(float(sun_glare_deg), 0.0))),
         "TrackEnabled": 1.0 if tracks_on else 0.0, "TrackId": TRACK_ID,
-        "TrackMetallic": unreal_wheel_tracks.TRACK_METALLIC},
+        "TrackMetallic": unreal_track_setup.TRACK_METALLIC},
         no_rover, _sun_collection(_current_world()))
     summary = (f"Crater ground truth on '{landscape.get_actor_label()}': {texture.get_path_name()} "
                f"({width} x {height}, {supersample} per DEM cell) in {MASK_MATERIAL}. "
@@ -911,21 +736,21 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
     if sun:
         update_sun_mask(_current_world())
     if tracks_on and not rover_on:
-        install_rover_shadow_watch()
+        install_watcher()
     if rover_on:
         helper = next((a for a in _actors() if a.get_actor_label()
                        == f"{actor.get_actor_label()}_{ROVER_SHADOW_CAPTURE}"), None)
-        if helper is None or not _attach_helper(helper, capture):
+        if helper is None or not attach_helper(helper, capture):
             summary += ("\n[-] Rover shadow: the helper capture is not attached to the mask "
                         "camera; send again.")
-        install_rover_shadow_watch()
+        install_watcher()
         summary += ("\nRover shadow: a watcher keeps the helper attached to the mask camera "
                     "until the editor closes.")
     elif sun or tracks_on:
-        install_rover_shadow_watch()
+        install_watcher()
     elif not _in_pie():
-        uninstall_rover_shadow_watch()
-    state = getattr(builtins, "_rover_shadow_watch", None)    # After the watcher (re)starts
+        uninstall_watcher()
+    state = getattr(builtins, "_terrain_studio_watcher", None)    # After the watcher (re)starts
     if state is not None:
         state["dust_on"] = dust_on
         state["dust_amount"] = max(0.0, float(dust_amount))
@@ -942,7 +767,7 @@ def remove_crater_mask():
     """
     removed = 0 if _in_pie() else _remove_rover_shadow_captures()
     if removed:
-        uninstall_rover_shadow_watch()
+        uninstall_watcher()
     if not unreal.EditorAssetLibrary.does_asset_exist(BACKUP_MATERIAL):
         return ("Nothing to restore: no backup of the object-mask material."
                 + (f" Removed {removed} rover-shadow helper capture(s)." if removed else ""))
