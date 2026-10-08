@@ -88,10 +88,17 @@ def update_sun_mask(world, state=None):
 
 
 def find_streamer(actor):
-    for component in actor.get_components_by_class(unreal.ActorComponent):
-        if component.get_class().get_name() == "UnrealStereoCam":
-            return component
-    return None
+    """
+    The actor's UnrealStereoCam that streams the object mask: an actor can carry
+    several (e.g. the navcam rig plus a rear camera), and only one has a mask
+    capture. Falls back to the first one when none has.
+    """
+    streamers = [c for c in actor.get_components_by_class(unreal.ActorComponent)
+                 if c.get_class().get_name() == "UnrealStereoCam"]
+    for streamer in streamers:
+        if str(streamer.get_editor_property("mask_capture_name")) not in ("", "None"):
+            return streamer
+    return streamers[0] if streamers else None
 
 
 def place_shadow_map(world, helper, capture, state=None):
