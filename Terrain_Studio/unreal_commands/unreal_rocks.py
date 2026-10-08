@@ -35,8 +35,8 @@ PHYSICS_MASS_KG = 500.0
 
 # Custom Depth-Stencil ids for the GNC simulator's object mask; they must match
 # mask_labels in GNC-Moon-Simulator/component_stereo_depth/config/params.yaml.
-BOULDER_STENCIL = 20
-SMALL_ROCK_STENCIL = 21
+BOULDER_STENCIL = 9           # Object-mask ids (unreal_ground_truth.MASK_IDS)
+SMALL_ROCK_STENCIL = 10
 BOULDER_MIN_RADIUS_M = 0.15
 
 

@@ -28,7 +28,7 @@ _SPOT_CHECKS = 64
 # Material given to every new Landscape, and its id in the rover's object mask
 # (Custom Depth Stencil; 10 is 'landscape' in the GNC mask labels).
 DEFAULT_LANDSCAPE_MATERIAL = "/Game/Landscape/Landscape_Material"
-LANDSCAPE_MASK_STENCIL = 10
+LANDSCAPE_MASK_STENCIL = 5    # Object-mask id of the landscape (unreal_ground_truth.MASK_IDS)
 
 
 def read_r16(heightmap_filepath, width, height):

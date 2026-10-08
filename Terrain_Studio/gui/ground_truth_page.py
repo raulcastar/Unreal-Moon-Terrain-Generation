@@ -29,22 +29,27 @@ from gui.widgets import ParamRow, ProgressPanel, Tooltip
 # CRATER MASKS
 # =========================================================================
 
-# Object-mask ids: rocks are set in the rock planner, craters in Crater Masks;
-# both views read them for placement and the GNC labels.
-DEFAULT_MASK_IDS = {"boulder": 20, "small_rock": 21, "boulder_radius_m": 0.15,
+# Object-mask ids, consecutive (unreal_ground_truth.MASK_IDS). Rocks can be
+# changed in the rock planner and craters here; both views read them for
+# placement and the GNC labels.
+DEFAULT_MASK_IDS = {"boulder": 9, "small_rock": 10, "boulder_radius_m": 0.15,
                     "crater": crater_map.CRATER_ID, "rim": crater_map.RIM_ID}
+UNLABELED_ID = 0   # Nothing tagged
+SKY_MASK_ID = 1    # The sky (SKY_ID in unreal_ground_truth)
+ROVER_MASK_ID = 2  # The rover's stencil (set in its Blueprint)
+LANDSCAPE_MASK_ID = 5
 
 
 GNC_MASK_LABELS = "GNC-Moon-Simulator/component_stereo_depth/config/params.yaml"
 
 
-SUN_MASK_ID = 50   # The sun's disc in the object mask (SUN_ID in unreal_ground_truth)
+SUN_MASK_ID = 3    # The sun's disc in the object mask (SUN_ID in unreal_ground_truth)
 
 
-SUN_GLARE_ID = 51  # Its glare ring (SUN_GLARE_ID there)
+SUN_GLARE_ID = 4   # Its glare ring (SUN_GLARE_ID there)
 
 
-TRACK_MASK_ID = 60  # Wheel tracks (TRACK_ID there)
+TRACK_MASK_ID = 8   # Wheel tracks (TRACK_ID there)
 
 
 # Tread looks (unreal_wheel_tracks.TRACK_PATTERNS) and lug spacings that divide its
@@ -217,10 +222,11 @@ class GroundTruthPage(ttk.Frame):
                                       variable=self.rover_shadow_var)
         rover_check.pack(anchor="w")
         Tooltip(rover_check,
-                "Adds a helper capture to the level, attached to the mask camera, that\n"
-                "renders the same view without the mask camera's actor (the rover). A\n"
-                "pixel in shadow but sunlit without the rover is the rover's shadow.\n"
-                "Costs one more sun-only render per frame. Needs the editor (not Play).")
+                "Adds the rover's shadow map to the level: a small depth-only capture of\n"
+                "the mask camera's actor (the rover) seen from the sun, which the editor\n"
+                "watcher keeps on the rover. A shadowed pixel is the rover's shadow when\n"
+                "the rover lies between it and the sun, even where rocks, crater walls or\n"
+                "slopes shade it too. Needs the editor (not Play).")
         self._hint(shadows, "The mask camera renders sunlight alone for this, so the shadows "
                             "match what the cameras see. Both feeds come from the same frame.")
         self._hint(shadows, "Shadow ids (navcam/central/shadow_label):", pady=(6, 0))
@@ -343,7 +349,7 @@ class GroundTruthPage(ttk.Frame):
         # GNC labels
         labels = self._group(inner, "GNC Labels")
         self._hint(labels, f"mask_labels in {GNC_MASK_LABELS} must list these ids:")
-        self.labels_text = tk.Text(labels, height=6, font=("Consolas", 8), relief="solid",
+        self.labels_text = tk.Text(labels, height=11, font=("Consolas", 8), relief="solid",
                                    borderwidth=1, wrap="none")
         self.labels_text.pack(fill="x", pady=(4, 0))
         ttk.Button(labels, text="Copy", command=self.copy_labels).pack(anchor="e", pady=(4, 0))
@@ -467,18 +473,16 @@ class GroundTruthPage(ttk.Frame):
         if ids is None:
             self.labels_text.insert("end", "Crater ids must be different whole numbers\n1-255 (rim 0-255).")
         else:
-            lines = ['- "2:rover"', '- "10:landscape"', f'- "{ids["boulder"]}:boulder"']
-            if ids["small_rock"] != ids["boulder"]:
-                lines.append(f'- "{ids["small_rock"]}:small_rock"')
-            lines.append(f'- "{ids["crater"]}:crater"')
+            # Every id, in order (an id stays reserved when its option is off).
+            labels = {UNLABELED_ID: "unlabeled", SKY_MASK_ID: "sky", ROVER_MASK_ID: "rover",
+                      SUN_MASK_ID: "sun", SUN_GLARE_ID: "sun_glare", LANDSCAPE_MASK_ID: "landscape",
+                      ids["crater"]: "crater", TRACK_MASK_ID: "wheel_track",
+                      ids["boulder"]: "boulder"}
             if ids["rim"]:
-                lines.append(f'- "{ids["rim"]}:crater_rim"')
-            if self.sun_var.get():
-                lines.append(f'- "{SUN_MASK_ID}:sun"')
-                if self._glare_deg() > 0:
-                    lines.append(f'- "{SUN_GLARE_ID}:sun_glare"')
-            if self.tracks_var.get():
-                lines.append(f'- "{TRACK_MASK_ID}:wheel_track"')
+                labels[ids["rim"]] = "crater_rim"
+            if ids["small_rock"] != ids["boulder"]:
+                labels[ids["small_rock"]] = "small_rock"
+            lines = [f'- "{i}:{name}"' for i, name in sorted(labels.items())]
             self.labels_text.insert("end", "\n".join(lines))
         self.labels_text.configure(state="disabled")
 
@@ -797,23 +801,12 @@ class GroundTruthPage(ttk.Frame):
                 self.log("No answer from Unreal: is the editor running with Remote Execution?",
                          level="warn")
             return
-        options, streamed, loose, fixed = [], None, [], []
+        options, streamed = [], None
         for actor in found.get("actors", []):
             for capture in actor["captures"]:
                 options.append(f"{actor['actor']} / {capture}")
             if actor.get("streamer_mask"):
                 streamed = f"{actor['actor']} / {actor['streamer_mask']}"
-            if actor.get("rover_shadow_helper") == "detached":
-                loose.append(actor["actor"])
-            elif actor.get("rover_shadow_helper") == "reattached":
-                fixed.append(actor["actor"])
-        for name in fixed:
-            self.log(f"Re-attached the rover-shadow helper of {name} to its mask camera "
-                     "(its Blueprint had been recompiled).", level="ok")
-        for name in loose:
-            self.log(f"The rover-shadow helper of {name} is not attached to its mask camera "
-                     "and could not be re-attached, so rocks would be tagged as rover "
-                     "shadow. Send the masks again.", level="warn")
         self.camera_box.configure(values=options)
         if streamed and (self.camera_var.get() not in options):
             self.camera_var.set(streamed)

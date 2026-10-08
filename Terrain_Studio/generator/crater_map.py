@@ -26,8 +26,8 @@ from scipy import ndimage
 
 from rock_field import detect_craters
 
-CRATER_ID = 30          # Must match mask_labels in component_stereo_depth/config/params.yaml
-RIM_ID = 31
+CRATER_ID = 6           # Must match mask_labels in component_stereo_depth/config/params.yaml
+RIM_ID = 7
 RIM_FRACTION = 0.2      # Rim width as a fraction of the crater radius
 MIN_DEPTH_RATIO = 0.04  # Rim-to-floor depth / diameter below which a basin is not a crater
 MIN_ROUNDNESS = 0.5     # Seed area / area of its enclosing circle

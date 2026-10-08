@@ -52,8 +52,8 @@ the manual import steps), or *Save the level afterwards* to leave saving to you.
 Every new Landscape is set up for the simulator:
 
 - it gets the project's `/Game/Landscape/Landscape_Material`;
-- it is tagged for the rover's object mask (Render CustomDepth on, stencil 10,
-  `landscape` in the GNC mask labels).
+- it is tagged for the rover's object mask (Render CustomDepth on, stencil 5,
+  `landscape`; see [Object mask ids](#object-mask-ids)).
 
 If that material is missing, a warning is logged and the engine's default
 material stays. Both defaults are at the top of `unreal_landscape.py`.
@@ -94,7 +94,7 @@ base mesh; `height_m` is `scale × ROCK_HEIGHT_RATIO`.
 
 **Place Rocks in Unreal** puts the exported rocks on the Landscape and tags each one
 for the rover's object mask (`navcam/central/object_mask`) as a boulder or a small
-rock. The tags are the *Object mask ids*: by default 20 for boulders and 21 for
+rock. The tags are the *Object mask ids*: by default 9 for boulders and 10 for
 small rocks, split at a 0.15 m radius. **Update Mask Ids Only** re-tags rocks
 already placed without moving them.
 
@@ -146,13 +146,13 @@ beside it. Its pixel values are mask ids:
 | Value | Meaning |
 | --- | --- |
 | `0` | Not a crater |
-| `30` | Crater: ground inside the rim crest |
-| `31` | Crater rim: a ring outside the crest, 0.2 × the radius wide by default |
+| `6` | Crater: ground inside the rim crest |
+| `7` | Crater rim: a ring outside the crest, 0.2 × the radius wide by default |
 
 The map uses 4 cells per DEM cell (25 cm on a 1 m map), capped at 8192 px.
 
 How the mask is drawn: the mask camera's material looks at each Landscape pixel
-(stencil 10), takes the world point it shows, and reads the crater map there. So:
+(stencil 5), takes the world point it shows, and reads the crater map there. So:
 
 - rocks and the rover keep their own ids;
 - craters hidden behind terrain stay hidden;
@@ -163,7 +163,7 @@ How the mask is drawn: the mask camera's material looks at each Landscape pixel
   | `Mask/PPM_GroundTruthMask` | Post-process material on the mask camera: object ids, crater ids on the Landscape, shadow flag bits |
   | `Mask/PPM_GroundTruthMask_Backup` | That material as it was before the studio first changed it; **Restore Original Mask Material** puts it back |
   | `CraterMaps/T_CraterIds_<map>` | Crater map: crater or rim id per cell |
-  | `RoverShadow/RT_SunOnly_RoverHidden` | The rover-shadow helper's sun-only render, with the rover hidden |
+  | `RoverShadow/RT_RoverDepthFromSun` | The rover's shadow map: its depth seen from the sun |
   | `Sun/MPC_Sun` | The sun's direction and disc size, for its id in the object mask |
   | `WheelTracks/M_WheelTrackDecal` | The wheel-track decal material |
 
@@ -183,8 +183,34 @@ GNC receives two feeds from the mask camera, taken from the same frame:
 | `navcam/central/shadow_label_mapping` | JSON legend of those ids |
 
 The dashboard shows both, as SEGMENTATION and SHADOW MASK. Their legends list
-each class with its id (stencil id, or `shadow_label` id), grouped into ground,
-objects and sky.
+each class with its id (object mask id, or `shadow_label` id), grouped into
+ground, objects and sky.
+
+### Object mask ids
+
+The object mask's ids are consecutive, and each is drawn in one fixed colour
+(`MASK_IDS` and `MASK_PALETTE` in `Terrain_Studio/unreal_commands/unreal_ground_truth.py`;
+the GNC dashboard's `MASK_COLOURS` and `mask_labels` in
+`component_stereo_depth/config/params.yaml` match them):
+
+| Id | Class | Colour (RGB) | Comes from |
+| --- | --- | --- | --- |
+| 0 | `unlabeled` | 0, 0, 0 | Anything not tagged |
+| 1 | `sky` | 36, 40, 96 | Nothing within 100 km of the camera |
+| 2 | `rover` | 250, 194, 16 | The rover's CustomDepth stencil (its Blueprint) |
+| 3 | `sun` | 28, 128, 162 | Sky within the sun's disc |
+| 4 | `sun_glare` | 230, 14, 118 | Sky around the disc, out to the glare radius |
+| 5 | `landscape` | 10, 96, 216 | The Landscape's stencil |
+| 6 | `crater` | 124, 50, 208 | The crater map, on the Landscape |
+| 7 | `crater_rim` | 86, 52, 82 | The crater map, on the Landscape |
+| 8 | `wheel_track` | 64, 124, 162 | Track decals, on the Landscape |
+| 9 | `boulder` | 238, 244, 242 | Rock stencil (radius ≥ 0.15 m) |
+| 10 | `small_rock` | 210, 62, 6 | Rock stencil (smaller rocks) |
+
+The lowest bit of each channel carries the shadow flags (cleared in
+`object_mask`), so the colours are even. A custom stencil above 10 gets a colour
+hashed from its id. Sending the masks re-tags a Landscape still on the earlier
+stencil (10); rocks placed before keep theirs until **Update Mask Ids Only**.
 
 Shadows are taken from the engine's own rendering, so they match what the cameras
 see: the rover's and the rocks' shadows, crater walls, hills and slopes facing
@@ -239,15 +265,15 @@ pixel for pixel with `image_color` and `object_mask`. Each pixel holds one id:
 ### Sun
 
 With *Tag the sun's disc in the object mask* (Sun group, on by default), sky
-pixels within the sun's disc get id 50 (`sun`) in `object_mask`; add `"50:sun"`
-to `mask_labels` (the GNC Labels box lists it).
+pixels within the sun's disc get id 3 (`sun`) in `object_mask`; the rest of the
+sky is id 1 (`sky`).
 
 - The disc follows the level's Directional Light: its direction, and its size from
   *Source Angle* (0.53 degrees, about 4 pixels on the navcam). Terrain or rocks in
   front of the sun hide it, as in the RGB image.
 - The navcam's bloom makes the sun look much bigger. So the sky around the disc,
-  out to *Glare radius* (Sun group, default 1.1 degrees), gets id 51
-  (`sun_glare`); add `"51:sun_glare"` to `mask_labels`. 1.1 degrees matches the
+  out to *Glare radius* (Sun group, default 1.1 degrees), gets id 4
+  (`sun_glare`). 1.1 degrees matches the
   camera's saturated core: measured 17.2 px across, against 17.4 px for disc plus
   glare, with 91% of the saturated pixels covered. Half brightness reaches about
   3.5 degrees, and faint glare spikes about 6 degrees; set a larger radius to
@@ -276,8 +302,7 @@ and blends into it:
   - **Specular:** the Landscape's (0), so tracks do not shine.
   - **Colour:** the lug imprints are 8% darker, so the tread also shows under a high sun.
   - Result: about 9% darker than the ground beside them. Track
-pixels get id 60 (`wheel_track`) in `object_mask`; add `"60:wheel_track"` to
-`mask_labels`.
+pixels get id 8 (`wheel_track`) in `object_mask`.
 
 - **Send Masks to Unreal** places a pool of 2000 hidden track decals in the level
   (Outliner folder `WheelTracks`, material
@@ -323,30 +348,26 @@ With *Tag the rover's shadow separately* (on by default), ground and rocks in th
 rover's own shadow get id 5 (`rover_shadow`) instead of 2 or 4.
 
 - **Send Masks to Unreal** adds a helper capture to the level,
-  `<actor>_RoverShadowCapture`, attached to the mask camera. It renders the same
-  sun-only view into `/Game/GroundTruth_Masks/RoverShadow/RT_SunOnly_RoverHidden`, with the mask
-  camera's actor (the rover) hidden. Hiding an actor from a capture also removes
-  its shadow there.
-- A pixel that is shadow in the mask camera but sunlit in the helper's render is
-  the rover's shadow. The rover itself is never tagged: its unlit side stays
-  `shadowed_object`.
-- Where the rover's shadow overlaps a rock's shadow or a slope facing away from
-  the sun, the pixel stays plain shadow, because it is dark without the rover too.
-- The helper renders before the mask camera each frame, so both views match. It
-  costs one more sun-only render per frame. Unticking the option and sending
+  `<actor>_RoverShadowCapture`: the rover's own shadow map. It renders only the
+  rover's depth, looking along the sunlight (orthographic, about 2 m across,
+  512 × 512 into `/Game/GroundTruth_Masks/RoverShadow/RT_RoverDepthFromSun`).
+- A shadowed pixel is the rover's shadow when the rover lies between it and the
+  sun. So the rover's shadow wins over any other shadow on the same ground:
+  where it falls on a rock's shadow, a crater wall, a slope facing away from the
+  sun or the terrain's own small bumps, it is still `rover_shadow`. The rover
+  itself is never tagged: its unlit side stays `shadowed_object`.
+- The editor watcher points the shadow map at the rover from the sun every
+  frame, in the level and in a running game: centred on the mask camera, which
+  rides the rover's body, and following the sun. Its position and axes reach the
+  mask material through `MPC_Sun`. The watcher lives in the Unreal project and
+  needs neither Terrain Studio nor this repository (see
+  [Editor watcher](#editor-watcher)).
+- It renders before the mask camera each frame: a depth-only view of the rover,
+  much cheaper than a second camera view. Unticking the option and sending
   again removes it, as does **Restore Original Mask Material**.
 - Add it in the editor, not during Play: the helper must be in the level, so save
   the level (Ctrl+S) to keep it.
-- The helper must stay attached to the mask camera, which rides the rover's
-  physics body. Recompiling the rover's Blueprint (for example after renaming an
-  asset it uses) can re-attach it to the rover's root; it would then see a
-  slightly different view, and rock shadows would wrongly turn orange (id 5).
-  So **Send Masks to Unreal** and **Find** also install a watcher in the editor.
-  About twice a second it checks the helper in the level and in a running game,
-  and re-attaches it (the Output Log shows "Rover shadow: re-attached ...").
-  The watcher lives in the Unreal project and needs neither Terrain Studio nor
-  this repository (see [Editor watcher](#editor-watcher)).
-- How it is added: Unreal's Python cannot set a capture's hidden actors in the
+- How it is added: Unreal's Python cannot set a capture's show-only list in the
   editor, so the studio pastes the helper from text with the list already filled
   in, then sets it up. That briefly uses the clipboard; its text is put back
   afterwards (other clipboard content, such as an image, is not).
@@ -397,7 +418,7 @@ current sun into the sliders.
 
 A small Python function runs inside the Unreal Editor on every frame. It:
 
-- keeps each rover-shadow helper attached to its mask camera;
+- points the rover's shadow map at the rover from the sun, every frame;
 - keeps `MPC_Sun` pointing at the sun (sun id in the object mask);
 - during Play, lays the wheel tracks.
 

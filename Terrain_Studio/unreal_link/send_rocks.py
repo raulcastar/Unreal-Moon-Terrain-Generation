@@ -16,7 +16,7 @@ def _placer_call(call):
 
 def build_command(rocks_csv, models_folder, resolution, landscape_label,
                   landscape_width, seed, simulate_physics,
-                  boulder_stencil=20, small_rock_stencil=21, boulder_min_radius_m=0.15,
+                  boulder_stencil=9, small_rock_stencil=10, boulder_min_radius_m=0.15,
                   save_level=True):
     """Builds the placement command; paths are quoted with repr()."""
     args = ", ".join([
@@ -47,7 +47,7 @@ def build_stencil_command(group, boulder_stencil, small_rock_stencil, boulder_mi
 
 def send_rocks_to_unreal(rocks_csv, models_folder, resolution, landscape_label="",
                          landscape_width=0, seed=1, simulate_physics=False,
-                         boulder_stencil=20, small_rock_stencil=21,
+                         boulder_stencil=9, small_rock_stencil=10,
                          boulder_min_radius_m=0.15, save_level=True, log=print,
                          discovery_seconds=2.0):
     """
@@ -62,7 +62,7 @@ def send_rocks_to_unreal(rocks_csv, models_folder, resolution, landscape_label="
                          discovery_seconds)
 
 
-def send_stencils_to_unreal(group, boulder_stencil=20, small_rock_stencil=21,
+def send_stencils_to_unreal(group, boulder_stencil=9, small_rock_stencil=10,
                             boulder_min_radius_m=0.15, save_level=True, log=print,
                             discovery_seconds=2.0):
     """

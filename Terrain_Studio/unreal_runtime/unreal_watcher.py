@@ -6,10 +6,9 @@ project (<Project>/Content/Python/TerrainStudio; init_unreal.py starts it when
 the editor opens). It needs only this folder: unreal_wheel_tracks.
 
 A function registered as an editor tick that, on every editor frame:
-  - keeps each rover-shadow helper capture (<actor>_RoverShadowCapture)
-    attached to its mask camera, in the level and in a running game (Blueprint
-    recompiles, also the one that can run when Play starts, re-attach it to the
-    actor's root), every WATCH_INTERVAL seconds;
+  - points each rover's shadow-map capture (<actor>_RoverShadowCapture) at the
+    rover from the sun, in the level and in a running game, and writes its frame
+    to MPC_Sun (the rover's shadow in the shadow mask);
   - keeps MPC_Sun pointing at the level's sun (the sun's id in the object mask);
   - during Play, lays the wheel tracks.
 
@@ -28,14 +27,19 @@ import unreal
 #   Mask/PPM_GroundTruthMask_Backup  that material as it was before the studio first
 #                                    changed it (Restore Original Mask Material)
 #   CraterMaps/T_CraterIds_<map>     crater map: crater / rim id per cell
-#   RoverShadow/RT_SunOnly_RoverHidden  helper capture's sun-only render without the rover
+#   RoverShadow/RT_RoverDepthFromSun  the rover's shadow map: its depth seen from the sun
 #   Sun/MPC_Sun                      sun direction and disc size for the sun's id
 #   WheelTracks/M_WheelTrackDecal    wheel-track decal material (unreal_track_setup)
 GROUND_TRUTH_FOLDER = "/Game/GroundTruth_Masks"
 SUN_MPC = f"{GROUND_TRUTH_FOLDER}/Sun/MPC_Sun"
 SUN_PARAMETER = "SunDirection"   # xyz: unit vector towards the sun; w: cos(disc radius)
 ROVER_SHADOW_CAPTURE = "RoverShadowCapture"   # Helper actor label: <actor>_RoverShadowCapture
-WATCH_INTERVAL = 0.5       # Seconds between the watcher's attachment checks
+# The rover's shadow map in MPC_Sun: the capture's position (w: half its width,
+# cm) and its right and up axes. The capture looks from the sun at the mask
+# camera (on the rover) from this far away.
+SHADOW_MAP_PARAMETERS = ("RoverShadowOrigin", "RoverShadowRight", "RoverShadowUp")
+SHADOW_MAP_DISTANCE_CM = 2000.0
+WATCH_INTERVAL = 0.5       # Seconds between the watcher's helper checks
 WATCH_RESCAN = 10.0        # Seconds between level scans while no helper is found
 
 
@@ -90,24 +94,50 @@ def find_streamer(actor):
     return None
 
 
-def attach_helper(helper, capture):
+def place_shadow_map(world, helper, capture, state=None):
     """
-    Snaps the helper onto the mask camera. The camera may ride a physics body
-    that moves away from the actor's root in play, so the helper must follow the
-    camera itself. Recompiling the actor's Blueprint can re-attach it to the
-    root; sending again fixes that. Returns True when attached to `capture`.
+    Points the rover's shadow-map capture `helper` at the rover from the sun:
+    looking along the sunlight at the mask camera `capture` (it rides the rover's
+    body, also when that moves away from the actor's root in play), from
+    SHADOW_MAP_DISTANCE_CM towards the sun, and writes that frame to MPC_Sun for
+    the mask material. Moves only the helper; the rover is only read.
     """
-    rule = unreal.AttachmentRule.SNAP_TO_TARGET
-    helper.attach_to_component(capture, "", rule, rule, rule, False)
-    return helper.get_editor_property("root_component").get_attach_parent() == capture
+    state = state if state is not None else {}
+    update_sun_mask(world, state)
+    light, collection = state.get("sun_light"), state.get("sun_collection")
+    if light is None or collection is None:
+        return
+    if helper.get_editor_property("root_component").get_attach_parent() is not None:
+        rule = unreal.DetachmentRule.KEEP_WORLD
+        helper.detach_from_actor(rule, rule, rule)     # An earlier version attached it
+    forward = light.get_actor_forward_vector()          # Along the sunlight
+    centre = capture.get_world_location()
+    position = unreal.Vector(centre.x - forward.x * SHADOW_MAP_DISTANCE_CM,
+                             centre.y - forward.y * SHADOW_MAP_DISTANCE_CM,
+                             centre.z - forward.z * SHADOW_MAP_DISTANCE_CM)
+    # Only when it moved (more than a millimetre or a hundredth of a degree): in
+    # the editor, moving an actor marks the level as changed.
+    key = tuple(round(x, 1) for x in (position.x, position.y, position.z)) + tuple(
+        round(x, 4) for x in (forward.x, forward.y, forward.z))
+    placed = state.setdefault("map_placed", {})
+    if placed.get(helper.get_path_name()) == key:
+        return
+    placed[helper.get_path_name()] = key
+    helper.set_actor_location_and_rotation(
+        position, unreal.MathLibrary.make_rot_from_x(forward), False, False)
+    component = helper.capture_component2d
+    half = 0.5 * component.get_editor_property("ortho_width")
+    right, up = component.get_right_vector(), component.get_up_vector()
+    for name, vector, w in zip(SHADOW_MAP_PARAMETERS, (position, right, up), (half, 0.0, 0.0)):
+        unreal.MaterialLibrary.set_vector_parameter_value(
+            world, collection, name, unreal.LinearColor(vector.x, vector.y, vector.z, w))
 
 
 def _helper_pairs(world):
     """
-    (helper, mask capture) for every rover-shadow helper in `world`. Looks only
-    at SceneCapture2D actors (a few), not the whole level, which can hold
-    thousands of rocks; the helper's owner is its attach-parent actor (it stays
-    the rover even when re-attached to the root).
+    (helper, mask capture) for every rover shadow-map capture in `world`. Looks
+    only at SceneCapture2D actors (a few) for the helpers; their rover is named in
+    their label.
     """
     pairs, everything = [], None
     for helper in unreal.GameplayStatics.get_all_actors_of_class(world, unreal.SceneCapture2D):
@@ -115,9 +145,12 @@ def _helper_pairs(world):
         if not label.endswith("_" + ROVER_SHADOW_CAPTURE):
             continue
         owner_label = label[:-len(ROVER_SHADOW_CAPTURE) - 1]
-        owner = helper.get_attach_parent_actor()
-        if owner is None or owner.get_actor_label() != owner_label:
-            if everything is None:      # Fully detached: fall back to a full scan
+        # The rover is a Pawn: a few actors, rather than the whole level (which can
+        # hold thousands of rocks); everything only if it is not one.
+        owner = next((a for a in unreal.GameplayStatics.get_all_actors_of_class(world, unreal.Pawn)
+                      if a.get_actor_label() == owner_label), None)
+        if owner is None:
+            if everything is None:
                 everything = {a.get_actor_label(): a for a in
                               unreal.GameplayStatics.get_all_actors_of_class(world, unreal.Actor)}
             owner = everything.get(owner_label)
@@ -134,10 +167,9 @@ def _helper_pairs(world):
 
 def _watch_tick(delta_seconds):
     """
-    Editor tick: keeps each rover-shadow helper attached to its mask camera, in
-    the level and in a running game (Blueprint recompiles, also the one that can
-    run when Play starts, re-attach it to the actor's root), keeps MPC_Sun
-    pointing at the sun, and, every frame of a running game, lays wheel tracks.
+    Editor tick: every frame, points each rover's shadow-map capture at it from
+    the sun and keeps MPC_Sun pointing at the sun (in the level and in a running
+    game), and, in a running game, lays wheel tracks.
     """
     state = getattr(builtins, "_terrain_studio_watcher", None)
     if state is None:
@@ -152,6 +184,18 @@ def _watch_tick(delta_seconds):
         if state.get("track_error") != str(error):
             unreal.log_warning(f"Wheel tracks: {error}")
         state["track_error"], state["track_world"] = str(error), None
+    try:                                # Every frame, as the rover moves
+        editor = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
+        world = editor.get_game_world() or editor.get_editor_world()
+        if world is not None and state["world"] == world.get_path_name():
+            for helper, capture in state["pairs"]:
+                if alive(helper) and alive(capture):
+                    place_shadow_map(world, helper, capture, state)
+        state["map_error"] = None
+    except Exception as error:          # Report each new error once
+        if state.get("map_error") != str(error):
+            unreal.log_warning(f"Rover shadow map: {error}")
+        state["map_error"] = str(error)
     state["elapsed"] += delta_seconds
     state["since_scan"] += delta_seconds
     if state["elapsed"] < WATCH_INTERVAL:
@@ -170,11 +214,6 @@ def _watch_tick(delta_seconds):
             state["pairs"] = _helper_pairs(world)
             state["world"] = world.get_path_name()
             state["since_scan"] = 0.0
-        for helper, capture in state["pairs"]:
-            if helper.get_editor_property("root_component").get_attach_parent() != capture:
-                attached = attach_helper(helper, capture)
-                unreal.log(f"Rover shadow: re-attached {helper.get_actor_label()} to "
-                           f"{capture.get_name()}" + ("" if attached else " (failed)"))
         update_sun_mask(world, state)
         state["failed"] = False
     except Exception as error:      # Never let the tick raise; report once
