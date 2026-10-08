@@ -438,7 +438,7 @@ def list_mask_cameras():
     """
     CAMERAS_JSON_PREFIX + JSON: every actor with scene captures, as
     {"actor", "captures", "with_mask", "streamer_mask"} (the capture its
-    StereoCamStreamer streams as the object mask, or null).
+    UnrealStereoCam streams as the object mask, or null).
     """
     found, helpers = [], False
     for actor in _actors():
@@ -482,7 +482,7 @@ def assign_mask_camera(actor_label, capture_name):
     """
     Makes `capture_name` on `actor_label` the object-mask camera: adds
     PPM_GroundTruthMask to its post-process materials, sets its sun-only render (for
-    shadows) and, when the actor has a StereoCamStreamer, streams it as the
+    shadows) and, when the actor has an UnrealStereoCam, streams it as the
     mask. Returns a summary line.
     """
     actor = next((a for a in _actors() if a.get_actor_label() == actor_label), None)
@@ -513,7 +513,7 @@ def assign_mask_camera(actor_label, capture_name):
         streamer.set_editor_property("mask_capture_name", capture_name)
         notes.append(f"streamer now streams it as mask camera {streamer.get_editor_property('mask_cam_id')}")
     elif streamer is None:
-        notes.append("no StereoCamStreamer on this actor, so it is not streamed")
+        notes.append("no UnrealStereoCam on this actor, so it is not streamed")
     if _in_pie():
         notes.append("Play In Editor is running: camera changes last until it stops")
     detail = "; ".join(notes) if notes else "already set up"
@@ -528,7 +528,7 @@ def _find_capture(actor_label, capture_name):
 
 
 def _current_mask_camera():
-    """(actor, capture) of the capture a StereoCamStreamer streams as the mask, or None."""
+    """(actor, capture) of the capture an UnrealStereoCam streams as the mask, or None."""
     for actor in _actors():
         streamer = find_streamer(actor)
         if streamer is not None:
@@ -744,7 +744,7 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
     texture = import_mask_texture(png_path, CRATER_TEXTURE_PREFIX + stem)
     material = unreal.load_asset(MASK_MATERIAL)
     if material is None:
-        return f"[-] {MASK_MATERIAL} not found: set up the object mask first (StereoCamStreamer README)."
+        return f"[-] {MASK_MATERIAL} not found: set up the object mask first (UnrealStereoCam README)."
     _backup_material()
     retagged = _retag_landscape(landscape, landscape_stencil)
 

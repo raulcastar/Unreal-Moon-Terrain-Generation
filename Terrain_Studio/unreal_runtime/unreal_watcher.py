@@ -89,7 +89,7 @@ def update_sun_mask(world, state=None):
 
 def find_streamer(actor):
     for component in actor.get_components_by_class(unreal.ActorComponent):
-        if component.get_class().get_name() == "StereoCamStreamer":
+        if component.get_class().get_name() == "UnrealStereoCam":
             return component
     return None
 

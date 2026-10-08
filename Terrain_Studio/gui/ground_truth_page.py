@@ -315,7 +315,7 @@ class GroundTruthPage(ttk.Frame):
         # Mask camera and sending
         camera = self._group(inner, "Mask Camera in Unreal")
         self._hint(camera, "The scene capture that renders the object mask. It gets "
-                           "PPM_GroundTruthMask and, if its actor has a StereoCamStreamer, is "
+                           "PPM_GroundTruthMask and, if its actor has an UnrealStereoCam, is "
                            "streamed as the mask camera.")
         camera_row = ttk.Frame(camera)
         camera_row.pack(fill="x", pady=(4, 0))
@@ -812,7 +812,7 @@ class GroundTruthPage(ttk.Frame):
             self.camera_var.set(streamed)
         self.camera_info_var.set(
             (f"Streamed as the object mask now: {streamed}." if streamed
-             else "No StereoCamStreamer found: the mask is not streamed.")
+             else "No UnrealStereoCam found: the mask is not streamed.")
             + (" Play In Editor is running: camera changes last until it stops."
                if found.get("pie") else ""))
         if not quiet:

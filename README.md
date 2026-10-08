@@ -113,7 +113,7 @@ Shows craters and shadows in the rover's object mask, alongside the rocks:
      *Tag the rover's shadow separately*, the rover's own shadow
      ([Rover shadow](#rover-shadow));
    - sets up the chosen camera: it gets `PPM_GroundTruthMask` and the sun-only render
-     shadows need, and, if its actor has a StereoCamStreamer, it becomes the
+     shadows need, and, if its actor has an UnrealStereoCam, it becomes the
      streamed mask camera.
 
    **Restore Original Mask Material** undoes the material change.
@@ -378,7 +378,7 @@ That changes the mask colours by at most 1/255. The GNC stereo node
 (`enable_shadow_mask` in `component_stereo_depth/config/params.yaml`) paints
 `shadow_mask` and `shadow_label` from these flags and clears them from
 `object_mask`. One camera therefore gives exactly aligned feeds, with no change
-to the StereoCamStreamer plugin.
+to the UnrealStereoCam plugin.
 
 ## 4. Position the sun (optional)
 
