@@ -457,15 +457,21 @@ def place_rocks(rocks_csv, models_folder, resolution=1.0, landscape_label="",
             mesh, radius_cm, bottom_cm, height_cm = models[rng.choice(choices)]
 
             # Scale to the planned footprint, rest on the surface, then sink slightly.
+            # The planned height (height_m) is a maximum: a model taller than
+            # that for its footprint is flattened to it; squatter ones keep
+            # their proportions.
             factor = rock["scale"] * CM_PER_METER / radius_cm
-            z_pivot = z - bottom_cm * factor - SINK_FRACTION * height_cm * factor
+            z_factor = factor
+            if rock.get("height_m", 0.0) > 0.0 and height_cm > 0.0:
+                z_factor = min(factor, rock["height_m"] * CM_PER_METER / height_cm)
+            z_pivot = z - bottom_cm * z_factor - SINK_FRACTION * height_cm * z_factor
 
             actor = actors.spawn_actor_from_object(
                 mesh, unreal.Vector(x, y, z_pivot),
                 unreal.Rotator(0.0, 0.0, rng.uniform(0.0, 360.0)))
             if actor is None:
                 continue
-            actor.set_actor_scale3d(unreal.Vector(factor, factor, factor))
+            actor.set_actor_scale3d(unreal.Vector(factor, factor, z_factor))
             actor.set_actor_label(f"{group}_rock_{int(rock['id'])}")
             actor.set_folder_path(f"{ROCK_ACTOR_FOLDER}/{group}")
             actor.tags = [tag]

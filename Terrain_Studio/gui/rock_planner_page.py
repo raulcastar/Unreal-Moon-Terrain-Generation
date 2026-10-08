@@ -67,12 +67,14 @@ ROCK_PARAM_GROUPS = [
          "near the models' own size (Place in Unreal > Match Rock Sizes to\n"
          "Models) to avoid stretching them."),
         ("ROCK_MAX_SCALE", "Max radius (m)", 0.01, 30.0, 'log',
-         "Largest rock footprint radius, in metres. Radii are cubically biased\n"
-         "towards the minimum."),
+         "Largest rock footprint radius, in metres. Radii follow the lunar\n"
+         "size-frequency law (count of rocks larger than r ~ r^-2.5), so most\n"
+         "rocks are near the minimum and large boulders are rare."),
         ("ROCK_HEIGHT_RATIO", "Height / radius", 0.1, 3.0, 'float',
          "Rock height as a multiple of its footprint radius, written to the\n"
-         "instance list as height_m. Unreal keeps each model's own proportions,\n"
-         "so set this to the models' ratio for height_m to match what is placed."),
+         "instance list as height_m. In Unreal this is each rock's maximum\n"
+         "height: models taller than that are flattened to it, squatter models\n"
+         "keep their own proportions."),
     ]),
 ]
 

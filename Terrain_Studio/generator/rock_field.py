@@ -36,11 +36,37 @@ from terrain_core import TerrainCancelled
 # Path quality and rock positions do not need full DEM resolution; capping keeps
 # the graph build and the rejection sampling fast on large maps.
 PLAN_GRID_CAP = 512
+# Crater rims for the rock keep-out are fitted on a finer grid than the plan, so
+# small craters are not lost; rocks keep this many planning cells beyond a rim.
+CRATER_GRID_CAP = 1024
+CRATER_KEEPOUT_MARGIN_PX = 1.0
 SQRT2 = float(np.sqrt(2.0))
 
-# Cube bias pushes rock radii towards the minimum (as with craters); the mean of
-# u**3 for u uniform on [0, 1] is 0.25, used to estimate the average rock area.
-_CUBE_BIAS_MEAN = 0.25
+# Rock radii follow the lunar size-frequency law: the number of rocks larger
+# than r falls as r ** -ROCK_SIZE_EXPONENT (a truncated power law between the
+# min and max radius; surveyed lunar and Martian rock fields give about 2.5),
+# so most rocks are near the minimum and large boulders are rare.
+ROCK_SIZE_EXPONENT = 2.5
+
+
+def _sample_radius(u, min_r, max_r, k=ROCK_SIZE_EXPONENT):
+    """Radius for uniform u in [0, 1): inverse CDF of the truncated power law."""
+    if max_r <= min_r:
+        return min_r
+    tail = (min_r / max_r) ** k
+    return min_r * (1.0 - u * (1.0 - tail)) ** (-1.0 / k)
+
+
+def _mean_square_radius(min_r, max_r, k=ROCK_SIZE_EXPONENT):
+    """E[r**2] of the truncated power law, for the average rock footprint area."""
+    if max_r <= min_r:
+        return min_r ** 2
+    tail = (min_r / max_r) ** k
+    if abs(k - 2.0) < 1e-9:
+        integral = np.log(max_r / min_r)
+    else:
+        integral = (max_r ** (2.0 - k) - min_r ** (2.0 - k)) / (2.0 - k)
+    return k * min_r ** k * integral / (1.0 - tail)
 
 
 DEFAULTS = {
@@ -54,8 +80,8 @@ DEFAULTS = {
 
     # --- Rock population ---
     'ROCK_COVERAGE': 0.03,         # Target fraction of drivable ground under rocks.
-    # Rock size as a scale (metre radius of a 1 m base mesh), cubically biased
-    # towards the minimum.
+    # Rock size as a scale (metre radius of a 1 m base mesh), between these
+    # bounds by the lunar size-frequency law (ROCK_SIZE_EXPONENT).
     'ROCK_MIN_SCALE': 0.3,
     'ROCK_MAX_SCALE': 2.5,
     'ROCK_HEIGHT_RATIO': 0.7,      # Rock height as a fraction of its radius.
@@ -376,9 +402,8 @@ def estimate_rock_count(params, drivable_area_m2):
     """
     min_r = params['ROCK_MIN_SCALE']
     max_r = max(min_r, params['ROCK_MAX_SCALE'])
-    mean_r = min_r + (max_r - min_r) * _CUBE_BIAS_MEAN
-    return max(0, int(params['ROCK_COVERAGE'] * drivable_area_m2
-                      / max(np.pi * mean_r ** 2, 1e-12)))
+    mean_area = np.pi * _mean_square_radius(min_r, max_r)
+    return max(0, int(params['ROCK_COVERAGE'] * drivable_area_m2 / max(mean_area, 1e-12)))
 
 
 def _stamp_disk(mask, row, col, radius):
@@ -461,7 +486,7 @@ def _place_rocks(region, corridor, crater_mask, params, res_row, res_col, seed,
 
         pick = rng.integers(candidate_rows.size)
         r, c = int(candidate_rows[pick]), int(candidate_cols[pick])
-        radius = min_r_px + (max_r_px - min_r_px) * (rng.random() ** 3)
+        radius = _sample_radius(rng.random(), min_r_px, max_r_px)
 
         # Maximum in-cell offset, and the resulting reach from the cell centre.
         jitter = max(0.0, _CELL_FIT - radius)
@@ -566,8 +591,27 @@ def build_rock_field(elevation, resolution, params, seed=None,
         markers = []
     marker_label = "Crater centre (site)"
 
+    # Rocks also stay out of every crater bowl up to its rim crest. The mask
+    # above holds only the ground at least MIN_CRATER_DEPTH_M deep, which misses
+    # each bowl's upper slopes, breached craters and small craters; the circles
+    # are the crater map's (crater_map.find_craters), so no rock lands on a
+    # crater id in the object mask. They are fitted on a grid finer than the
+    # planning one (CRATER_GRID_CAP; the full DEM for maps up to that size), so
+    # small craters are found too, and widened by a margin for the difference
+    # between grids.
+    report("Fitting crater rims", 0.55)
+    from crater_map import find_craters     # crater_map imports this module
+    fine, fine_row, fine_col, fine_scale_row, fine_scale_col = _plan_grid(
+        elevation, resolution, CRATER_GRID_CAP)
+    to_plan_row, to_plan_col = fine_scale_row / scale_row, fine_scale_col / scale_col
+    rock_keepout = crater_mask.copy()
+    for row, col, radius in find_craters(fine, 0.5 * (fine_row + fine_col),
+                                         params['MIN_CRATER_DEPTH_M']):
+        _stamp_disk(rock_keepout, row * to_plan_row, col * to_plan_col,
+                    radius * 0.5 * (to_plan_row + to_plan_col) + CRATER_KEEPOUT_MARGIN_PX)
+
     registry, occupancy, requested = _place_rocks(
-        region, corridor, crater_mask, params, res_row, res_col, seed,
+        region, corridor, rock_keepout, params, res_row, res_col, seed,
         progress, cancel_check)
 
     report("Verifying rover connectivity", 0.9)

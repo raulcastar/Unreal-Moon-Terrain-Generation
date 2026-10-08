@@ -70,7 +70,11 @@ Manage → right-click → Import), with the steps shown in the editor.
 Scatters rocks across the drivable ground while guaranteeing a connected route:
 
 1. **Craters** — closed depressions deeper than a threshold, found by
-   priority-flood sink filling — are impassable and kept free of rocks.
+   priority-flood sink filling — are impassable. Rocks also stay out of every
+   crater bowl up to its rim crest (plus one planning cell), using the same
+   crater circles as the crater map (step 3), so no rock lands on a crater id.
+   The circles are fitted on a grid of up to 1024 px, so small craters are kept
+   clear too.
 2. **Corridors** follow the Voronoi diagram of the crater centres, so the rover
    drives down the middle of the gaps between them.
 3. **Rocks** are never placed within half the path width of a corridor.
