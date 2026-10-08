@@ -1,18 +1,20 @@
 """
-Unreal Engine Remote Execution Client
--------------------------------------
-Acts as the master orchestrator for the terrain generation pipeline.
+Landscape Dispatch
+------------------
+Turns a DEM into an Unreal Landscape: converts it locally (heightmap_files)
+and has unreal_landscape build the Landscape in a running Unreal Editor.
 Executes the heavy data processing locally to bypass Unreal's internal Python limitations,
 then establishes a network connection to Unreal Engine to trigger the landscape compilation.
 """
 
-import unreal_api
+import remote_execution
 import runtime_sync
+from unreal_connection import unreal_call
 import time
 import os
 import sys
 import numpy as np
-import terrain_files_generator
+import heightmap_files
 
 # --- Global Directory Configuration ---
 # Absolute paths are normalized with forward slashes to prevent escape character 
@@ -53,13 +55,13 @@ def generate_lunar_terrain(input_map_filepath, output_map_directory, input_resol
     # =========================================================================
     # 1. READ ORIGINAL DEM
     # =========================================================================
-    raw_elevation_data = terrain_files_generator.terrain_file_reading(input_map_filepath, input_resolution)
+    raw_elevation_data = heightmap_files.terrain_file_reading(input_map_filepath, input_resolution)
 
     # =========================================================================
     # 2. UNREAL FORMAT CONVERSION
     # =========================================================================
     # Translate metric data to Unreal Engine's 16-bit range, Z-scale and actor height
-    file_header, unreal_elevation_data = terrain_files_generator.convert_to_unreal_format(
+    file_header, unreal_elevation_data = heightmap_files.convert_to_unreal_format(
         elevation_data=raw_elevation_data, 
         interpolation_resolution=input_resolution
     )
@@ -91,10 +93,10 @@ def generate_lunar_terrain(input_map_filepath, output_map_directory, input_resol
     print(f"[*] Landscape Z-scale: {z_axis_scale:.4f}, actor Z: {z_offset:.2f} m")
 
     # Determine the most memory-efficient landscape component grid
-    landscape_config = terrain_files_generator.calculate_optimal_landscape_config(dem_width, dem_height)
+    landscape_config = heightmap_files.calculate_optimal_landscape_config(dem_width, dem_height)
     
     # Generate the 16-bit Little-Endian heightmap required by Unreal's importer
-    terrain_files_generator.create_unreal_heightmap(
+    heightmap_files.create_unreal_heightmap(
         unreal_elevation_data, 
         int(dem_width), 
         int(dem_height), 
@@ -118,7 +120,7 @@ def send_to_unreal(landscape_config, interpolation_resolution, z_axis_scale, hei
     """
     
     # Initialize the Unreal Remote Execution network client
-    remote_exec = unreal_api.RemoteExecution()
+    remote_exec = remote_execution.RemoteExecution()
     remote_exec.start()
     
     print(f"[*] Searching for Unreal Engine instances... (Root: {BASE_DIRECTORY})")
@@ -144,14 +146,10 @@ def send_to_unreal(landscape_config, interpolation_resolution, z_axis_scale, hei
             # --- Remote Command Construction ---
             # Append local directory to Unreal's sys.path, reload the target module to ensure 
             # the latest code is used, and trigger the Landscape creation API.
-            command = (
-                f"import sys; "
-                f"sys.path.append('{BASE_DIRECTORY}') if '{BASE_DIRECTORY}' not in sys.path else None; "
-                f"import importlib; import unreal_level_saver; importlib.reload(unreal_level_saver); "
-                f"import unreal_terrain_generator; "
-                f"importlib.reload(unreal_terrain_generator); "
-                f"unreal_terrain_generator.create_landscape({landscape_config}, {interpolation_resolution}, {z_axis_scale}, '{target_r16_path}', {0.0}, {0.0}, {z_offset}, save_level={bool(save_level)})"
-            )
+            command = unreal_call(
+                f"create_landscape({landscape_config}, {interpolation_resolution}, {z_axis_scale}, "
+                f"'{target_r16_path}', {0.0}, {0.0}, {z_offset}, save_level={bool(save_level)})",
+                "unreal_level_saver", "unreal_landscape")
 
             # Also refreshes the project's own copy of the editor watcher (runtime_sync).
             result = remote_exec.run_command(runtime_sync.with_runtime_sync(command))
@@ -180,7 +178,7 @@ if __name__ == "__main__":
     output_map_directory = None
     input_resolution     = 1.0
 
-    # Usage: main.py <map> [output_dir] [resolution]
+    # Usage: send_terrain.py <map> [output_dir] [resolution]
     if len(sys.argv) >= 2:
         input_map_filepath   = sys.argv[1].replace("\\", "/")
     if len(sys.argv) >= 3:

@@ -8,22 +8,14 @@ reads the level's current sun back.
 
 import json
 
-from rocks_to_unreal import BASE_DIRECTORY, run_in_unreal
+from unreal_connection import run_in_unreal, unreal_call
 
 SUN_JSON_PREFIX = "SUN_JSON "   # must match unreal_sun.SUN_JSON_PREFIX
 
 
 def _sun_call(call):
-    """Builds Unreal-side Python that imports unreal_sun and prints the result of `call`."""
-    return (
-        f"import sys, importlib\n"
-        f"if {BASE_DIRECTORY!r} not in sys.path: sys.path.append({BASE_DIRECTORY!r})\n"
-        f"import unreal_level_saver\n"
-        f"importlib.reload(unreal_level_saver)\n"
-        f"import unreal_sun\n"
-        f"importlib.reload(unreal_sun)\n"
-        f"print(unreal_sun.{call})\n"
-    )
+    """Unreal-side Python that runs `call` on unreal_sun."""
+    return unreal_call(call, "unreal_level_saver", "unreal_sun")
 
 
 def build_command(azimuth_deg, elevation_deg, intensity_lux, source_angle_deg, save_level):

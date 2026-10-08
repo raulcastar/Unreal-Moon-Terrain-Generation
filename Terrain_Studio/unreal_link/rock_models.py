@@ -4,7 +4,7 @@ Rock Model Inspection
 Locates rock model files and measures their real-world size outside Unreal,
 so planned rock sizes can be matched to the meshes being placed.
 
-Used by both the studio and unreal_rock_placer (inside Unreal), hence standard
+Used by both the studio and unreal_rocks (inside Unreal), hence standard
 library only.
 
 Conventions: models are Y-up and in metres; the footprint radius is half the

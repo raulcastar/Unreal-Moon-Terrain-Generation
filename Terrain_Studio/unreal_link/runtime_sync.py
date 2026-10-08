@@ -8,10 +8,10 @@ when the editor opens, and the modules it needs live in
 Content/Python/TerrainStudio. The project therefore works without Terrain
 Studio or this repository.
 
-Source: Terrain_Studio/Unreal_runtime/, which holds only the watcher
+Source: Terrain_Studio/unreal_runtime/, which holds only the watcher
 (unreal_watcher, unreal_wheel_tracks) and init_unreal.py. It
-imports nothing from the studio; the studio's Unreal-side setup modules in
-Lunar_terrain_loader use it, never the other way round.
+imports nothing from the studio; the studio's Unreal-side commands in
+unreal_commands/ use it, never the other way round.
 
 with_runtime_sync(command) prefixes a remote-execution command with Unreal-side
 code that copies those files into the project when they differ and puts the
@@ -22,15 +22,17 @@ watcher. A failed copy is reported and never stops the action.
 
 import os
 
-LOADER_DIRECTORY = os.path.dirname(os.path.abspath(__file__)).replace("\\", "/")
-RUNTIME_SOURCE = os.path.join(os.path.dirname(LOADER_DIRECTORY), "Unreal_runtime").replace("\\", "/")
+LINK_DIRECTORY = os.path.dirname(os.path.abspath(__file__)).replace("\\", "/")
+RUNTIME_SOURCE = os.path.join(os.path.dirname(LINK_DIRECTORY), "unreal_runtime").replace("\\", "/")
 RUNTIME_FOLDER = "TerrainStudio"        # Under <Project>/Content/Python
 WATCHER_MODULES = ("unreal_watcher.py", "unreal_wheel_tracks.py")
-# Studio-side modules that earlier lived in the project copy: removed from it, and
-# reloaded from the studio if a stale copy is still loaded.
-STUDIO_MODULES = ("unreal_crater_mask.py", "unreal_track_setup.py", "unreal_dust_setup.py",
-                  "unreal_wheel_dust.py",
-                  "unreal_rock_placer.py", "unreal_level_saver.py", "rock_models.py")
+# Studio modules that run in Unreal (unreal_commands/ and rock_models), under
+# their current and earlier names: never kept in the project copy, and reloaded
+# from the studio if a stale or moved copy is still loaded.
+STUDIO_MODULES = ("unreal_ground_truth.py", "unreal_track_setup.py", "unreal_rocks.py",
+                  "unreal_landscape.py", "unreal_sun.py", "unreal_level_saver.py", "rock_models.py",
+                  "unreal_crater_mask.py", "unreal_rock_placer.py", "unreal_terrain_generator.py",
+                  "unreal_dust_setup.py", "unreal_wheel_dust.py")
 STARTUP_SCRIPT = "init_unreal.py"
 
 _SYNC_CODE = r'''

@@ -255,3 +255,13 @@ def create_unreal_heightmap(unreal_elevation_data, dem_width, dem_height, landsc
     # Persist JSON metadata to streamline automated imports in the Unreal Editor
     with open(metadata_filepath, "w") as json_file:
         json.dump({"width": final_width, "height": final_height, "bpp": 16}, json_file)
+
+
+def heightmap_width(output_directory, dem_stem):
+    """Returns the Landscape width in vertices from <dem_stem>_heightmap.json, or 0 if absent."""
+    path = os.path.join(output_directory, f"{dem_stem}_heightmap.json")
+    try:
+        with open(path) as handle:
+            return int(json.load(handle).get("width", 0))
+    except (OSError, ValueError):
+        return 0

@@ -45,7 +45,7 @@ import math
 
 import unreal
 
-from unreal_rock_placer import find_landscape, landscape_frame
+from unreal_rocks import find_landscape, landscape_frame
 from unreal_watcher import (ROVER_SHADOW_CAPTURE, SUN_MPC, SUN_PARAMETER, attach_helper,
                             find_streamer, install_watcher, sun_light, sun_vector,
                             uninstall_watcher, update_sun_mask)

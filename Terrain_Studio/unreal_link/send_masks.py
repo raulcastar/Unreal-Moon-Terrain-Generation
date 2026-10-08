@@ -2,30 +2,20 @@
 Crater Mask Dispatch
 --------------------
 Sends a crater map (<name>_craterMask.png) to a running Unreal Editor over
-Remote Execution, where unreal_crater_mask makes the rover's object mask show
+Remote Execution, where unreal_ground_truth makes the rover's object mask show
 craters, rims and shadows on the Landscape, and sets up the mask camera.
 """
 
 import json
 
-from rocks_to_unreal import BASE_DIRECTORY, run_in_unreal
+from unreal_connection import run_in_unreal, unreal_call
 
-CAMERAS_JSON_PREFIX = "CAMERAS_JSON "   # Must match unreal_crater_mask.CAMERAS_JSON_PREFIX
+CAMERAS_JSON_PREFIX = "CAMERAS_JSON "   # Must match unreal_ground_truth.CAMERAS_JSON_PREFIX
 
 
 def _crater_call(call):
-    """Builds Unreal-side Python that imports unreal_crater_mask and prints the result of `call`."""
-    return (
-        f"import sys, importlib\n"
-        f"if {BASE_DIRECTORY!r} not in sys.path: sys.path.append({BASE_DIRECTORY!r})\n"
-        f"import unreal_level_saver\n"
-        f"importlib.reload(unreal_level_saver)\n"
-        f"import unreal_rock_placer\n"
-        f"importlib.reload(unreal_rock_placer)\n"
-        f"import unreal_crater_mask\n"
-        f"importlib.reload(unreal_crater_mask)\n"
-        f"print(unreal_crater_mask.{call})\n"
-    )
+    """Unreal-side Python that runs `call` on unreal_ground_truth."""
+    return unreal_call(call, "unreal_level_saver", "unreal_rocks", "unreal_ground_truth")
 
 
 def send_crater_mask_to_unreal(png_path, width, height, resolution, landscape_label="",
@@ -63,13 +53,7 @@ def send_track_style(track_style, log=print, discovery_seconds=2.0):
     Rebuilds only the wheel-track decal material with a new tread look (pattern,
     lug spacing, relief, darkness). Returns True on success.
     """
-    code = (
-        f"import sys, importlib\n"
-        f"if {BASE_DIRECTORY!r} not in sys.path: sys.path.append({BASE_DIRECTORY!r})\n"
-        f"import unreal_track_setup\n"
-        f"importlib.reload(unreal_track_setup)\n"
-        f"print(unreal_track_setup.apply_track_style({dict(track_style or {})!r}))\n"
-    )
+    code = unreal_call(f"apply_track_style({dict(track_style or {})!r})", "unreal_track_setup")
     return run_in_unreal(code, log, "Updating the wheel-track look in Unreal", discovery_seconds)
 
 

@@ -5,7 +5,7 @@ Executes natively within the Unreal Engine Python environment. Imports rock
 meshes from a folder and places the rock field planned by the studio
 (<name>_rocks.csv) on the Landscape.
 
-Positions follow the Landscape spawned by unreal_terrain_generator, whose
+Positions follow the Landscape spawned by unreal_landscape, whose
 heightmap is mirrored in X: at the default spawn position a rock at (x_m, y_m)
 in the DEM frame lies at X = -x_m * 100, Y = y_m * 100 (cm). When the Landscape
 is present, its actual transform is used, so moved or rescaled Landscapes stay

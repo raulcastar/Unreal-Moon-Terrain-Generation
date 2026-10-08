@@ -56,7 +56,7 @@ Every new Landscape is set up for the simulator:
   `landscape` in the GNC mask labels).
 
 If that material is missing, a warning is logged and the engine's default
-material stays. Both defaults are at the top of `unreal_terrain_generator.py`.
+material stays. Both defaults are at the top of `unreal_landscape.py`.
 
 **Unreal setup:** enable the *Python Editor Script Plugin* and *Remote Execution*
 in Project Settings. Landscapes larger than 4097 × 4097 vertices, or an
@@ -200,7 +200,7 @@ A pixel is shadow when the mask camera's sun-only render shows it at less than
 **half of full sunlight** (display value 0.5 of 1).
 
 - Set by `SHADOW_THRESHOLD` in
-  `Terrain_Studio/Lunar_terrain_loader/unreal_crater_mask.py` and written to the
+  `Terrain_Studio/unreal_commands/unreal_ground_truth.py` and written to the
   `ShadowThreshold` parameter of `PPM_GroundTruthMask` on every send. Change it there
   and send the masks again.
 - That render is almost all black (shadow) or near white (sunlit). The values in
@@ -285,7 +285,7 @@ pixels get id 60 (`wheel_track`) in `object_mask`; add `"60:wheel_track"` to
   kept, the oldest reused. Tracks start afresh each time Play starts. No tracks
   are left on rocks or while a wheel is in the air.
 - For the first 3 s of Play (`SETTLE_TIME_S` in
-  `Unreal_runtime/unreal_wheel_tracks.py`) the rover settles onto the ground, and
+  `unreal_runtime/unreal_wheel_tracks.py`) the rover settles onto the ground, and
   its movement is ignored: no tracks are laid. This keeps the settling from
   leaving tracks.
 - The rover itself is only read, never changed, while the game runs. Changing a
@@ -411,12 +411,12 @@ works in the editor and Play In Editor, not in a packaged game.
 
 | Folder | Files | Role |
 | --- | --- | --- |
-| `Terrain_Studio/Unreal_runtime/` | `init_unreal.py`, `unreal_watcher.py`, `unreal_wheel_tracks.py` | Only the watcher's per-frame work. Copied into the project; imports nothing from the studio |
-| `Terrain_Studio/Lunar_terrain_loader/` | `unreal_crater_mask.py`, `unreal_track_setup.py`, ... | The studio's Unreal-side setup, run when it sends: mask material, cameras, rover-shadow helper, track decals and material. Uses the watcher's helpers and constants, never the other way round |
+| `Terrain_Studio/unreal_runtime/` | `init_unreal.py`, `unreal_watcher.py`, `unreal_wheel_tracks.py` | Only the watcher's per-frame work. Copied into the project; imports nothing from the studio |
+| `Terrain_Studio/unreal_commands/` | `unreal_ground_truth.py`, `unreal_track_setup.py`, ... | The studio's Unreal-side commands, run when it sends: mask material, cameras, rover-shadow helper, track decals and material. Uses the watcher's helpers and constants, never the other way round |
 
 **Kept up to date:** every time Terrain Studio sends anything to Unreal (map,
 rocks, masks, sun), it first copies these files into the project when they
-differ (`Lunar_terrain_loader/runtime_sync.py`), and removes anything else from
+differ (`unreal_link/runtime_sync.py`), and removes anything else from
 `Content/Python/TerrainStudio`. It also puts the project's copy first on
 Unreal's module path and reloads the modules it just updated, so the studio's
 commands and the watcher run the same code. The Output Log then shows
@@ -425,7 +425,7 @@ left alone. After an update, the running watcher picks up the new code on that
 send; a fresh editor start uses it from the beginning.
 
 **If the folder is missing:** the startup script falls back to the
-`TERRAIN_STUDIO_LOADER` environment variable, then to the studio's folder. If
+`TERRAIN_STUDIO_RUNTIME` environment variable, then to the studio's folder. If
 none is found, the editor starts normally and the Output Log says the watcher
 was not started.
 
@@ -456,8 +456,8 @@ already on disk.
 Generate a terrain without the GUI:
 
 ```sh
-cd Terrain_Studio/Procedural_generator
-python procedural_landscape_gen.py -c ../../config/lunar_1m.yaml -n my_terrain --no-preview
+cd Terrain_Studio/generator
+python generate_cli.py -c ../../config/lunar_1m.yaml -n my_terrain --no-preview
 ```
 
 | Flag | Meaning |
@@ -470,8 +470,8 @@ python procedural_landscape_gen.py -c ../../config/lunar_1m.yaml -n my_terrain -
 Convert a DEM to a heightmap and send it to Unreal:
 
 ```sh
-cd Terrain_Studio/Lunar_terrain_loader
-python main.py <map> [output_dir] [resolution_m_per_px]
+cd Terrain_Studio/unreal_link
+python send_terrain.py <map> [output_dir] [resolution_m_per_px]
 ```
 
 ## Parameters
@@ -497,22 +497,47 @@ upsample it, keeping a 10000×10000 map to seconds rather than tens of minutes.
 
 ## Project layout
 
+The studio's code is split by where it runs:
+
 ```
 Terrain_Studio/
-  terrain_studio.py              GUI
-  Procedural_generator/
-    terrain_core.py              Terrain generation (shared by GUI and CLI)
+  terrain_studio.py              Starts the studio (gui.app.main)
+  gui/                           The studio's window (Tk)
+    app.py                       Main window: home screen, view switching, DPI scaling
+    generator_page.py            Generate view: parameters, preview, full-resolution run
+    landscape_page.py            Send to Unreal view: DEM to Landscape
+    rock_planner_page.py         Rock Planner view
+    ground_truth_page.py         Ground Truth view: crater map, mask ids, mask camera, tracks
+    sun_page.py                  Sun view
+    map_views.py                 Shaded-relief map view, map viewer and map browser
+    widgets.py                   Tooltips, progress panel, dialogs, parameter rows, log
+    dem_files.py                 Finding and loading DEMs; the files each step writes
+    paths.py                     Repository folders (config, input_maps, outputs)
+    backend.py                   Imports generator/ and unreal_link/ for the views
+  generator/                     Terrain maths, no Unreal (shared by the GUI and the CLI)
+    terrain_core.py              Terrain generation
+    generate_cli.py              Command-line generator
     rock_field.py                Rock placement and corridor planning
-    procedural_landscape_gen.py  CLI
-  Lunar_terrain_loader/
-    main.py                      DEM to Unreal pipeline
-    terrain_files_generator.py   DEM reading, 16-bit conversion, Landscape sizing
-    unreal_terrain_generator.py  Runs inside Unreal; spawns the Landscape
-    unreal_api.py                Remote Execution client
-    runtime_sync.py              Copies the editor watcher into the Unreal project
-    unreal_crater_mask.py        Runs inside Unreal: mask material, cameras, rover-shadow helper, sun mask
-    unreal_track_setup.py        Runs inside Unreal: track decal pool and material
-  Unreal_runtime/                The editor watcher only (copied to <Project>/Content/Python)
+    crater_map.py                Crater detection and the crater label map
+    sun_shadows.py               Sun direction and cast shadows over a DEM
+  unreal_link/                   Runs in the studio; talks to a running Unreal Editor
+    unreal_connection.py         Sends a command to Unreal (run_in_unreal, unreal_call)
+    remote_execution.py          Unreal's Remote Execution protocol (client)
+    send_terrain.py              DEM to Landscape (also a command-line tool)
+    send_rocks.py                Rock field
+    send_masks.py                Ground truth: crater map, mask camera, tracks
+    send_sun.py                  Sun
+    heightmap_files.py           DEM reading, 16-bit heightmap, Landscape sizing
+    rock_models.py               Rock model sizes (also used inside Unreal)
+    runtime_sync.py              Copies unreal_runtime/ into the Unreal project
+  unreal_commands/               Runs inside Unreal when the studio sends
+    unreal_landscape.py          Builds the Landscape
+    unreal_rocks.py              Imports rock models and places the rocks
+    unreal_ground_truth.py       Mask material, crater map, cameras, rover-shadow helper, sun mask
+    unreal_track_setup.py        Track decal pool and material
+    unreal_sun.py                Lunar Directional Light
+    unreal_level_saver.py        Saves the level
+  unreal_runtime/                The editor watcher only (copied to <Project>/Content/Python)
     init_unreal.py               Unreal startup script: starts the watcher
     unreal_watcher.py            Per-frame: rover-shadow helper attachment, sun direction
     unreal_wheel_tracks.py       Per-frame: lays the wheel tracks during Play

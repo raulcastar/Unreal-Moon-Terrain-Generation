@@ -6,7 +6,7 @@ on the Landscape behind a rover during Play In Editor; called every frame by the
 editor watcher (unreal_watcher).
 
 The pool of track decals is placed in the level beforehand by the studio
-(Lunar_terrain_loader/unreal_track_setup.py), hidden. Each wheel that touches
+(unreal_commands/unreal_track_setup.py), hidden. Each wheel that touches
 the Landscape and has rolled on by TRACK_SPACING_CM gets the next decal of the
 pool, pressed onto the ground along its direction of travel, once every wheel
 has rolled off that spot (so no track lands on a wheel). The oldest decals are

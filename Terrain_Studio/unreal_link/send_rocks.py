@@ -2,41 +2,16 @@
 Rock Field Dispatch
 -------------------
 Sends a planned rock field (<name>_rocks.csv) to a running Unreal Editor over
-Remote Execution, where unreal_rock_placer imports the rock models and places
+Remote Execution, where unreal_rocks imports the rock models and places
 the rocks on the Landscape.
 """
 
-import json
-import os
-import time
-
-import runtime_sync
-import unreal_api
-
-BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__)).replace("\\", "/")
-
-
-def heightmap_width(output_directory, dem_stem):
-    """Returns the Landscape width in vertices from <dem_stem>_heightmap.json, or 0 if absent."""
-    path = os.path.join(output_directory, f"{dem_stem}_heightmap.json")
-    try:
-        with open(path) as handle:
-            return int(json.load(handle).get("width", 0))
-    except (OSError, ValueError):
-        return 0
+from unreal_connection import run_in_unreal, unreal_call
 
 
 def _placer_call(call):
-    """Builds Unreal-side Python that imports the placer and prints the result of `call`."""
-    return (
-        f"import sys, importlib\n"
-        f"if {BASE_DIRECTORY!r} not in sys.path: sys.path.append({BASE_DIRECTORY!r})\n"
-        f"import unreal_level_saver\n"
-        f"importlib.reload(unreal_level_saver)\n"
-        f"import unreal_rock_placer\n"
-        f"importlib.reload(unreal_rock_placer)\n"
-        f"print(unreal_rock_placer.{call})\n"
-    )
+    """Unreal-side Python that runs `call` on unreal_rocks."""
+    return unreal_call(call, "unreal_level_saver", "unreal_rocks")
 
 
 def build_command(rocks_csv, models_folder, resolution, landscape_label,
@@ -68,43 +43,6 @@ def build_stencil_command(group, boulder_stencil, small_rock_stencil, boulder_mi
                       f"boulder_min_radius_m={float(boulder_min_radius_m)!r}",
                       f"save_level={bool(save_level)}"])
     return _placer_call(f"set_rock_stencils({args})")
-
-
-def run_in_unreal(command, log=print, action="Running in Unreal",
-                  discovery_seconds=2.0):
-    """
-    Runs `command` in the first responding Unreal Editor, relaying its output to
-    `log`. Blocks until completion; returns True on success.
-    """
-    remote_exec = unreal_api.RemoteExecution()
-    remote_exec.start()
-    try:
-        log("Searching for a running Unreal Editor...")
-        time.sleep(discovery_seconds)
-        nodes = remote_exec.remote_nodes
-        if not nodes:
-            log("[-] No Unreal instance detected. Enable the Python Editor Script "
-                "Plugin and 'Remote Execution' in Project Settings.", "error")
-            return False
-
-        node = nodes[0]
-        node_id = node.get("node_id") if isinstance(node, dict) else getattr(node, "node_id", None)
-        remote_exec.open_command_connection(node_id)
-        log(f"{action} (node {node_id})...")
-        # Also refreshes the project's own copy of the editor watcher (runtime_sync).
-        result = remote_exec.run_command(runtime_sync.with_runtime_sync(command))
-    finally:
-        remote_exec.stop()
-
-    for entry in result.get("output", []):
-        text = str(entry.get("output", "")).strip()
-        if text:
-            level = {"Warning": "warn", "Error": "error"}.get(entry.get("type"))
-            log(text, level)
-    if not result.get("success", False):
-        log(f"[-] Failed in Unreal: {result.get('result', '')}", "error")
-        return False
-    return True
 
 
 def send_rocks_to_unreal(rocks_csv, models_folder, resolution, landscape_label="",

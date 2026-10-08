@@ -14,7 +14,7 @@ A function registered as an editor tick that, on every editor frame:
   - during Play, lays the wheel tracks.
 
 It only reads the rover and moves its own objects. The studio's setup code
-(Lunar_terrain_loader: unreal_crater_mask, unreal_track_setup)
+(unreal_commands/: unreal_ground_truth, unreal_track_setup)
 creates those objects and uses the helpers here.
 """
 

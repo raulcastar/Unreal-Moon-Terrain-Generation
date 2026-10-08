@@ -7,7 +7,7 @@ light, a 0.53 degree solar disc and long dynamic shadows. The light stays the
 SkyAtmosphere's sun (Atmosphere Sun Light, index 0), so the sky draws its disc.
 
 Azimuth is clockwise from the top of the DEM image: 0 = -Y, 90 = -X. DEM
-columns run towards -X and rows towards +Y (unreal_rock_placer.landscape_frame).
+columns run towards -X and rows towards +Y (unreal_rocks.landscape_frame).
 """
 
 import json

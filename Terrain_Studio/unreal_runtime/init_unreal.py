@@ -9,8 +9,8 @@ sun, and lays wheel tracks during Play.
 The watcher's modules are in Content/Python/TerrainStudio, inside the project,
 so it needs neither Terrain Studio nor its repository. Terrain Studio refreshes
 this folder and this script whenever it sends anything to Unreal
-(Lunar_terrain_loader/runtime_sync.py); their sources are
-Terrain_Studio/Unreal_runtime, which holds only the watcher. If the folder is missing,
+(unreal_link/runtime_sync.py); their sources are
+Terrain_Studio/unreal_runtime, which holds only the watcher. If the folder is missing,
 the script falls back to the TERRAIN_STUDIO_RUNTIME environment variable (a
 Terrain_Studio folder) or the repository below; if none is found, the editor
 starts normally and the Output Log says so.
@@ -29,7 +29,7 @@ REPOSITORY_STUDIO = (r"C:\Users\raul.castilla\OneDrive - University of Luxembour
 def _runtime_directories():
     """
     Folders holding the watcher's modules, the project's own copy first, else the
-    repository's Unreal_runtime. None if not found.
+    repository's unreal_runtime. None if not found.
     """
     project_python = os.path.join(unreal.Paths.convert_relative_path_to_full(
         unreal.Paths.project_content_dir()), "Python")
@@ -37,7 +37,7 @@ def _runtime_directories():
     if os.path.isfile(os.path.join(copy, "unreal_watcher.py")):
         return [copy]
     for studio in (os.environ.get("TERRAIN_STUDIO_RUNTIME", ""), REPOSITORY_STUDIO):
-        runtime = os.path.join(studio, "Unreal_runtime")
+        runtime = os.path.join(studio, "unreal_runtime")
         if studio and os.path.isfile(os.path.join(runtime, "unreal_watcher.py")):
             return [runtime]
     return None
