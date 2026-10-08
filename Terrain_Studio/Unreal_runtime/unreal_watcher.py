@@ -3,8 +3,7 @@ Unreal Editor Watcher (Terrain Studio runtime)
 ----------------------------------------------
 Executes natively within the Unreal Engine Python environment, inside the Unreal
 project (<Project>/Content/Python/TerrainStudio; init_unreal.py starts it when
-the editor opens). It needs only this folder: unreal_wheel_tracks and
-unreal_wheel_dust.
+the editor opens). It needs only this folder: unreal_wheel_tracks.
 
 A function registered as an editor tick that, on every editor frame:
   - keeps each rover-shadow helper capture (<actor>_RoverShadowCapture)
@@ -12,10 +11,10 @@ A function registered as an editor tick that, on every editor frame:
     recompiles, also the one that can run when Play starts, re-attach it to the
     actor's root), every WATCH_INTERVAL seconds;
   - keeps MPC_Sun pointing at the level's sun (the sun's id in the object mask);
-  - during Play, lays the wheel tracks and drives the wheel-dust emitters.
+  - during Play, lays the wheel tracks.
 
 It only reads the rover and moves its own objects. The studio's setup code
-(Lunar_terrain_loader: unreal_crater_mask, unreal_track_setup, unreal_dust_setup)
+(Lunar_terrain_loader: unreal_crater_mask, unreal_track_setup)
 creates those objects and uses the helpers here.
 """
 
@@ -24,15 +23,16 @@ import builtins
 import unreal
 
 # Assets in /Game/GroundTruth_Masks:
-#   PPM_GroundTruthMask         post-process material on the mask camera: object ids,
-#                               crater ids on the Landscape, shadow flag bits
-#   PPM_GroundTruthMask_Backup  that material as it was before the studio first
-#                               changed it (Restore Original Mask Material)
-#   T_CraterIds_<map>           crater map: crater / rim id per cell
-#   RT_SunOnly_RoverHidden      helper capture's sun-only render without the rover
-#   MPC_Sun                     sun direction and disc size for the sun's id
+#   Mask/PPM_GroundTruthMask         post-process material on the mask camera: object
+#                                    ids, crater ids on the Landscape, shadow flag bits
+#   Mask/PPM_GroundTruthMask_Backup  that material as it was before the studio first
+#                                    changed it (Restore Original Mask Material)
+#   CraterMaps/T_CraterIds_<map>     crater map: crater / rim id per cell
+#   RoverShadow/RT_SunOnly_RoverHidden  helper capture's sun-only render without the rover
+#   Sun/MPC_Sun                      sun direction and disc size for the sun's id
+#   WheelTracks/M_WheelTrackDecal    wheel-track decal material (unreal_track_setup)
 GROUND_TRUTH_FOLDER = "/Game/GroundTruth_Masks"
-SUN_MPC = f"{GROUND_TRUTH_FOLDER}/MPC_Sun"
+SUN_MPC = f"{GROUND_TRUTH_FOLDER}/Sun/MPC_Sun"
 SUN_PARAMETER = "SunDirection"   # xyz: unit vector towards the sun; w: cos(disc radius)
 ROVER_SHADOW_CAPTURE = "RoverShadowCapture"   # Helper actor label: <actor>_RoverShadowCapture
 WATCH_INTERVAL = 0.5       # Seconds between the watcher's attachment checks
@@ -146,22 +146,12 @@ def _watch_tick(delta_seconds):
         import unreal_wheel_tracks
         game = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_game_world()
         if game is not None:
-            unreal_wheel_tracks.update_wheel_tracks(game, state)     # Also reports rolling wheels
+            unreal_wheel_tracks.update_wheel_tracks(game, state)
         state["track_error"] = None
     except Exception as error:          # Report each new error once; rebuild the cache
         if state.get("track_error") != str(error):
             unreal.log_warning(f"Wheel tracks: {error}")
         state["track_error"], state["track_world"] = str(error), None
-    try:                                # Dust separately: it must never stop the tracks
-        import unreal_wheel_dust
-        game = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_game_world()
-        if game is not None:
-            unreal_wheel_dust.update_wheel_dust(game, state)
-        state["dust_error"] = None
-    except Exception as error:
-        if state.get("dust_error") != str(error):
-            unreal.log_warning(f"Wheel dust: {error}")
-        state["dust_error"], state["dust_emitters"] = str(error), None
     state["elapsed"] += delta_seconds
     state["since_scan"] += delta_seconds
     if state["elapsed"] < WATCH_INTERVAL:

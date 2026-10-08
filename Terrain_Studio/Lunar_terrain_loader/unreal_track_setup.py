@@ -18,7 +18,7 @@ import unreal
 from unreal_wheel_tracks import POOL_TAG, TRACK_SPACING_CM, WHEEL_SUFFIX, rover_wheels, track_pool, wheel_size
 
 GROUND_TRUTH_FOLDER = "/Game/GroundTruth_Masks"
-TRACK_MATERIAL = f"{GROUND_TRUTH_FOLDER}/M_WheelTrackDecal"
+TRACK_MATERIAL = f"{GROUND_TRUTH_FOLDER}/WheelTracks/M_WheelTrackDecal"
 POOL_FOLDER = "WheelTracks"      # Outliner folder
 POOL_SIZE = 2000
 TRACK_LENGTH_CM = 18.0           # Each decal's length; overlaps the next for a continuous track
@@ -144,7 +144,7 @@ def _track_material(style=None):
     material = unreal.load_asset(TRACK_MATERIAL)
     if material is None:
         material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
-            TRACK_MATERIAL.rsplit("/", 1)[-1], GROUND_TRUTH_FOLDER, unreal.Material,
+            TRACK_MATERIAL.rsplit("/", 1)[-1], TRACK_MATERIAL.rsplit("/", 1)[0], unreal.Material,
             unreal.MaterialFactoryNew())
     material.set_editor_property("material_domain", unreal.MaterialDomain.MD_DEFERRED_DECAL)
     material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)   # Decal: colour, normal, roughness, metallic

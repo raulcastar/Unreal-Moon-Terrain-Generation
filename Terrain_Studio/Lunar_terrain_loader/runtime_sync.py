@@ -2,14 +2,14 @@
 Unreal Runtime Sync
 -------------------
 Keeps the Unreal project's own copy of the editor watcher up to date. The
-watcher (rover-shadow helper attachment, sun mask, wheel tracks and dust) runs
+watcher (rover-shadow helper attachment, sun mask, wheel tracks) runs
 inside the Unreal Editor from <Project>/Content/Python: init_unreal.py starts it
 when the editor opens, and the modules it needs live in
 Content/Python/TerrainStudio. The project therefore works without Terrain
 Studio or this repository.
 
 Source: Terrain_Studio/Unreal_runtime/, which holds only the watcher
-(unreal_watcher, unreal_wheel_tracks, unreal_wheel_dust) and init_unreal.py. It
+(unreal_watcher, unreal_wheel_tracks) and init_unreal.py. It
 imports nothing from the studio; the studio's Unreal-side setup modules in
 Lunar_terrain_loader use it, never the other way round.
 
@@ -25,10 +25,11 @@ import os
 LOADER_DIRECTORY = os.path.dirname(os.path.abspath(__file__)).replace("\\", "/")
 RUNTIME_SOURCE = os.path.join(os.path.dirname(LOADER_DIRECTORY), "Unreal_runtime").replace("\\", "/")
 RUNTIME_FOLDER = "TerrainStudio"        # Under <Project>/Content/Python
-WATCHER_MODULES = ("unreal_watcher.py", "unreal_wheel_tracks.py", "unreal_wheel_dust.py")
+WATCHER_MODULES = ("unreal_watcher.py", "unreal_wheel_tracks.py")
 # Studio-side modules that earlier lived in the project copy: removed from it, and
 # reloaded from the studio if a stale copy is still loaded.
 STUDIO_MODULES = ("unreal_crater_mask.py", "unreal_track_setup.py", "unreal_dust_setup.py",
+                  "unreal_wheel_dust.py",
                   "unreal_rock_placer.py", "unreal_level_saver.py", "rock_models.py")
 STARTUP_SCRIPT = "init_unreal.py"
 

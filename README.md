@@ -152,18 +152,20 @@ How the mask is drawn: the mask camera's material looks at each Landscape pixel
 
 - rocks and the rover keep their own ids;
 - craters hidden behind terrain stay hidden;
-- everything lives in `/Game/GroundTruth_Masks`:
+- everything lives in `/Game/GroundTruth_Masks`, one subfolder per feature:
 
   | Asset | What it is |
   | --- | --- |
-  | `PPM_GroundTruthMask` | Post-process material on the mask camera: object ids, crater ids on the Landscape, shadow flag bits |
-  | `PPM_GroundTruthMask_Backup` | That material as it was before the studio first changed it; **Restore Original Mask Material** puts it back |
-  | `T_CraterIds_<map>` | Crater map: crater or rim id per cell |
-  | `RT_SunOnly_RoverHidden` | The rover-shadow helper's sun-only render, with the rover hidden |
-  | `MPC_Sun` | The sun's direction and disc size, for its id in the object mask |
+  | `Mask/PPM_GroundTruthMask` | Post-process material on the mask camera: object ids, crater ids on the Landscape, shadow flag bits |
+  | `Mask/PPM_GroundTruthMask_Backup` | That material as it was before the studio first changed it; **Restore Original Mask Material** puts it back |
+  | `CraterMaps/T_CraterIds_<map>` | Crater map: crater or rim id per cell |
+  | `RoverShadow/RT_SunOnly_RoverHidden` | The rover-shadow helper's sun-only render, with the rover hidden |
+  | `Sun/MPC_Sun` | The sun's direction and disc size, for its id in the object mask |
+  | `WheelTracks/M_WheelTrackDecal` | The wheel-track decal material |
 
-  Assets with the earlier names (`PPM_ObjectMask`, `PPM_ObjectMask_Original`,
-  `RT_SunWithoutRover`) are renamed on the next send;
+  Assets still directly in the folder, or under their earlier names
+  (`PPM_ObjectMask`, `PPM_ObjectMask_Original`, `RT_SunWithoutRover`), are moved
+  on the next send;
 - it also works during Play In Editor, although camera changes made then last
   only until it stops.
 
@@ -247,7 +249,7 @@ to `mask_labels` (the GNC Labels box lists it).
   3.5 degrees, and faint glare spikes about 6 degrees; set a larger radius to
   include them, or 0 for no glare ring. Like the disc, the glare is only tagged on
   sky; terrain and rocks keep their ids.
-- The light's direction reaches the material through `/Game/GroundTruth_Masks/MPC_Sun`.
+- The light's direction reaches the material through `/Game/GroundTruth_Masks/Sun/MPC_Sun`.
   The editor watcher (see Rover shadow) keeps it current, also during Play, so
   moving the sun by hand or from the studio needs no new send.
 - The material flags the disc with red but not blue, so the shadow feeds keep it
@@ -275,7 +277,7 @@ pixels get id 60 (`wheel_track`) in `object_mask`; add `"60:wheel_track"` to
 
 - **Send Masks to Unreal** places a pool of 2000 hidden track decals in the level
   (Outliner folder `WheelTracks`, material
-  `/Game/GroundTruth_Masks/M_WheelTrackDecal`). The first time takes about
+  `/Game/GroundTruth_Masks/WheelTracks/M_WheelTrackDecal`). The first time takes about
   two minutes; later sends reuse them. Save the level to keep them.
 - During Play the editor watcher lays the next decal under each wheel that
   touches the Landscape, every 12 cm along its path. A piece is laid once every
@@ -284,8 +286,8 @@ pixels get id 60 (`wheel_track`) in `object_mask`; add `"60:wheel_track"` to
   are left on rocks or while a wheel is in the air.
 - For the first 3 s of Play (`SETTLE_TIME_S` in
   `Unreal_runtime/unreal_wheel_tracks.py`) the rover settles onto the ground, and
-  its movement is ignored: no tracks are laid and the dust parameters stay at 0.
-  This keeps the settling from leaving tracks or throwing dust into the air.
+  its movement is ignored: no tracks are laid. This keeps the settling from
+  leaving tracks.
 - The rover itself is only read, never changed, while the game runs. Changing a
   simulating part's properties rebuilds its physics and breaks the wheel
   constraints.
@@ -306,45 +308,10 @@ pixels get id 60 (`wheel_track`) in `object_mask`; add `"60:wheel_track"` to
 
 ### Wheel dust
 
-With *Wheels kick up lunar dust* (Wheel Tracks group; needs the tracks), each
-wheel runs the Niagara system `/Game/Landscape/NS_LunarDust` while it rolls on the
-ground. Dust pixels get id 70 (`dust`) in `object_mask`; add `"70:dust"` to
-`mask_labels`.
-
-- During Play the editor watcher gives each wheel its own emitter. They are
-  spawned in the game, never attached to the rover, and kept at the wheel's
-  ground contact, with local +X pointing backwards along the travel and +Z up.
-- They are activated once and stay running for the whole Play, because switching
-  a Niagara system off and on ends and restarts it, emptied. Dust is controlled
-  through two float user parameters, set every frame:
-  - `WheelSpeed`: the wheel's measured speed in cm/s, smoothed;
-  - `DustAmount`: the studio's Dust amount.
-
-  Both are 0 while the wheel stands still or is off the ground, so the system's
-  **Spawn Rate must be multiplied by `User.DustAmount`** (and may scale with
-  `User.WheelSpeed`). Give both parameters non-zero defaults (e.g. 35 and 1) for
-  the Niagara editor preview.
-- **Send Masks to Unreal** creates the sprite material
-  `/Game/GroundTruth_Masks/M_LunarDustSprite` (soft, round, translucent, regolith
-  colour, writes CustomDepth) and sets the system to write stencil 70.
-- The look and physics are set inside the Niagara system. For lunar dust (no
-  air, so nothing stays suspended):
-
-  | Module / setting | Value |
-  | --- | --- |
-  | User parameters | add floats `WheelSpeed` and `DustAmount` |
-  | Emitter Properties | Local Space off (particles stay where thrown) |
-  | Spawn Rate | e.g. 600 per second, times `DustAmount` (required, so dust stops with the wheel) |
-  | Add Velocity (in Cone) | axis (1, 0, 1) in local space (back and up); speed 0.6-2.2 x `WheelSpeed` |
-  | Gravity Force | (0, 0, -162) cm/s^2, the Moon's gravity |
-  | Drag | delete the module (no air) |
-  | Lifetime | 0.6-1.5 s; fade alpha out at the end |
-  | Collision (optional) | restitution 0, so grains settle on the ground |
-  | Sprite Renderer | material `M_LunarDustSprite`, size 1-3 cm |
-  | System bounds | fixed bounds at least +/-300 cm, or off |
-
-- The navcams look forward, so dust thrown behind the wheels shows mostly when
-  reversing or turning, as on a real rover.
+Terrain Studio does not handle the wheel dust: it is set up in the rover's
+Blueprint. Its assets are in `/Game/Effects/LunarDust`: the Niagara system
+`NS_LunarDust`, the grain mesh `SM_DustGrain` and its material `M_LunarDustMesh`.
+The dust is not part of the object mask.
 
 ### Rover shadow
 
@@ -353,7 +320,7 @@ rover's own shadow get id 5 (`rover_shadow`) instead of 2 or 4.
 
 - **Send Masks to Unreal** adds a helper capture to the level,
   `<actor>_RoverShadowCapture`, attached to the mask camera. It renders the same
-  sun-only view into `/Game/GroundTruth_Masks/RT_SunOnly_RoverHidden`, with the mask
+  sun-only view into `/Game/GroundTruth_Masks/RoverShadow/RT_SunOnly_RoverHidden`, with the mask
   camera's actor (the rover) hidden. Hiding an actor from a capture also removes
   its shadow there.
 - A pixel that is shadow in the mask camera but sunlit in the helper's render is
@@ -428,7 +395,7 @@ A small Python function runs inside the Unreal Editor on every frame. It:
 
 - keeps each rover-shadow helper attached to its mask camera;
 - keeps `MPC_Sun` pointing at the sun (sun id in the object mask);
-- during Play, lays the wheel tracks and drives the wheel-dust emitters.
+- during Play, lays the wheel tracks.
 
 It only reads the rover and moves its own objects. It is editor Python, so it
 works in the editor and Play In Editor, not in a packaged game.
@@ -438,14 +405,14 @@ works in the editor and Play In Editor, not in a packaged game.
 | File | Role |
 | --- | --- |
 | `<Project>/Content/Python/init_unreal.py` | Unreal runs it when the editor opens; it starts the watcher |
-| `<Project>/Content/Python/TerrainStudio/*.py` | The watcher's modules: `unreal_watcher`, `unreal_wheel_tracks`, `unreal_wheel_dust` |
+| `<Project>/Content/Python/TerrainStudio/*.py` | The watcher's modules: `unreal_watcher`, `unreal_wheel_tracks` |
 
 **Sources in this repository:** the watcher and the studio are kept apart.
 
 | Folder | Files | Role |
 | --- | --- | --- |
-| `Terrain_Studio/Unreal_runtime/` | `init_unreal.py`, `unreal_watcher.py`, `unreal_wheel_tracks.py`, `unreal_wheel_dust.py` | Only the watcher's per-frame work. Copied into the project; imports nothing from the studio |
-| `Terrain_Studio/Lunar_terrain_loader/` | `unreal_crater_mask.py`, `unreal_track_setup.py`, `unreal_dust_setup.py`, ... | The studio's Unreal-side setup, run when it sends: mask material, cameras, rover-shadow helper, track decals and material, dust sprite. Uses the watcher's helpers and constants, never the other way round |
+| `Terrain_Studio/Unreal_runtime/` | `init_unreal.py`, `unreal_watcher.py`, `unreal_wheel_tracks.py` | Only the watcher's per-frame work. Copied into the project; imports nothing from the studio |
+| `Terrain_Studio/Lunar_terrain_loader/` | `unreal_crater_mask.py`, `unreal_track_setup.py`, ... | The studio's Unreal-side setup, run when it sends: mask material, cameras, rover-shadow helper, track decals and material. Uses the watcher's helpers and constants, never the other way round |
 
 **Kept up to date:** every time Terrain Studio sends anything to Unreal (map,
 rocks, masks, sun), it first copies these files into the project when they
@@ -545,12 +512,10 @@ Terrain_Studio/
     runtime_sync.py              Copies the editor watcher into the Unreal project
     unreal_crater_mask.py        Runs inside Unreal: mask material, cameras, rover-shadow helper, sun mask
     unreal_track_setup.py        Runs inside Unreal: track decal pool and material
-    unreal_dust_setup.py         Runs inside Unreal: dust sprite and Niagara stencil
   Unreal_runtime/                The editor watcher only (copied to <Project>/Content/Python)
     init_unreal.py               Unreal startup script: starts the watcher
     unreal_watcher.py            Per-frame: rover-shadow helper attachment, sun direction
     unreal_wheel_tracks.py       Per-frame: lays the wheel tracks during Play
-    unreal_wheel_dust.py         Per-frame: drives the wheel-dust emitters during Play
 config/  input_maps/  outputs/
 docs/images/                     README screenshots
 ```

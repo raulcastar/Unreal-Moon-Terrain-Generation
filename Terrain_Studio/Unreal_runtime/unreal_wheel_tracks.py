@@ -10,8 +10,7 @@ The pool of track decals is placed in the level beforehand by the studio
 the Landscape and has rolled on by TRACK_SPACING_CM gets the next decal of the
 pool, pressed onto the ground along its direction of travel, once every wheel
 has rolled off that spot (so no track lands on a wheel). The oldest decals are
-reused; tracks start afresh each time Play starts. Each rolled-on piece is also
-reported to the wheel dust (unreal_wheel_dust). The rover is only read.
+reused; tracks start afresh each time Play starts. The rover is only read.
 """
 
 import math
@@ -25,7 +24,7 @@ CLEARANCE_CM = 22.0              # A track piece is laid once every wheel is thi
 MAX_PENDING = 256                # Track pieces waiting for the wheels to roll off
 CONTACT_TOLERANCE_CM = 3.0       # A wheel leaves a track within this of the ground
 SETTLE_TIME_S = 3.0              # After Play starts the rover settles onto the ground; its
-                                 # wheels leave no tracks (and throw no dust) until then
+                                 # wheels leave no tracks until then
 
 
 def rover_wheels(actor):
@@ -88,18 +87,6 @@ def _game_state(world, state):
     return state
 
 
-def _kick_dust(state, world, now, ground, direction, speed):
-    """A wheel on the ground rolled on by one piece: throw its dust (unreal_wheel_dust)."""
-    if not state.get("dust_on", True):
-        return
-    try:
-        import unreal_wheel_dust
-        unreal_wheel_dust.kick(state, world, now, ground, direction, speed)
-    except Exception as error:      # Report once; tracks carry on without dust
-        unreal.log_warning(f"Wheel dust: {error}")
-        state["dust_on"] = False
-
-
 def update_wheel_tracks(world, state):
     """Called every frame by the editor watcher while a game runs."""
     if world is None or not unreal.get_editor_subsystem(
@@ -129,9 +116,6 @@ def update_wheel_tracks(world, state):
         if distance < TRACK_SPACING_CM:
             continue
         direction = unreal.Vector(travel.x / distance, travel.y / distance, 0.0)
-        state["dust_current_wheel"] = key                       # For the dust kicked below
-        elapsed = now - state["track_time"].get(key, now)
-        speed = distance / elapsed if elapsed > 1e-3 else 0.0   # cm/s since the last piece
         state["track_time"][key] = now
         steps = min(int(distance // TRACK_SPACING_CM), 8)     # Catch up after a fast frame
         for step in range(1, steps + 1):
@@ -150,7 +134,6 @@ def update_wheel_tracks(world, state):
                 continue                                # In the air, or on a rock
             pending.append((ground, unreal.MathLibrary.make_rot_from_xz(
                 unreal.Vector(-normal.x, -normal.y, -normal.z), direction)))
-            _kick_dust(state, world, now, ground, direction, speed)
         state["track_last"][key] = unreal.Vector(last.x + direction.x * TRACK_SPACING_CM * steps,
                                                  last.y + direction.y * TRACK_SPACING_CM * steps,
                                                  centre.z) if steps < 8 else centre

@@ -40,7 +40,6 @@ placer (columns run towards -X); it may hold several cells per DEM cell
 (CraterSupersample).
 """
 
-import builtins
 import json
 import math
 
@@ -54,28 +53,35 @@ from unreal_watcher import (ROVER_SHADOW_CAPTURE, SUN_MPC, SUN_PARAMETER, attach
 CAMERAS_JSON_PREFIX = "CAMERAS_JSON "
 
 # Assets in /Game/GroundTruth_Masks:
-#   PPM_GroundTruthMask         post-process material on the mask camera: object ids,
-#                               crater ids on the Landscape, shadow flag bits
-#   PPM_GroundTruthMask_Backup  that material as it was before the studio first
-#                               changed it (Restore Original Mask Material)
-#   T_CraterIds_<map>           crater map: crater / rim id per cell
-#   RT_SunOnly_RoverHidden      helper capture's sun-only render without the rover
-#   MPC_Sun                     sun direction and disc size for the sun's id
+#   Mask/PPM_GroundTruthMask         post-process material on the mask camera: object
+#                                    ids, crater ids on the Landscape, shadow flag bits
+#   Mask/PPM_GroundTruthMask_Backup  that material as it was before the studio first
+#                                    changed it (Restore Original Mask Material)
+#   CraterMaps/T_CraterIds_<map>     crater map: crater / rim id per cell
+#   RoverShadow/RT_SunOnly_RoverHidden  helper capture's sun-only render without the rover
+#   Sun/MPC_Sun                      sun direction and disc size for the sun's id
+#   WheelTracks/M_WheelTrackDecal    wheel-track decal material (unreal_track_setup)
 GROUND_TRUTH_FOLDER = "/Game/GroundTruth_Masks"
-MASK_MATERIAL = f"{GROUND_TRUTH_FOLDER}/PPM_GroundTruthMask"
-BACKUP_MATERIAL = f"{GROUND_TRUTH_FOLDER}/PPM_GroundTruthMask_Backup"
-ROVER_SHADOW_TARGET = f"{GROUND_TRUTH_FOLDER}/RT_SunOnly_RoverHidden"
+MASK_MATERIAL = f"{GROUND_TRUTH_FOLDER}/Mask/PPM_GroundTruthMask"
+BACKUP_MATERIAL = f"{GROUND_TRUTH_FOLDER}/Mask/PPM_GroundTruthMask_Backup"
+ROVER_SHADOW_TARGET = f"{GROUND_TRUTH_FOLDER}/RoverShadow/RT_SunOnly_RoverHidden"
 CRATER_TEXTURE_PREFIX = "T_CraterIds_"
 SUN_ID = 50
 SUN_GLARE_ID = 51
 SUN_GLARE_DEG = 1.1    # Glare ring radius: the navcam's saturated core (~8 px of 640 at 90 deg)
 TRACK_ID = 60
-TEXTURE_FOLDER = GROUND_TRUTH_FOLDER
-# Earlier names, renamed on the next send.
+TEXTURE_FOLDER = f"{GROUND_TRUTH_FOLDER}/CraterMaps"
+# Earlier names and places (all in the folder itself), moved on the next send;
+# crater maps (T_CraterIds_*) left there move to TEXTURE_FOLDER.
 OLD_ASSET_NAMES = {
     f"{GROUND_TRUTH_FOLDER}/PPM_ObjectMask": MASK_MATERIAL,
     f"{GROUND_TRUTH_FOLDER}/PPM_ObjectMask_Original": BACKUP_MATERIAL,
     f"{GROUND_TRUTH_FOLDER}/RT_SunWithoutRover": ROVER_SHADOW_TARGET,
+    f"{GROUND_TRUTH_FOLDER}/PPM_GroundTruthMask": MASK_MATERIAL,
+    f"{GROUND_TRUTH_FOLDER}/PPM_GroundTruthMask_Backup": BACKUP_MATERIAL,
+    f"{GROUND_TRUTH_FOLDER}/RT_SunOnly_RoverHidden": ROVER_SHADOW_TARGET,
+    f"{GROUND_TRUTH_FOLDER}/MPC_Sun": SUN_MPC,
+    f"{GROUND_TRUTH_FOLDER}/M_WheelTrackDecal": f"{GROUND_TRUTH_FOLDER}/WheelTracks/M_WheelTrackDecal",
 }
 DEFAULT_ROVER_STENCIL = 2
 LANDSCAPE_STENCIL = 10
@@ -201,7 +207,7 @@ def _sun_collection(world):
     collection = unreal.load_asset(SUN_MPC)
     if collection is None:
         collection = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
-            SUN_MPC.rsplit("/", 1)[-1], GROUND_TRUTH_FOLDER, unreal.MaterialParameterCollection,
+            SUN_MPC.rsplit("/", 1)[-1], SUN_MPC.rsplit("/", 1)[0], unreal.MaterialParameterCollection,
             unreal.MaterialParameterCollectionFactoryNew())
     light = sun_light(world)
     parameter = unreal.CollectionVectorParameter()
@@ -216,11 +222,17 @@ def _sun_collection(world):
 def _rename_old_assets():
     """Renames assets still under their earlier names (references follow). Returns notes."""
     notes = []
-    for old, new in OLD_ASSET_NAMES.items():
-        library = unreal.EditorAssetLibrary
+    library = unreal.EditorAssetLibrary
+    moves = dict(OLD_ASSET_NAMES)
+    for path in library.list_assets(GROUND_TRUTH_FOLDER, recursive=False):
+        name = path.split(".")[0].rsplit("/", 1)[-1]
+        if name.startswith(CRATER_TEXTURE_PREFIX):
+            moves[f"{GROUND_TRUTH_FOLDER}/{name}"] = f"{TEXTURE_FOLDER}/{name}"
+    for old, new in moves.items():
         if library.does_asset_exist(old) and not library.does_asset_exist(new):
             if library.rename_asset(old, new):
-                notes.append(f"renamed {old.rsplit('/', 1)[-1]} to {new.rsplit('/', 1)[-1]}")
+                notes.append(f"moved {old[len(GROUND_TRUTH_FOLDER) + 1:]} to "
+                             f"{new[len(GROUND_TRUTH_FOLDER) + 1:]}")
     return notes
 
 
@@ -468,7 +480,7 @@ def _rover_shadow_target(capture):
     helper = unreal.load_asset(ROVER_SHADOW_TARGET)
     if helper is None:
         helper = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
-            ROVER_SHADOW_TARGET.rsplit("/", 1)[-1], GROUND_TRUTH_FOLDER,
+            ROVER_SHADOW_TARGET.rsplit("/", 1)[-1], ROVER_SHADOW_TARGET.rsplit("/", 1)[0],
             unreal.TextureRenderTarget2D, unreal.TextureRenderTargetFactoryNew())
     helper.set_editor_property("render_target_format", unreal.TextureRenderTargetFormat.RTF_RGBA8)
     helper.set_editor_property("size_x", width)
@@ -624,7 +636,7 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
                       landscape_width=0, landscape_stencil=LANDSCAPE_STENCIL, supersample=1,
                       camera_actor="", camera_capture="", save_level=False, shadows=True,
                       rover_shadow=True, sun=True, sun_glare_deg=SUN_GLARE_DEG,
-                      wheel_tracks=True, track_style=None, wheel_dust=True, dust_amount=1.0):
+                      wheel_tracks=True, track_style=None):
     """
     Imports the crater map and makes the object mask show it on the Landscape;
     with `shadows`, the frame also carries the shadow mask and, with
@@ -632,8 +644,7 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
     the sun's disc gets id SUN_ID in the object mask and the sky around it out to
     `sun_glare_deg` gets SUN_GLARE_ID (0 for none); with `wheel_tracks`, the mask
     camera's actor leaves wheel tracks (TRACK_ID) during Play, with the tread look
-    `track_style` (unreal_track_setup.DEFAULT_STYLE) and, with `wheel_dust`,
-    kicks up lunar dust (DUST_ID; `dust_amount` scales it). When given,
+    `track_style` (unreal_track_setup.DEFAULT_STYLE). When given,
     sets up `camera_capture` on `camera_actor` as the mask camera. Returns a
     summary.
     """
@@ -690,19 +701,6 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
     elif not _in_pie() and unreal_track_setup.remove_wheel_tracks():
         track_note = "Wheel tracks: off (decals removed)."
 
-    # Wheel dust: instanced grains for the same actor (editor only); needs the tracks.
-    import unreal_dust_setup
-    importlib.reload(unreal_dust_setup)
-    dust_note, dust_on = "", False
-    if wheel_dust and tracks_on and found is not None and not _in_pie():
-        dust_on, dust_note = unreal_dust_setup.setup_wheel_dust(found[0])
-    elif wheel_dust and tracks_on and _in_pie():
-        dust_on = unreal.EditorAssetLibrary.does_asset_exist(unreal_dust_setup.DUST_SYSTEM)
-    elif not wheel_dust and not _in_pie() and unreal_dust_setup.remove_wheel_dust():
-        dust_note = "Wheel dust: off."
-    elif wheel_dust and not tracks_on:
-        dust_note = "Wheel dust: off, it needs the wheel tracks."
-
     _build_mask_graph(material, texture, {
         "LandscapeStencil": landscape_stencil, "CraterOriginX": x0, "CraterOriginY": y0,
         "CraterStepX": step_x, "CraterStepY": step_y,
@@ -727,8 +725,6 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
     if track_note:
         summary += "\n" + track_note + (f" Track pixels are id {TRACK_ID} in the object mask."
                                         if tracks_on else "")
-    if dust_note:
-        summary += "\n" + dust_note
     if renamed:
         summary += "\nAssets: " + "; ".join(renamed) + "."
     if camera_actor and camera_capture:
@@ -750,10 +746,6 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
         install_watcher()
     elif not _in_pie():
         uninstall_watcher()
-    state = getattr(builtins, "_terrain_studio_watcher", None)    # After the watcher (re)starts
-    if state is not None:
-        state["dust_on"] = dust_on
-        state["dust_amount"] = max(0.0, float(dust_amount))
     if save_level and not _in_pie():
         import unreal_level_saver
         summary += "\n" + unreal_level_saver.save_current_level()

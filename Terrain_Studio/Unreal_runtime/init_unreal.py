@@ -4,7 +4,7 @@ Terrain Studio startup script for the Unreal project
 Lives at <UnrealProject>/Content/Python/init_unreal.py; Unreal runs it when the
 editor opens. It starts the Terrain Studio editor watcher, which keeps the
 rover-shadow helper attached to its mask camera, points the sun mask at the
-sun, and lays wheel tracks and drives the wheel dust during Play.
+sun, and lays wheel tracks during Play.
 
 The watcher's modules are in Content/Python/TerrainStudio, inside the project,
 so it needs neither Terrain Studio nor its repository. Terrain Studio refreshes
