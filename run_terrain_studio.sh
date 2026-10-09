@@ -13,7 +13,7 @@ if [ $status -ne 0 ]; then
     echo
     echo "[-] The studio exited with an error."
     echo "    If a module is missing, install the dependencies with:"
-    echo "        $PY -m pip install numpy scipy pandas pyyaml matplotlib tifffile"
+    echo "        $PY -m pip install -r \"$DIR/requirements.txt\""
     echo "    On Debian/Ubuntu, Tkinter is a separate package:"
     echo "        sudo apt install python3-tk"
 fi

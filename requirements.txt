@@ -1,0 +1,14 @@
+# Lunar Terrain Studio dependencies, pinned to the versions it is tested with
+# (Python 3.14, Windows). Install with:
+#     py -m pip install -r requirements.txt          (Windows)
+#     python3 -m pip install -r requirements.txt     (Linux / macOS)
+# Tkinter ships with Python; on Debian/Ubuntu install it with: sudo apt install python3-tk
+# The Unreal-side modules run in the editor's own Python and need none of these.
+
+numpy==2.4.4
+scipy==1.17.1
+pandas==3.0.2
+PyYAML==6.0.3
+matplotlib==3.10.8
+pillow==12.2.0          # crater maps and heightmap previews (PNG)
+tifffile==2026.4.11     # only for GeoTIFF (.tif) input maps

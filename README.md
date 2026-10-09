@@ -13,8 +13,15 @@ run_terrain_studio.bat                 # Windows
 python Terrain_Studio/terrain_studio.py  # any platform
 ```
 
-Requires `numpy`, `scipy`, `pandas`, `pyyaml` and `matplotlib`; `tifffile` only for
-GeoTIFF input. Tkinter ships with Python (`sudo apt install python3-tk` on Debian/Ubuntu).
+Install the dependencies once (pinned in `requirements.txt`: numpy, scipy, pandas,
+PyYAML, matplotlib, Pillow, and tifffile for GeoTIFF input):
+
+```sh
+py -m pip install -r requirements.txt        # Windows
+python3 -m pip install -r requirements.txt   # Linux / macOS
+```
+
+Tkinter ships with Python (`sudo apt install python3-tk` on Debian/Ubuntu).
 
 The home screen lays out the four workflow steps in order: create and send a
 terrain, place rocks, mask craters, position the sun. A library holds the map
