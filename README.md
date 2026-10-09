@@ -449,10 +449,11 @@ commands and the watcher run the same code. The Output Log then shows
 left alone. After an update, the running watcher picks up the new code on that
 send; a fresh editor start uses it from the beginning.
 
-**If the folder is missing:** the startup script falls back to the
-`TERRAIN_STUDIO_RUNTIME` environment variable, then to the studio's folder. If
-none is found, the editor starts normally and the Output Log says the watcher
-was not started.
+**If the folder is missing** (the studio has not sent anything to this project
+yet): the startup script falls back to the `TERRAIN_STUDIO_RUNTIME` environment
+variable, set to a `Terrain_Studio` folder. If neither is found, the editor
+starts normally and the Output Log says the watcher was not started; the next
+send from the studio installs it.
 
 ## Library: browse maps
 
