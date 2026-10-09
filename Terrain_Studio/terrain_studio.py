@@ -21,6 +21,7 @@ pandas, pyyaml, matplotlib) plus tkinter from the standard library.
 Run with:  python Terrain_Studio/terrain_studio.py
 """
 
+import logging
 import os
 import sys
 
@@ -29,4 +30,5 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # For the gui p
 from gui.app import main  # noqa: E402
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     main()

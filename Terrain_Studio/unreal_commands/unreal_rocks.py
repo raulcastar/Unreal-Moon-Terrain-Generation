@@ -62,8 +62,8 @@ def _run_import(source_path, destination_path, destination_name=None, options=No
         task.set_editor_property("options", options)
     try:
         task.set_editor_property("async_", False)   # Interchange imports are async by default
-    except Exception:
-        pass
+    except Exception as exc:     # engines without Interchange have no such property
+        unreal.log(f"[*] AssetImportTask has no async_ property ({exc}); importing as the engine defaults.")
     unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
     # The asset registry lists new assets only on a later tick, so the result
     # is read from the task itself.

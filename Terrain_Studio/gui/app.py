@@ -4,6 +4,7 @@ Generate view (generator_page). main() starts the studio.
 """
 
 import ctypes
+import logging
 import os
 import queue
 import sys
@@ -24,6 +25,8 @@ from gui.map_views import MapBrowser
 from gui.rock_planner_page import RockPlannerPage
 from gui.sun_page import SunPage
 from gui.widgets import ask_confirmation, enable_dpi_awareness, maximize_window
+
+log = logging.getLogger(__name__)
 
 
 # Home screen: banner rendered in the Moon Simulator, and its dark palette.
@@ -135,11 +138,12 @@ class TerrainStudio(GeneratorPage, tk.Tk):
                 dpi = int(user32.GetDpiForWindow(self.winfo_id()))
                 if dpi:
                     return dpi
-            except Exception:
-                pass
+            except Exception as exc:     # Windows before 10 1607: ask Tk instead
+                log.debug("GetDpiForWindow unavailable, asking Tk for the DPI: %s", exc)
         try:
             return int(round(self.winfo_fpixels("1i")))
-        except Exception:
+        except Exception as exc:
+            log.warning("Could not read the monitor DPI; assuming 96: %s", exc)
             return 96
 
     def _apply_scale_from_dpi(self, dpi):
@@ -148,8 +152,8 @@ class TerrainStudio(GeneratorPage, tk.Tk):
         self.figure_dpi = max(72, round(100 * self.ui_scale))
         try:
             self.tk.call("tk", "scaling", dpi / 72.0)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning("Could not set Tk font scaling for %d DPI: %s", dpi, exc)
 
     def _on_root_configure(self, event):
         """Watches for the window crossing onto a monitor with different DPI."""

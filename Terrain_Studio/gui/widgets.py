@@ -8,11 +8,14 @@ import json
 import os
 import sys
 import textwrap
+import logging
 import time
 
 import tkinter as tk
 from tkinter import ttk
 import numpy as np
+
+log = logging.getLogger(__name__)
 
 
 # =========================================================================
@@ -33,28 +36,31 @@ def enable_dpi_awareness():
     if sys.platform != "win32":
         return
     user32 = ctypes.windll.user32
-    # Per-Monitor-Aware v2 (Windows 10 1703+).
+    # Per-Monitor-Aware v2 (Windows 10 1703+). An older Windows lacks the call:
+    # each failure falls through to the next, older mode.
     try:
         user32.SetProcessDpiAwarenessContext.restype = ctypes.c_bool
         user32.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
         if user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
             return
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("Per-monitor-v2 DPI awareness unavailable: %s", exc)
     # Per-Monitor aware (Windows 8.1+); HRESULT S_OK == 0.
     try:
         if ctypes.windll.shcore.SetProcessDpiAwareness(2) == 0:
             return
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("Per-monitor DPI awareness unavailable: %s", exc)
     # System DPI aware, then the legacy call.
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
-    except Exception:
+    except Exception as exc:
+        log.debug("System DPI awareness unavailable: %s", exc)
         try:
             user32.SetProcessDPIAware()
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning("Could not enable DPI awareness; the window may look blurry "
+                        "on a scaled display: %s", exc)
 
 
 class Tooltip:
