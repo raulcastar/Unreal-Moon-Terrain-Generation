@@ -24,32 +24,23 @@ from gui.dem_files import DEM_FILETYPES, dem_group_name, drop_dem_menu, load_dem
 from gui.paths import map_browse_dir
 from gui.widgets import ParamRow, ProgressPanel, Tooltip
 
+import mask_classes  # noqa: E402  (unreal_link, put on the path by gui.paths)
+
 
 # =========================================================================
 # CRATER MASKS
 # =========================================================================
 
-# Object-mask ids, consecutive (unreal_ground_truth.MASK_IDS). Rocks can be
-# changed in the rock planner and craters here; both views read them for
-# placement and the GNC labels.
-DEFAULT_MASK_IDS = {"boulder": 9, "small_rock": 10, "boulder_radius_m": 0.15,
+# Object-mask ids, from config/mask_classes.json. Rocks can be changed in the
+# rock planner and craters here; both views read them for placement and the GNC
+# labels.
+DEFAULT_MASK_IDS = {"boulder": mask_classes.id_of("boulder"),
+                    "small_rock": mask_classes.id_of("small_rock"), "boulder_radius_m": 0.15,
                     "crater": crater_map.CRATER_ID, "rim": crater_map.RIM_ID}
-UNLABELED_ID = 0   # Nothing tagged
-SKY_MASK_ID = 1    # The sky (SKY_ID in unreal_ground_truth)
-ROVER_MASK_ID = 2  # The rover's stencil (set in its Blueprint)
-LANDSCAPE_MASK_ID = 5
+SUN_GLARE_ID = mask_classes.id_of("sun_glare")
 
 
-GNC_MASK_LABELS = "GNC-Moon-Simulator/component_stereo_depth/config/params.yaml"
-
-
-SUN_MASK_ID = 3    # The sun's disc in the object mask (SUN_ID in unreal_ground_truth)
-
-
-SUN_GLARE_ID = 4   # Its glare ring (SUN_GLARE_ID there)
-
-
-TRACK_MASK_ID = 8   # Wheel tracks (TRACK_ID there)
+GNC_CLASSES_FILE = "GNC-Moon-Simulator/component_stereo_depth/config/mask_classes.json"
 
 
 # Tread looks (unreal_wheel_tracks.TRACK_PATTERNS) and lug spacings that divide its
@@ -240,7 +231,7 @@ class GroundTruthPage(ttk.Frame):
         # Sun
         sun = self._group(inner, "Sun")
         self.sun_var = tk.BooleanVar(value=True)
-        sun_check = ttk.Checkbutton(sun, text=f"Tag the sun's disc in the object mask (id {SUN_MASK_ID})",
+        sun_check = ttk.Checkbutton(sun, text=f"Tag the sun's disc in the object mask (id {mask_classes.id_of('sun')})",
                                     variable=self.sun_var)
         sun_check.pack(anchor="w")
         Tooltip(sun_check,
@@ -260,7 +251,7 @@ class GroundTruthPage(ttk.Frame):
         tracks = self._group(inner, "Wheel Tracks")
         self.tracks_var = tk.BooleanVar(value=True)
         tracks_check = ttk.Checkbutton(
-            tracks, text=f"Rover leaves wheel tracks (id {TRACK_MASK_ID})", variable=self.tracks_var)
+            tracks, text=f"Rover leaves wheel tracks (id {mask_classes.id_of('wheel_track')})", variable=self.tracks_var)
         tracks_check.pack(anchor="w")
         Tooltip(tracks_check,
                 "Places a pool of track decals in the level (hidden). During Play each wheel\n"
@@ -348,11 +339,17 @@ class GroundTruthPage(ttk.Frame):
 
         # GNC labels
         labels = self._group(inner, "GNC Labels")
-        self._hint(labels, f"mask_labels in {GNC_MASK_LABELS} must list these ids:")
+        self._hint(labels, f"Object-mask classes (config/mask_classes.json and the ids above).\n"
+                           f"The GNC stereo node reads its copy, {GNC_CLASSES_FILE}:")
         self.labels_text = tk.Text(labels, height=11, font=("Consolas", 8), relief="solid",
                                    borderwidth=1, wrap="none")
         self.labels_text.pack(fill="x", pady=(4, 0))
-        ttk.Button(labels, text="Copy", command=self.copy_labels).pack(anchor="e", pady=(4, 0))
+        self.labels_status = ttk.Label(labels, text="", wraplength=360, justify="left")
+        self.labels_status.pack(fill="x", pady=(4, 0))
+        copy = ttk.Button(labels, text="Copy", command=self.copy_labels)
+        copy.pack(anchor="e", pady=(4, 0))
+        Tooltip(copy, "Copies a complete mask_classes.json with these ids, to paste into\n"
+                      "the GNC copy (and into config/ here to keep changed ids).")
 
         for var in (self.crater_var, self.rim_var):
             var.trace_add("write", self._ids_changed)
@@ -470,21 +467,38 @@ class GroundTruthPage(ttk.Frame):
     def _refresh_labels(self, ids):
         self.labels_text.configure(state="normal")
         self.labels_text.delete("1.0", "end")
+        self._classes = None
         if ids is None:
             self.labels_text.insert("end", "Crater ids must be different whole numbers\n1-255 (rim 0-255).")
+            status = ""
         else:
-            # Every id, in order (an id stays reserved when its option is off).
-            labels = {UNLABELED_ID: "unlabeled", SKY_MASK_ID: "sky", ROVER_MASK_ID: "rover",
-                      SUN_MASK_ID: "sun", SUN_GLARE_ID: "sun_glare", LANDSCAPE_MASK_ID: "landscape",
-                      ids["crater"]: "crater", TRACK_MASK_ID: "wheel_track",
-                      ids["boulder"]: "boulder"}
-            if ids["rim"]:
-                labels[ids["rim"]] = "crater_rim"
-            if ids["small_rock"] != ids["boulder"]:
-                labels[ids["small_rock"]] = "small_rock"
-            lines = [f'- "{i}:{name}"' for i, name in sorted(labels.items())]
+            # Every class, in order (an id stays reserved when its option is off).
+            self._classes = self._effective_classes(ids)
+            lines = [f"{c['id']:3d}  {c['name']:<12} {c['group']:<8} rgb{tuple(c['rgb'])}"
+                     for c in self._classes]
             self.labels_text.insert("end", "\n".join(lines))
+            difference = mask_classes.gnc_difference({c["id"]: c["name"] for c in self._classes})
+            status = ("GNC copy not found next to this repository: keep it in step by hand."
+                      if difference is None else
+                      "GNC copy matches." if difference == "" else
+                      "GNC copy differs; Copy, then paste over it:\n" + difference)
+        self.labels_status.configure(text=status)
         self.labels_text.configure(state="disabled")
+
+    @staticmethod
+    def _effective_classes(ids):
+        """config/mask_classes.json with the crater and rock ids chosen in the studio."""
+        chosen = {"crater": ids["crater"], "crater_rim": ids["rim"], "boulder": ids["boulder"],
+                  "small_rock": ids["small_rock"]}
+        out = []
+        for entry in mask_classes.classes():
+            entry = dict(entry, id=chosen.get(entry["name"], entry["id"]))
+            if entry["name"] == "crater_rim" and not ids["rim"]:
+                continue                                   # rim off
+            if entry["name"] == "small_rock" and ids["small_rock"] == ids["boulder"]:
+                continue                                   # a single rock class
+            out.append(entry)
+        return sorted(out, key=lambda e: e["id"])
 
     # Shadow class ids published by the GNC stereo node (SHADOW_IDS there).
     SHADOW_IDS = ((0, "sky"), (1, "sunlit ground"), (2, "shadowed ground"),
@@ -512,9 +526,15 @@ class GroundTruthPage(ttk.Frame):
             return 0.0
 
     def copy_labels(self):
+        if not self._classes:
+            self.log("Fix the crater ids first.", level="warn")
+            return
+        with open(mask_classes.CLASSES_FILE, encoding="utf-8") as handle:
+            document = json.load(handle)
+        document["classes"] = self._classes
         self.clipboard_clear()
-        self.clipboard_append(self.labels_text.get("1.0", "end").strip())
-        self.log("mask_labels copied to the clipboard.", level="ok")
+        self.clipboard_append(json.dumps(document, indent=2) + "\n")
+        self.log("mask_classes.json copied to the clipboard.", level="ok")
 
     # --------------------------------------------------------------- files
     def _group_name(self):

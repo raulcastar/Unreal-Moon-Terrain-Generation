@@ -24,7 +24,7 @@ from gui.backend import (terrain_core, rock_field, heightmap_files, send_rocks, 
                          LOADER_AVAILABLE)
 from gui.dem_files import (DEM_FILETYPES, dem_group_name, dem_source_note, drop_dem_menu,
                            load_dem_array, planned_rock_files)
-from gui.ground_truth_page import mask_ids
+from gui.ground_truth_page import DEFAULT_MASK_IDS, mask_ids
 from gui.paths import map_browse_dir
 from gui.widgets import ParamRow, ProgressPanel, Tooltip, ask_confirmation, format_path_block
 
@@ -341,7 +341,7 @@ class RockPlannerPage(ttk.Frame):
                 "On: rocks are movable rigid bodies and may settle or roll.")
 
         # Object-mask ids the placed rocks are tagged with (Custom Depth Stencil);
-        # they must match mask_labels in the GNC stereo-depth params.
+        # defaults from config/mask_classes.json (the GNC stereo node reads its copy).
         ttk.Label(unreal_group, text="Object mask ids",
                   font=("Segoe UI Semibold", 8)).pack(anchor="w", pady=(8, 2))
         stencil_grid = ttk.Frame(unreal_group)
@@ -352,10 +352,11 @@ class RockPlannerPage(ttk.Frame):
         self.boulder_radius_var = tk.StringVar()
         for row, (label, var, tip) in enumerate((
                 ("Boulder id", self.boulder_stencil_var,
-                 "Mask id (1-255) for boulders; 20 is 'boulder' in the GNC mask labels."),
+                 f"Mask id (1-255) for boulders; {DEFAULT_MASK_IDS['boulder']} is 'boulder' in "
+                 "config/mask_classes.json."),
                 ("Small rock id", self.small_rock_stencil_var,
-                 "Mask id (1-255) for small rocks; 21 is 'small_rock' in the GNC\n"
-                 "mask labels. Use the boulder id here too for a single rock class."),
+                 f"Mask id (1-255) for small rocks; {DEFAULT_MASK_IDS['small_rock']} is 'small_rock' in\n"
+                 "config/mask_classes.json. Use the boulder id here too for a single rock class."),
                 ("Boulder if radius >= (m)", self.boulder_radius_var,
                  "Rocks whose planned footprint radius is at least this are boulders;\n"
                  "the rest are small rocks."))):

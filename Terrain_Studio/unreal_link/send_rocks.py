@@ -6,7 +6,14 @@ Remote Execution, where unreal_rocks imports the rock models and places
 the rocks on the Landscape.
 """
 
+import mask_classes
 from unreal_connection import run_in_unreal, unreal_call
+
+
+def _default_stencils(boulder_stencil, small_rock_stencil):
+    """The rock ids of config/mask_classes.json where none is given."""
+    return (mask_classes.id_of("boulder") if boulder_stencil is None else boulder_stencil,
+            mask_classes.id_of("small_rock") if small_rock_stencil is None else small_rock_stencil)
 
 
 def _placer_call(call):
@@ -16,9 +23,10 @@ def _placer_call(call):
 
 def build_command(rocks_csv, models_folder, resolution, landscape_label,
                   landscape_width, seed, simulate_physics,
-                  boulder_stencil=9, small_rock_stencil=10, boulder_min_radius_m=0.15,
+                  boulder_stencil=None, small_rock_stencil=None, boulder_min_radius_m=0.15,
                   save_level=True):
     """Builds the placement command; paths are quoted with repr()."""
+    boulder_stencil, small_rock_stencil = _default_stencils(boulder_stencil, small_rock_stencil)
     args = ", ".join([
         repr(rocks_csv.replace("\\", "/")),
         repr(models_folder.replace("\\", "/")),
@@ -38,6 +46,7 @@ def build_command(rocks_csv, models_folder, resolution, landscape_label,
 def build_stencil_command(group, boulder_stencil, small_rock_stencil, boulder_min_radius_m,
                           save_level=True):
     """Builds the command that re-tags placed rocks without moving them."""
+    boulder_stencil, small_rock_stencil = _default_stencils(boulder_stencil, small_rock_stencil)
     args = ", ".join([repr(group), f"boulder_stencil={int(boulder_stencil)}",
                       f"small_rock_stencil={int(small_rock_stencil)}",
                       f"boulder_min_radius_m={float(boulder_min_radius_m)!r}",
@@ -47,7 +56,7 @@ def build_stencil_command(group, boulder_stencil, small_rock_stencil, boulder_mi
 
 def send_rocks_to_unreal(rocks_csv, models_folder, resolution, landscape_label="",
                          landscape_width=0, seed=1, simulate_physics=False,
-                         boulder_stencil=9, small_rock_stencil=10,
+                         boulder_stencil=None, small_rock_stencil=None,
                          boulder_min_radius_m=0.15, save_level=True, log=print,
                          discovery_seconds=2.0):
     """
@@ -62,7 +71,7 @@ def send_rocks_to_unreal(rocks_csv, models_folder, resolution, landscape_label="
                          discovery_seconds)
 
 
-def send_stencils_to_unreal(group, boulder_stencil=9, small_rock_stencil=10,
+def send_stencils_to_unreal(group, boulder_stencil=None, small_rock_stencil=None,
                             boulder_min_radius_m=0.15, save_level=True, log=print,
                             discovery_seconds=2.0):
     """

@@ -20,6 +20,7 @@ import random
 
 import unreal
 
+import mask_classes
 from rock_models import (GLTF_EXTENSIONS, MESH_EXTENSIONS,  # noqa: F401
                          find_model_files, fitting_models)
 from unreal_level_saver import save_current_level
@@ -33,10 +34,10 @@ TRACE_REACH_CM = 1.0e7      # traces run from +100 km to -100 km
 SINK_FRACTION = 0.2         # rocks are buried by this fraction of their height
 PHYSICS_MASS_KG = 500.0
 
-# Custom Depth-Stencil ids for the GNC simulator's object mask; they must match
-# mask_labels in GNC-Moon-Simulator/component_stereo_depth/config/params.yaml.
-BOULDER_STENCIL = 9           # Object-mask ids (unreal_ground_truth.MASK_IDS)
-SMALL_ROCK_STENCIL = 10
+# Custom Depth-Stencil ids of the rocks in the object mask (config/mask_classes.json;
+# the GNC simulator reads its copy of that file).
+BOULDER_STENCIL = mask_classes.id_of("boulder")
+SMALL_ROCK_STENCIL = mask_classes.id_of("small_rock")
 BOULDER_MIN_RADIUS_M = 0.15
 
 

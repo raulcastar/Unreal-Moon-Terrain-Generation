@@ -9,8 +9,8 @@ the object-mask material so landscape pixels take the crater map's id:
     otherwise                                          ->   the stencil id
     no stencil and nothing within SKY_DEPTH_CM          ->   SKY_ID
 
-Object-mask ids are consecutive (MASK_IDS), each drawn in a fixed colour
-(MASK_PALETTE; the GNC dashboard uses the same table):
+Object-mask ids, names and colours come from config/mask_classes.json (read by
+mask_classes; the GNC simulator keeps a copy of the same file):
 
     0 unlabeled   1 sky   2 rover   3 sun   4 sun_glare   5 landscape
     6 crater   7 crater_rim   8 wheel_track   9 boulder   10 small_rock
@@ -57,6 +57,7 @@ import math
 
 import unreal
 
+import mask_classes
 from unreal_rocks import find_landscape, landscape_frame
 from unreal_watcher import (ROVER_SHADOW_CAPTURE, SHADOW_MAP_PARAMETERS, SUN_MPC, SUN_PARAMETER,
                             find_streamer, install_watcher, place_shadow_map, sun_light,
@@ -81,21 +82,17 @@ SHADOW_MAP_SIZE = 512          # Texels across the rover's shadow map
 SHADOW_MAP_MARGIN = 1.25       # Its width, over the rover's size seen from any side
 ROVER_SHADOW_BIAS_CM = 3.0     # A point is in the rover's shadow if the rover is this much nearer the sun
 CRATER_TEXTURE_PREFIX = "T_CraterIds_"
-# Object-mask ids: consecutive, 0 = nothing tagged. Must match mask_labels in
-# component_stereo_depth/config/params.yaml and MASK_COLOURS in the GNC
-# dashboard (feed_legends.js).
-MASK_IDS = {0: "unlabeled", 1: "sky", 2: "rover", 3: "sun", 4: "sun_glare", 5: "landscape",
-            6: "crater", 7: "crater_rim", 8: "wheel_track", 9: "boulder", 10: "small_rock"}
+# Object-mask ids: 0 = nothing tagged. From config/mask_classes.json, which the
+# GNC simulator keeps a copy of (component_stereo_depth/config/mask_classes.json).
+MASK_IDS = mask_classes.ids()            # {id: name}
 # Colour per id (8-bit, even values: the lowest bit of each channel carries the
-# shadow flags). The earlier hashed colours of each class, kept; the sky is new.
-MASK_PALETTE = {0: (0, 0, 0), 1: (36, 40, 96), 2: (250, 194, 16), 3: (28, 128, 162),
-                4: (230, 14, 118), 5: (10, 96, 216), 6: (124, 50, 208), 7: (86, 52, 82),
-                8: (64, 124, 162), 9: (238, 244, 242), 10: (210, 62, 6)}
-SKY_ID = 1
-SUN_ID = 3
-SUN_GLARE_ID = 4
+# shadow flags).
+MASK_PALETTE = mask_classes.palette()
+SKY_ID = mask_classes.id_of("sky")
+SUN_ID = mask_classes.id_of("sun")
+SUN_GLARE_ID = mask_classes.id_of("sun_glare")
 SUN_GLARE_DEG = 1.1    # Glare ring radius: the navcam's saturated core (~8 px of 640 at 90 deg)
-TRACK_ID = 8
+TRACK_ID = mask_classes.id_of("wheel_track")
 SKY_DEPTH_CM = 1.0e7   # Untagged pixels farther than this (100 km) are sky
 TEXTURE_FOLDER = f"{GROUND_TRUTH_FOLDER}/CraterMaps"
 # Earlier names and places (all in the folder itself), moved on the next send;
@@ -111,8 +108,8 @@ OLD_ASSET_NAMES = {
     f"{GROUND_TRUTH_FOLDER}/MPC_Sun": SUN_MPC,
     f"{GROUND_TRUTH_FOLDER}/M_WheelTrackDecal": f"{GROUND_TRUTH_FOLDER}/WheelTracks/M_WheelTrackDecal",
 }
-DEFAULT_ROVER_STENCIL = 2     # MASK_IDS rover (set in the rover's Blueprint)
-LANDSCAPE_STENCIL = 5         # MASK_IDS landscape (unreal_landscape sets it)
+DEFAULT_ROVER_STENCIL = mask_classes.id_of("rover")      # Set in the rover's Blueprint
+LANDSCAPE_STENCIL = mask_classes.id_of("landscape")       # unreal_landscape sets it
 # Stencils of an earlier numbering, re-tagged on the next send.
 OLD_LANDSCAPE_STENCILS = (10,)
 SHADOW_THRESHOLD = 0.5     # Sun-only display value below which a pixel is shadow (half light, so soft tails count)
@@ -184,7 +181,7 @@ if (v < 0.5 && Depth > SkyDepth)
         else if (toSun >= SunGlareCos) v = SunGlareId;
     }
 }
-// Colour: the fixed palette for ids 0-10 (MASK_PALETTE), a hashed colour above.
+// Colour: the fixed palette of config/mask_classes.json (MASK_PALETTE), a hashed colour above.
 float3 c8 = float3(0, 0, 0);                          // 0: unlabeled, black
 int id = (int)round(v);
 PALETTE_CODE

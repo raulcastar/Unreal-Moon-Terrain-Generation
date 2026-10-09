@@ -19,6 +19,7 @@ cell) for smooth edges up close. UI-free.
 
 import json
 import os
+import sys
 
 import numpy as np
 from PIL import Image
@@ -26,8 +27,15 @@ from scipy import ndimage
 
 from rock_field import detect_craters
 
-CRATER_ID = 6           # Must match mask_labels in component_stereo_depth/config/params.yaml
-RIM_ID = 7
+try:
+    import mask_classes     # unreal_link, on the path in the studio
+except ImportError:         # a script run from generator/ on its own
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                    "unreal_link"))
+    import mask_classes
+
+CRATER_ID = mask_classes.id_of("crater")       # config/mask_classes.json
+RIM_ID = mask_classes.id_of("crater_rim")
 RIM_FRACTION = 0.2      # Rim width as a fraction of the crater radius
 MIN_DEPTH_RATIO = 0.04  # Rim-to-floor depth / diameter below which a basin is not a crater
 MIN_ROUNDNESS = 0.5     # Seed area / area of its enclosing circle

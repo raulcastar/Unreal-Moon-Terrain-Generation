@@ -12,6 +12,7 @@ import zlib
 
 import unreal
 
+import mask_classes
 from unreal_level_saver import save_current_level
 
 # --- Global Constants ---
@@ -26,9 +27,9 @@ AUTO_HEIGHTMAP_MAX_VERTICES = 4097 * 4097
 _SPOT_CHECKS = 64
 
 # Material given to every new Landscape, and its id in the rover's object mask
-# (Custom Depth Stencil; 10 is 'landscape' in the GNC mask labels).
+# (Custom Depth Stencil; config/mask_classes.json).
 DEFAULT_LANDSCAPE_MATERIAL = "/Game/Landscape/Landscape_Material"
-LANDSCAPE_MASK_STENCIL = 5    # Object-mask id of the landscape (unreal_ground_truth.MASK_IDS)
+LANDSCAPE_MASK_STENCIL = mask_classes.id_of("landscape")
 
 
 def read_r16(heightmap_filepath, width, height):

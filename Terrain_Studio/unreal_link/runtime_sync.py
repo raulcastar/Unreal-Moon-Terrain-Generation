@@ -32,7 +32,7 @@ WATCHER_MODULES = ("unreal_watcher.py", "unreal_wheel_tracks.py")
 STUDIO_MODULES = ("unreal_ground_truth.py", "unreal_track_setup.py", "unreal_rocks.py",
                   "unreal_landscape.py", "unreal_sun.py", "unreal_level_saver.py", "rock_models.py",
                   "unreal_crater_mask.py", "unreal_rock_placer.py", "unreal_terrain_generator.py",
-                  "unreal_dust_setup.py", "unreal_wheel_dust.py")
+                  "unreal_dust_setup.py", "unreal_wheel_dust.py", "mask_classes.py")
 STARTUP_SCRIPT = "init_unreal.py"
 
 _SYNC_CODE = r'''
