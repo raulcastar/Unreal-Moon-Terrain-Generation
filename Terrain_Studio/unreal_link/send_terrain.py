@@ -7,10 +7,7 @@ Executes the heavy data processing locally to bypass Unreal's internal Python li
 then establishes a network connection to Unreal Engine to trigger the landscape compilation.
 """
 
-import remote_execution
-import runtime_sync
-from unreal_connection import unreal_call
-import time
+from unreal_connection import run_in_unreal, unreal_call
 import os
 import sys
 import numpy as np
@@ -114,59 +111,28 @@ def generate_lunar_terrain(input_map_filepath, output_map_directory, input_resol
 def send_to_unreal(landscape_config, interpolation_resolution, z_axis_scale, heightmap_filename,
                    z_offset=0.0, output_directory=None, save_level=True):
     """
-    Initializes a network broadcast to locate a running Unreal Editor, connects to
-    the first available node, and injects the Python execution command.
-    With save_level, Unreal saves the level once the Landscape is spawned.
+    Has a running Unreal Editor build the Landscape from the heightmap
+    (unreal_landscape.create_landscape), printing the editor's output; failures
+    print a line starting with "[-]". With save_level, Unreal saves the level
+    once the Landscape is spawned.
     """
-    
-    # Initialize the Unreal Remote Execution network client
-    remote_exec = remote_execution.RemoteExecution()
-    remote_exec.start()
-    
-    print(f"[*] Searching for Unreal Engine instances... (Root: {BASE_DIRECTORY})")
-    
-    # Allow network discovery time to populate the remote_nodes dictionary
-    time.sleep(2.0) 
+    # The heightmap is in its per-map output folder.
+    heightmap_directory = (output_directory or BASE_OUTPUT_DIRECTORY).replace("\\", "/")
+    target_r16_path = f"{heightmap_directory}/{heightmap_filename}"
+    command = unreal_call(
+        f"create_landscape({landscape_config}, {interpolation_resolution}, {z_axis_scale}, "
+        f"'{target_r16_path}', {0.0}, {0.0}, {z_offset}, save_level={bool(save_level)})",
+        "unreal_level_saver", "unreal_landscape")
 
-    nodes = remote_exec.remote_nodes
-    if nodes and len(nodes) > 0:
-        first_node = nodes[0]
-        
-        # Safely extract the Node ID regardless of the returned data structure
-        node_id = first_node.get("node_id") if isinstance(first_node, dict) else getattr(first_node, "node_id", None)
+    def log(text, level=None):
+        # The editor's own output is indented under the studio's status lines.
+        status = text.startswith(("[-]", "Searching", "Building")) or "(node " in text
+        print(text if status else f"    Unreal: {text}")
 
-        if node_id:
-            # Establish a direct command socket to the target Engine instance
-            remote_exec.open_command_connection(node_id)
-            
-            # The heightmap is in its per-map output folder.
-            heightmap_directory = (output_directory or BASE_OUTPUT_DIRECTORY).replace("\\", "/")
-            target_r16_path = f"{heightmap_directory}/{heightmap_filename}"
-            
-            # --- Remote Command Construction ---
-            # Append local directory to Unreal's sys.path, reload the target module to ensure 
-            # the latest code is used, and trigger the Landscape creation API.
-            command = unreal_call(
-                f"create_landscape({landscape_config}, {interpolation_resolution}, {z_axis_scale}, "
-                f"'{target_r16_path}', {0.0}, {0.0}, {z_offset}, save_level={bool(save_level)})",
-                "unreal_level_saver", "unreal_landscape")
-
-            # Also refreshes the project's own copy of the editor watcher (runtime_sync).
-            result = remote_exec.run_command(runtime_sync.with_runtime_sync(command))
-            print(f"[+] Success: Command dispatched to Node [{node_id}]")
-
-            # Relay the Editor's log output (heightmap import, level save).
-            for entry in result.get("output", []):
-                text = str(entry.get("output", "")).strip()
-                if text:
-                    print(f"    Unreal: {text}")
-            if not result.get("success", False):
-                print(f"[-] Failed in Unreal: {result.get('result', '')}")
-    else:
-        print("[-] Error: No Unreal instance detected. Ensure 'Remote Execution' is active in Project Settings.")
-
-    # Terminate the network client to free local ports
-    remote_exec.stop()
+    # Shared, already-open discovery session (unreal_connection); also refreshes
+    # the project's own copy of the editor watcher (runtime_sync).
+    if run_in_unreal(command, log, "Building the Landscape in Unreal"):
+        print("[+] Success: the Landscape was built in Unreal.")
 
 
 # =========================================================================
