@@ -342,13 +342,6 @@ pixels get id 8 (`wheel_track`) in `object_mask`.
   Play); **Send Masks to Unreal** applies it too.
 - Unticking the option and sending again removes the decals.
 
-### Wheel dust
-
-Terrain Studio does not handle the wheel dust: it is set up in the rover's
-Blueprint. Its assets are in `/Game/Effects/LunarDust`: the Niagara system
-`NS_LunarDust`, the grain mesh `SM_DustGrain` and its material `M_LunarDustMesh`.
-The dust is not part of the object mask.
-
 ### Rover shadow
 
 With *Tag the rover's shadow separately* (on by default), ground and rocks in the
