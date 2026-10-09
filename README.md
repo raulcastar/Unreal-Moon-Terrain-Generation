@@ -528,6 +528,23 @@ Craters never overlap; at high densities fewer than the target may fit, which th
 studio reports. Large maps build their macro terrain on a 1024 px grid and
 upsample it, keeping a 10000×10000 map to seconds rather than tens of minutes.
 
+## Tests
+
+The generator (terrain, craters, rocks) has unit tests in `tests/`, on small
+synthetic maps; they run in a few seconds:
+
+```sh
+py -m pip install -r requirements-dev.txt
+py -m pytest
+```
+
+They check, among others, that no rock lands in a crater or on the rover
+corridors, that rocks never overlap, that rock sizes follow the lunar
+size-frequency law, the rock height cap, crater detection on known craters,
+and the crater-mask labels. Every test writes into its own temporary folder:
+the studio's output paths are redirected there, and the run fails if anything
+in the real `outputs/` folder changed.
+
 ## Project layout
 
 The studio's code is split by where it runs:

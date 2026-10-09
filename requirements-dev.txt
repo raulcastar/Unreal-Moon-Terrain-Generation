@@ -1,0 +1,5 @@
+# Test dependencies: the studio's own (requirements.txt) plus pytest.
+#     py -m pip install -r requirements-dev.txt
+#     py -m pytest
+-r requirements.txt
+pytest==9.1.1
