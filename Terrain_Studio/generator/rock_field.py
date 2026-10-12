@@ -20,7 +20,6 @@ the progress/cancel convention and the TerrainCancelled exception with
 terrain_core.
 """
 
-import heapq
 import os
 
 import numpy as np
@@ -29,6 +28,7 @@ from scipy import ndimage
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import dijkstra
 from scipy.spatial import Voronoi, QhullError
+from skimage.morphology import reconstruction
 
 from terrain_core import TerrainCancelled
 
@@ -139,47 +139,28 @@ def _plan_grid(elevation, resolution, cap):
     return plan, res_row, res_col, rows / plan_rows, cols / plan_cols
 
 
+FOUR_NEIGHBOURS = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=bool)
+
+
 def _fill_depressions(elevation, progress=None):
     """
-    Priority-flood sink fill (Barnes 2014): returns a surface equal to `elevation`
-    except that every closed basin is raised to the height of its lowest outlet.
-    `filled - elevation` is then the depth of standing water each cell would hold,
-    which isolates crater bowls from ordinary valleys that drain off the edge.
-    `progress(fraction)` is called as cells are filled.
+    Sink fill: returns a surface equal to `elevation` except that every closed
+    basin is raised to the height of its lowest outlet, the map border being the
+    only outlet. `filled - elevation` is then the depth of standing water each
+    cell would hold, which isolates crater bowls from ordinary valleys that drain
+    off the edge. `progress(fraction)` is called when done.
+
+    Computed as a greyscale reconstruction by erosion from the border over the
+    4-neighbourhood, in compiled code: the same surface as a 4-connected priority
+    flood (Barnes 2014), which took ~8 s per 1200 x 1200 map in Python.
     """
-    rows, cols = elevation.shape
-    filled = np.empty_like(elevation, dtype=float)
-    closed = np.zeros((rows, cols), dtype=bool)
-
-    # Seed the queue with the map border (the only guaranteed outlets).
-    heap = []
-    for c in range(cols):
-        for r in (0, rows - 1):
-            heap.append((float(elevation[r, c]), r, c))
-            closed[r, c] = True
-            filled[r, c] = elevation[r, c]
-    for r in range(1, rows - 1):
-        for c in (0, cols - 1):
-            heap.append((float(elevation[r, c]), r, c))
-            closed[r, c] = True
-            filled[r, c] = elevation[r, c]
-    heapq.heapify(heap)
-
-    neighbours = ((-1, 0), (1, 0), (0, -1), (0, 1))
-    total, popped = rows * cols, 0
-    while heap:
-        level, r, c = heapq.heappop(heap)
-        popped += 1
-        if progress and popped % 100000 == 0:
-            progress(popped / total)
-        for dr, dc in neighbours:
-            nr, nc = r + dr, c + dc
-            if 0 <= nr < rows and 0 <= nc < cols and not closed[nr, nc]:
-                closed[nr, nc] = True
-                value = elevation[nr, nc]
-                raised = value if value > level else level
-                filled[nr, nc] = raised
-                heapq.heappush(heap, (raised, nr, nc))
+    elevation = np.asarray(elevation, dtype=float)
+    seed = np.full_like(elevation, elevation.max())
+    seed[0, :], seed[-1, :] = elevation[0, :], elevation[-1, :]
+    seed[:, 0], seed[:, -1] = elevation[:, 0], elevation[:, -1]
+    filled = reconstruction(seed, elevation, method='erosion', footprint=FOUR_NEIGHBOURS)
+    if progress:
+        progress(1.0)
     return filled
 
 

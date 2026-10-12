@@ -17,9 +17,11 @@ circles, so the map can be drawn finer than the DEM (SUPERSAMPLE cells per DEM
 cell) for smooth edges up close. UI-free.
 """
 
+import hashlib
 import json
 import os
 import sys
+from collections import OrderedDict
 
 import numpy as np
 from PIL import Image
@@ -113,11 +115,23 @@ def load_crater_list(path):
     return [(float(r), float(c), float(radius)) for r, c, radius in data]
 
 
+# find_craters results for the last few terrains: building the rock field and
+# the crater map both search the same DEM. Keyed by the DEM's content.
+_FOUND = OrderedDict()
+_FOUND_KEEP = 4
+
+
+def _found_key(dem, resolution, min_depth_m):
+    digest = hashlib.sha1(np.ascontiguousarray(dem).tobytes()).hexdigest()
+    return digest, dem.shape, float(resolution), float(min_depth_m)
+
+
 def find_craters(dem, resolution, min_depth_m, progress=None):
     """
     Craters as [(row, col, radius)] in DEM cells: the circle through each rim
     crest, or the seed itself where no clear crest is found. `progress(message,
-    fraction)` is called as the two passes advance.
+    fraction)` is called as the two passes advance. A terrain searched before
+    (same values, resolution and depth) returns the earlier result at once.
     """
     def report(message, fraction):
         if progress:
@@ -126,6 +140,21 @@ def find_craters(dem, resolution, min_depth_m, progress=None):
     dem = np.asarray(dem, dtype=float)
     finite = np.isfinite(dem)
     dem = np.where(finite, dem, np.nanmin(dem) if finite.any() else 0.0)
+
+    key = _found_key(dem, resolution, min_depth_m)
+    if key in _FOUND:
+        _FOUND.move_to_end(key)
+        report("Craters found", 1.0)
+        return list(_FOUND[key])
+    craters = _search_craters(dem, resolution, min_depth_m, report)
+    _FOUND[key] = tuple(craters)
+    while len(_FOUND) > _FOUND_KEEP:
+        _FOUND.popitem(last=False)
+    return craters
+
+
+def _search_craters(dem, resolution, min_depth_m, report):
+    """find_craters without the cache, on a DEM with no missing values."""
 
     covered = np.zeros(dem.shape, dtype=bool)
     craters = []

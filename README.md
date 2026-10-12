@@ -13,8 +13,8 @@ run_terrain_studio.bat                 # Windows
 python Terrain_Studio/terrain_studio.py  # any platform
 ```
 
-Install the dependencies once (pinned in `requirements.txt`: numpy, scipy, pandas,
-PyYAML, matplotlib, Pillow, and tifffile for GeoTIFF input):
+Install the dependencies once (pinned in `requirements.txt`: numpy, scipy,
+scikit-image, pandas, PyYAML, matplotlib, Pillow, and tifffile for GeoTIFF input):
 
 ```sh
 py -m pip install -r requirements.txt        # Windows
