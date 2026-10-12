@@ -105,6 +105,16 @@ rock. The tags are the *Object mask ids*: by default 9 for boulders and 10 for
 small rocks, split at a 0.15 m radius. **Update Mask Ids Only** re-tags rocks
 already placed without moving them.
 
+A field is placed as one actor, `<name>_rocks`, with one instanced static mesh
+component per rock model and mask id, instead of one actor per rock. Every view
+in Unreal (the editor and each rover camera and sensor) handles actors one by
+one, so ten thousand rock actors limited the frame rate: converting a 10,338-rock
+field raised Play from 14 to 20 frames/s with every camera streaming. Instances
+keep their own position, rotation, scale and collision. Rocks placed with
+physics simulation stay one actor each. A field placed by an earlier version
+can be converted in place, keeping every rock where it is:
+`send_rocks.send_instance_to_unreal("<name>")` from `Terrain_Studio/unreal_link`.
+
 ## 3. Crater and shadow masks (optional)
 
 Shows craters and shadows in the rover's object mask, alongside the rocks:
