@@ -142,6 +142,19 @@ def fitting_models(model_radii, radius):
     return [i for i, m in enumerate(misfit) if m <= limit]
 
 
+def instance_groups(rocks):
+    """
+    Groups rocks for instanced placement: one group per (mesh key, stencil id),
+    since a mesh and a Custom Depth-Stencil value are shared by all instances
+    of one component. `rocks` yields (mesh_key, stencil_id, item); returns
+    [((mesh_key, stencil_id), [item, ...])] in first-seen order.
+    """
+    groups = {}
+    for mesh_key, stencil_id, item in rocks:
+        groups.setdefault((mesh_key, int(stencil_id)), []).append(item)
+    return list(groups.items())
+
+
 def scale_range(model_radii, planned_min, planned_max, samples=256):
     """
     Returns the (min, max) uniform scale applied to models for planned radii

@@ -5,6 +5,14 @@ Executes natively within the Unreal Engine Python environment. Imports rock
 meshes from a folder and places the rock field planned by the studio
 (<name>_rocks.csv) on the Landscape.
 
+A field is placed as ONE actor (<name>_rocks) holding one instanced static mesh
+component per (rock mesh, stencil id), not one actor per rock: every renderer
+view (the editor, each navcam and sensor capture) culls and submits actors one
+by one, and ten thousand rock actors made that the frame-rate bottleneck.
+Instances keep their own transform and collision; the stencil id is per
+component. Rocks that simulate physics stay individual actors. instance_rocks()
+converts a field placed as individual actors by earlier versions.
+
 Positions follow the Landscape spawned by unreal_landscape, whose
 heightmap is mirrored in X: at the default spawn position a rock at (x_m, y_m)
 in the DEM frame lies at X = -x_m * 100, Y = y_m * 100 (cm). When the Landscape
@@ -22,7 +30,7 @@ import unreal
 
 import mask_classes
 from rock_models import (GLTF_EXTENSIONS, MESH_EXTENSIONS,  # noqa: F401
-                         find_model_files, fitting_models)
+                         find_model_files, fitting_models, instance_groups)
 from unreal_level_saver import save_current_level
 
 ROCK_ASSET_FOLDER = "/Game/LunarRocks"
@@ -350,10 +358,122 @@ def rock_stencil(radius_m, boulder_stencil=BOULDER_STENCIL,
     return boulder_stencil if radius_m >= boulder_min_radius_m else small_rock_stencil
 
 
-def _apply_stencil(actor, stencil_id):
-    component = actor.static_mesh_component
+def _apply_stencil(component, stencil_id):
     component.set_editor_property("render_custom_depth", True)
     component.set_editor_property("custom_depth_stencil_value", int(stencil_id))
+
+
+# =========================================================================
+# INSTANCED FIELDS
+# =========================================================================
+
+def _group_actors(group):
+    tag = f"LunarRocks_{group}"
+    return [a for a in _level_actors() if tag in [str(t) for t in a.tags]]
+
+
+def _instanced_components(actor):
+    return list(actor.get_components_by_class(unreal.InstancedStaticMeshComponent))
+
+
+def _root_handle(actor):
+    """The subobject handle of the actor's root component."""
+    subobjects = unreal.get_engine_subsystem(unreal.SubobjectDataSubsystem)
+    data = unreal.SubobjectDataBlueprintFunctionLibrary
+    for handle in subobjects.k2_gather_subobject_data_for_instance(actor):
+        if data.get_object(data.get_data(handle)) == actor.root_component:
+            return handle
+    raise RuntimeError(f"{actor.get_actor_label()} has no root component.")
+
+
+def _add_instanced_component(actor, root, mesh, stencil_id):
+    """Adds an InstancedStaticMeshComponent for `mesh` with stencil `stencil_id`."""
+    subobjects = unreal.get_engine_subsystem(unreal.SubobjectDataSubsystem)
+    data = unreal.SubobjectDataBlueprintFunctionLibrary
+    handle, failure = subobjects.add_new_subobject(unreal.AddNewSubobjectParams(
+        parent_handle=root, new_class=unreal.InstancedStaticMeshComponent,
+        blueprint_context=None))
+    if str(failure):
+        raise RuntimeError(f"Could not add a rock component: {failure}")
+    subobjects.rename_subobject(
+        handle, unreal.Text(f"Rocks_{_asset_name(mesh.get_name())}_s{int(stencil_id)}"))
+    component = data.get_object(data.get_data(handle))
+    component.set_editor_property("static_mesh", mesh)
+    component.set_mobility(unreal.ComponentMobility.STATIC)
+    component.set_collision_profile_name("BlockAll")
+    _apply_stencil(component, stencil_id)
+    return component
+
+
+def build_instanced_field(group, rocks):
+    """
+    Places `rocks` [(mesh, stencil_id, world Transform)] as one actor labelled
+    <group>_rocks, tagged and foldered like the individual rocks were, with one
+    InstancedStaticMeshComponent per (mesh, stencil id). Returns
+    ({stencil_id: count}, number of components).
+    """
+    meshes = {mesh.get_path_name(): mesh for mesh, _stencil, _transform in rocks}
+    groups = instance_groups((mesh.get_path_name(), stencil_id, transform)
+                             for mesh, stencil_id, transform in rocks)
+    actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+    actor = actors.spawn_actor_from_class(unreal.Actor, unreal.Vector(0.0, 0.0, 0.0))
+    actor.set_actor_label(f"{group}_rocks")
+    actor.set_folder_path(f"{ROCK_ACTOR_FOLDER}/{group}")
+    actor.tags = [unreal.Name(f"LunarRocks_{group}")]
+    # Static, like the rock actors were (cached shadows); a component cannot
+    # be more static than its parent, so the root first.
+    actor.root_component.set_mobility(unreal.ComponentMobility.STATIC)
+    root = _root_handle(actor)
+    counts = {}
+    for (mesh_path, stencil_id), transforms in groups:
+        component = _add_instanced_component(actor, root, meshes[mesh_path], stencil_id)
+        component.add_instances(transforms, False, True, False)    # world space, no navmesh rebuild
+        counts[stencil_id] = counts.get(stencil_id, 0) + len(transforms)
+    return counts, len(groups)
+
+
+def _field_instances(actor):
+    """[(mesh, stencil_id, world Transform)] of every instance of a field actor."""
+    rocks = []
+    for component in _instanced_components(actor):
+        mesh = component.static_mesh
+        stencil_id = component.get_editor_property("custom_depth_stencil_value")
+        for index in range(component.get_instance_count()):
+            rocks.append((mesh, stencil_id, component.get_instance_transform(index, True)))
+    return rocks
+
+
+def _simulates_physics(actor):
+    return actor.static_mesh_component.get_editor_property("body_instance").get_editor_property(
+        "simulate_physics")
+
+
+def instance_rocks(group, save_level=False):
+    """
+    Converts the rocks of `group` placed as individual actors (by earlier
+    versions) into one instanced field actor with the same meshes, transforms,
+    stencil ids and collision, then deletes those actors. Rocks that simulate
+    physics stay actors. Returns a summary line.
+    """
+    level_editor = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+    if level_editor is not None and level_editor.is_in_play_in_editor():
+        raise RuntimeError("Unreal is in Play In Editor: stop playing, then convert the rocks.")
+    singles = [a for a in _group_actors(group)
+               if isinstance(a, unreal.StaticMeshActor) and not _simulates_physics(a)]
+    if not singles:
+        return f"No individual rock actors in field {group}; nothing to convert."
+    rocks = [(a.static_mesh_component.static_mesh,
+              a.static_mesh_component.get_editor_property("custom_depth_stencil_value"),
+              a.get_actor_transform()) for a in singles]
+    counts, components = build_instanced_field(group, rocks)
+    unreal.get_editor_subsystem(unreal.EditorActorSubsystem).destroy_actors(singles)
+    summary = (f"Converted {len(singles)} rock actors of {group} into actor {group}_rocks "
+               f"with {components} instanced components; stencil ids "
+               + ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())))
+    if save_level:
+        summary += "; " + save_current_level().rstrip(".")
+    unreal.log(f"[+] {summary}.")
+    return summary
 
 
 def set_rock_stencils(group, boulder_stencil=BOULDER_STENCIL,
@@ -361,35 +481,48 @@ def set_rock_stencils(group, boulder_stencil=BOULDER_STENCIL,
                       boulder_min_radius_m=BOULDER_MIN_RADIUS_M, save_level=False):
     """
     Re-tags the placed rocks of `group` with Custom Depth-Stencil ids, sized
-    from their actor scale, and optionally saves the level. Returns {stencil_id: count}.
+    from their scale, and optionally saves the level. An instanced field is
+    rebuilt with its instances regrouped by the new ids. Returns {stencil_id: count}.
     """
-    tag = f"LunarRocks_{group}"
     radius_cm = {}
-    counts = {}
-    for actor in _level_actors():
-        if tag not in [str(t) for t in actor.tags]:
-            continue
-        mesh = actor.static_mesh_component.static_mesh
+
+    def stencil_for(mesh, scale_x):
         if mesh.get_name() not in radius_cm:
             extent = mesh.get_bounds().box_extent
             radius_cm[mesh.get_name()] = max(extent.x, extent.y)
-        radius_m = actor.get_actor_scale3d().x * radius_cm[mesh.get_name()] / CM_PER_METER
-        stencil_id = rock_stencil(radius_m, boulder_stencil, small_rock_stencil,
-                                  boulder_min_radius_m)
-        _apply_stencil(actor, stencil_id)
+        return rock_stencil(scale_x * radius_cm[mesh.get_name()] / CM_PER_METER,
+                            boulder_stencil, small_rock_stencil, boulder_min_radius_m)
+
+    counts, fields, regrouped = {}, [], []
+    for actor in _group_actors(group):
+        if _instanced_components(actor):
+            fields.append(actor)
+            for mesh, _old, transform in _field_instances(actor):
+                regrouped.append((mesh, stencil_for(mesh, transform.scale3d.x), transform))
+            continue
+        if not isinstance(actor, unreal.StaticMeshActor):
+            continue
+        stencil_id = stencil_for(actor.static_mesh_component.static_mesh,
+                                 actor.get_actor_scale3d().x)
+        _apply_stencil(actor.static_mesh_component, stencil_id)
         counts[stencil_id] = counts.get(stencil_id, 0) + 1
+    if fields:
+        unreal.get_editor_subsystem(unreal.EditorActorSubsystem).destroy_actors(fields)
+        field_counts, _components = build_instanced_field(group, regrouped)
+        for stencil_id, count in field_counts.items():
+            counts[stencil_id] = counts.get(stencil_id, 0) + count
     if save_level and counts:
         unreal.log(f"[*] {save_current_level()}")
     return counts
 
 
 def clear_rocks(group):
-    """Deletes the rocks placed by a previous run for `group`."""
-    tag = f"LunarRocks_{group}"
-    old = [a for a in _level_actors() if tag in [str(t) for t in a.tags]]
+    """Deletes the rocks placed by a previous run for `group`; returns how many rocks."""
+    old = _group_actors(group)
+    rocks = sum(sum(c.get_instance_count() for c in _instanced_components(a)) or 1 for a in old)
     if old:
         unreal.get_editor_subsystem(unreal.EditorActorSubsystem).destroy_actors(old)
-    return len(old)
+    return rocks
 
 
 def place_rocks(rocks_csv, models_folder, resolution=1.0, landscape_label="",
@@ -398,8 +531,9 @@ def place_rocks(rocks_csv, models_folder, resolution=1.0, landscape_label="",
                 boulder_min_radius_m=BOULDER_MIN_RADIUS_M, save_level=False):
     """
     Places every rock in `rocks_csv` on the Landscape, replacing those from a
-    previous run of the same field. With `save_level`, the rock assets and the
-    level are saved afterwards. Returns a summary line.
+    previous run of the same field: as one instanced field actor, or as one
+    actor per rock when the rocks simulate physics. With `save_level`, the rock
+    assets and the level are saved afterwards. Returns a summary line.
     """
     if not resolution > 0:
         raise ValueError(f"Resolution must be positive, got {resolution}.")
@@ -424,8 +558,6 @@ def place_rocks(rocks_csv, models_folder, resolution=1.0, landscape_label="",
     world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
     fallback_z = landscape.get_actor_location().z if landscape else 0.0
     actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
-    mobility = (unreal.ComponentMobility.MOVABLE if simulate_physics
-                else unreal.ComponentMobility.STATIC)
     tag = unreal.Name(f"LunarRocks_{group}")
 
     # Trace all positions before spawning so traces never hit new rocks.
@@ -446,6 +578,7 @@ def place_rocks(rocks_csv, models_folder, resolution=1.0, landscape_label="",
     model_radii = [radius for _mesh, radius, _bottom, _height in models]
     placed = 0
     stencil_counts = {}
+    instanced = []              # (mesh, stencil_id, Transform) for the field actor
     with unreal.ScopedSlowTask(len(rocks), f"Placing {len(rocks)} rocks") as task:
         task.make_dialog(True)
         for rock, (x, y, z) in zip(rocks, positions):
@@ -466,29 +599,39 @@ def place_rocks(rocks_csv, models_folder, resolution=1.0, landscape_label="",
             if rock.get("height_m", 0.0) > 0.0 and height_cm > 0.0:
                 z_factor = min(factor, rock["height_m"] * CM_PER_METER / height_cm)
             z_pivot = z - bottom_cm * z_factor - SINK_FRACTION * height_cm * z_factor
+            location = unreal.Vector(x, y, z_pivot)
+            rotation = unreal.Rotator(0.0, 0.0, rng.uniform(0.0, 360.0))
+            scale = unreal.Vector(factor, factor, z_factor)
+            stencil_id = rock_stencil(rock["scale"], boulder_stencil, small_rock_stencil,
+                                      boulder_min_radius_m)
 
-            actor = actors.spawn_actor_from_object(
-                mesh, unreal.Vector(x, y, z_pivot),
-                unreal.Rotator(0.0, 0.0, rng.uniform(0.0, 360.0)))
+            if not simulate_physics:
+                instanced.append((mesh, stencil_id, unreal.Transform(location, rotation, scale)))
+                placed += 1
+                continue
+
+            # Instances cannot simulate physics: one movable actor per rock.
+            actor = actors.spawn_actor_from_object(mesh, location, rotation)
             if actor is None:
                 continue
-            actor.set_actor_scale3d(unreal.Vector(factor, factor, z_factor))
+            actor.set_actor_scale3d(scale)
             actor.set_actor_label(f"{group}_rock_{int(rock['id'])}")
             actor.set_folder_path(f"{ROCK_ACTOR_FOLDER}/{group}")
             actor.tags = [tag]
-            actor.set_mobility(mobility)
-            stencil_id = rock_stencil(rock["scale"], boulder_stencil, small_rock_stencil,
-                                      boulder_min_radius_m)
-            _apply_stencil(actor, stencil_id)
+            actor.set_mobility(unreal.ComponentMobility.MOVABLE)
+            _apply_stencil(actor.static_mesh_component, stencil_id)
             stencil_counts[stencil_id] = stencil_counts.get(stencil_id, 0) + 1
-            if simulate_physics:
-                component = actor.get_component_by_class(unreal.PrimitiveComponent)
-                component.set_simulate_physics(True)
-                component.set_mass_override_in_kg(mass_in_kg=PHYSICS_MASS_KG)
+            component = actor.get_component_by_class(unreal.PrimitiveComponent)
+            component.set_simulate_physics(True)
+            component.set_mass_override_in_kg(mass_in_kg=PHYSICS_MASS_KG)
             placed += 1
 
+    where = f"outliner folder {ROCK_ACTOR_FOLDER}/{group}"
+    if instanced:
+        stencil_counts, components = build_instanced_field(group, instanced)
+        where = f"actor {group}_rocks ({components} instanced components) in {where}"
     summary = (f"Placed {placed} of {len(rocks)} rocks from {len(models)} model(s)"
-               f" in outliner folder {ROCK_ACTOR_FOLDER}/{group}; stencil ids "
+               f" in {where}; stencil ids "
                + ", ".join(f"{k}: {v}" for k, v in sorted(stencil_counts.items())))
     if removed:
         summary += f"; removed {removed} from the previous run"
