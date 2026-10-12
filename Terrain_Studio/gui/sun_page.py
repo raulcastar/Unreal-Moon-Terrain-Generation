@@ -11,61 +11,17 @@ import traceback
 
 import tkinter as tk
 from tkinter import filedialog, ttk
-import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
-from matplotlib.colors import LightSource
 from matplotlib.figure import Figure
-from matplotlib.ticker import MaxNLocator
 
+from gui import rock_planner_logic
+from gui import sun_logic as logic
+from gui import sun_plots as plots
+from gui.sun_logic import SUN_DISPLAY_MODES, SUN_ORIENTATIONS, SUN_PREVIEW_SIZES
 from gui.backend import sun_shadows, send_sun, LOADER_AVAILABLE
 from gui.dem_files import DEM_FILETYPES, dem_source_note, drop_dem_menu, load_dem_array
 from gui.paths import map_browse_dir
 from gui.widgets import ParamRow, ProgressPanel, Tooltip
-
-
-# =========================================================================
-# SUN & SHADOWS
-# =========================================================================
-
-SUN_PREVIEW_SIZES = ("500", "1000", "1500", "2000")
-
-
-SUN_DISPLAY_MODES = ("Lunar render", "Lunar render, tinted shadows", "Shadows over relief")
-
-
-# The Landscape mirrors the DEM (columns run towards -X): Unreal's Top view
-# (+X right, +Y down) is the DEM image flipped left to right.
-SUN_ORIENTATIONS = ("Unreal Top view (+X right, +Y down)", "DEM image (row 0 at the top)")
-
-
-SUN_SHADOW_RGBA = (0.16, 0.35, 0.85, 0.55)     # Cast-shadow tint
-
-
-SUN_3D_CELLS = 140                             # Longest side of the 3D mesh
-
-
-# ACES filmic curve followed by display gamma, tabulated for lunar_tone.
-SUN_TONE_X = np.linspace(0.0, 16.0, 4097)
-
-
-SUN_TONE_Y = np.clip(SUN_TONE_X * (2.51 * SUN_TONE_X + 0.03)
-                     / (SUN_TONE_X * (2.43 * SUN_TONE_X + 0.59) + 0.14), 0.0, 1.0) ** (1 / 2.2)
-
-
-SUN_TONE_GROUND = 0.67                         # Display value of the median lit ground
-
-
-def lunar_tone(light):
-    """
-    Maps direct light (0..1) to display values the way Unreal renders it:
-    filmic curve, exposure normalised to the median lit ground (as auto-exposure
-    does). Grazing light falls to black, as in the engine.
-    """
-    light = np.nan_to_num(light)
-    lit = light[light > 0]
-    median = float(np.median(lit)) if lit.size else 1.0
-    gain = np.interp(SUN_TONE_GROUND, SUN_TONE_Y, SUN_TONE_X) / max(median, 1e-6)
-    return np.interp(light * gain, SUN_TONE_X, SUN_TONE_Y)
 
 
 class SunPage(ttk.Frame):
@@ -75,7 +31,8 @@ class SunPage(ttk.Frame):
     an object should cast; the map shows the resulting light and cast shadows.
 
     Shading runs on a worker thread over a reduced DEM (sun_shadows module);
-    requests made while it runs collapse into one re-render.
+    requests made while it runs collapse into one re-render. The sun's maths
+    and read-outs are in sun_logic, the drawing in sun_plots.
     """
 
     def __init__(self, master, figure_dpi=100, source_path=None, resolution=1.0):
@@ -410,31 +367,24 @@ class SunPage(ttk.Frame):
     # ---------------------------------------------------------------- sun
     def sun(self):
         """Current (azimuth, elevation) in degrees."""
-        return self.azimuth_row.get() % 360.0, min(max(self.elevation_row.get(), 0.5), 90.0)
+        return logic.clamp_sun(self.azimuth_row.get(), self.elevation_row.get())
 
     def set_sun(self, azimuth, elevation, render=True):
-        self.azimuth_row.set(round(azimuth % 360.0, 2))
-        self.elevation_row.set(round(min(max(elevation, 0.5), 90.0), 2))
+        azimuth, elevation = logic.clamp_sun(azimuth, elevation)
+        self.azimuth_row.set(round(azimuth, 2))
+        self.elevation_row.set(round(elevation, 2))
         self._on_sun_change(render=render)
 
     def _object_height(self):
-        try:
-            return max(1e-3, float(self.object_height_var.get()))
-        except ValueError:
-            return 1.0
+        return logic.parse_positive(self.object_height_var.get(), 1.0)
 
     def _on_sun_change(self, render=True):
         azimuth, elevation = self.sun()
         height = self._object_height()
         length = sun_shadows.shadow_length(height, elevation)
-        self.shadow_dir_var.set(f"{(azimuth + 180.0) % 360.0:.1f}")
+        self.shadow_dir_var.set(f"{logic.shadow_direction(azimuth):.1f}")
         self.shadow_len_var.set(f"{length:.2f}")
-        pitch, yaw = -elevation, math.degrees(math.atan2(math.cos(math.radians(azimuth)),
-                                                         math.sin(math.radians(azimuth))))
-        self.sun_info_var.set(
-            f"Light from {azimuth:.1f} deg, {elevation:.1f} deg up: a {height:g} m object "
-            f"casts a {length:.2f} m shadow towards {(azimuth + 180.0) % 360.0:.0f} deg.\n"
-            f"Unreal light rotation: pitch {pitch:.1f}, yaw {yaw:.1f}.")
+        self.sun_info_var.set(logic.sun_info_text(azimuth, elevation, height, length))
         self._draw_probe()
         self._draw_sky()
         if render:
@@ -448,17 +398,12 @@ class SunPage(ttk.Frame):
 
     def apply_shadow_fields(self):
         """Sets the sun from the shadow direction and length fields."""
-        try:
-            direction = float(self.shadow_dir_var.get())
-            length = float(self.shadow_len_var.get())
-        except ValueError:
-            self.log("Shadow direction and length must be numbers.", level="warn")
+        sun = logic.sun_from_shadow_fields(self.shadow_dir_var.get(), self.shadow_len_var.get(),
+                                           self._object_height())
+        if isinstance(sun, str):
+            self.log(sun, level="warn")
             return
-        if length <= 0:
-            self.log("The shadow length must be positive.", level="warn")
-            return
-        elevation = math.degrees(math.atan2(self._object_height(), length))
-        self.set_sun(direction + 180.0, elevation)
+        self.set_sun(*sun)
 
     def clear_probe(self):
         self.probe = None
@@ -492,19 +437,14 @@ class SunPage(ttk.Frame):
         threading.Thread(target=worker, daemon=True).start()
 
     def _resolution(self):
-        try:
-            return max(1e-6, float(self.resolution_var.get()))
-        except ValueError:
-            return 1.0
+        return rock_planner_logic.parse_resolution(self.resolution_var.get())
 
     def _rebuild_view(self):
         """Reduces the DEM to the preview size and redraws everything."""
         if self.dem is None:
             return
-        size = int(self.preview_size_var.get() or 1000)
-        stride = max(1, int(math.ceil(max(self.dem.shape) / size)))
-        reduced = self.dem[::stride, ::stride]
-        self.view = (reduced, self._resolution() * stride)
+        self.view = logic.reduce_dem(self.dem, int(self.preview_size_var.get() or 1000),
+                                     self._resolution())
         self.lit = None
         self._map_artists = None
         self._3d_stale = True
@@ -539,75 +479,20 @@ class SunPage(ttk.Frame):
 
     def _display_rgb(self):
         """RGB image of the map for the current display mode."""
-        light, shadow = self.lit["light"], self.lit["shadow"]
-        mode = self.display_var.get()
-        if mode == SUN_DISPLAY_MODES[2]:
-            base = self._relief
-        else:
-            base = lunar_tone(light)
-        rgb = np.repeat(base[..., None], 3, axis=2)
-        if mode != SUN_DISPLAY_MODES[0]:
-            tint, alpha = np.array(SUN_SHADOW_RGBA[:3]), SUN_SHADOW_RGBA[3]
-            rgb[shadow] = rgb[shadow] * (1 - alpha) + tint * alpha
-        return np.clip(rgb, 0.0, 1.0)
+        return logic.display_rgb(self.lit["light"], self.lit["shadow"], self._relief,
+                                 self.display_var.get())
 
     # ------------------------------------------------------------ drawing
     def _show_message(self, text):
-        self.figure.clear()
         self._map_artists = None
-        axes = self.figure.add_subplot(111)
-        axes.axis("off")
-        axes.text(0.5, 0.5, text, ha="center", va="center", fontsize=12,
-                  transform=axes.transAxes)
+        plots.draw_message(self.figure, text)
         self.canvas.draw_idle()
 
     def _build_map(self):
         """Creates the map, sky dome and readout axes for the current view."""
         dem, res = self.view
-        rows, cols = dem.shape
-        finite = np.where(np.isfinite(dem), dem, np.nanmin(dem))
-        relief = LightSource(azdeg=315, altdeg=45).hillshade(
-            finite, vert_exag=(0.1 * max(dem.shape)) / max(float(np.ptp(finite)), 1e-6))
-        self._relief = 0.25 + 0.6 * relief
-
-        self.figure.clear()
-        grid = self.figure.add_gridspec(2, 2, width_ratios=[3.3, 1], height_ratios=[1, 1.1])
-        axes = self.figure.add_subplot(grid[:, 0])
-        sky = self.figure.add_subplot(grid[0, 1], projection="polar")
-        info = self.figure.add_subplot(grid[1, 1])
-        info.axis("off")
-
-        extent = (-0.5 * res, (cols - 0.5) * res, (rows - 0.5) * res, -0.5 * res)
-        image = axes.imshow(np.zeros((rows, cols, 3)), extent=extent, origin="upper",
-                            interpolation="antialiased")
-        unreal_view = self._unreal_view()
-        if unreal_view:
-            axes.invert_xaxis()        # Columns run towards -X
-            axes.set_xlabel("x (m) along the DEM columns   |   Unreal +X to the right")
-            axes.set_ylabel("y (m) along the DEM rows   |   Unreal +Y down")
-        else:
-            axes.set_xlabel("x (m) along the DEM columns   |   Unreal -X to the right")
-            axes.set_ylabel("y (m) along the DEM rows   |   Unreal +Y down")
-        axes.set_facecolor("black")
-
-        # The dome is mirrored with the map, so each azimuth sits on the same side.
-        sky.set_theta_zero_location("N")
-        sky.set_theta_direction(1 if unreal_view else -1)
-        sky.set_rlim(0, 90)
-        sky.set_rticks([30, 60])
-        sky.set_yticklabels(["60°", "30°"], fontsize=7, color="#777777")
-        sky.set_xticks(np.radians([0, 90, 180, 270]))
-        sky.set_xticklabels(["-Y", "-X", "+Y", "+X"], fontsize=8)
-        sky.set_facecolor("#0b1020")
-        sky.grid(color="#3a4660", linewidth=0.6)
-        sky.set_title("Sky - click or drag the sun", fontsize=8)
-        sun_line, = sky.plot([], [], color="#ffd34d", linewidth=1, linestyle=":")
-        sun_dot, = sky.plot([], [], "o", color="#ffd34d", markersize=11,
-                            markeredgecolor="white")
-        text = info.text(0.0, 1.0, "", va="top", ha="left", family="monospace",
-                         fontsize=8, transform=info.transAxes)
-        self._map_artists = {"axes": axes, "image": image, "sky": sky, "info": info,
-                             "sun_line": sun_line, "sun_dot": sun_dot, "text": text}
+        self._relief = logic.relief_shading(dem)
+        self._map_artists = plots.build_map(self.figure, dem.shape, res, self._unreal_view())
         self._probe_artists = []
 
     def _unreal_view(self):
@@ -625,24 +510,11 @@ class SunPage(ttk.Frame):
         art = self._map_artists
         art["image"].set_data(self._display_rgb())
 
-        shadow, light = self.lit["shadow"], self.lit["light"]
-        valid = np.isfinite(self.view[0])
-        cells = max(int(valid.sum()), 1)
-        cast = 100.0 * (shadow & valid).sum() / cells
-        dark = 100.0 * ((light <= 0) & ~shadow & valid).sum() / cells
-        azimuth, elevation = self.lit["az"], self.lit["el"]
-        art["axes"].set_title(
-            f"Sun from {azimuth:.1f} deg at {elevation:.1f} deg  -  "
-            f"{cast:.1f}% of the map in cast shadow", fontsize=9)
         dem, res = self.view
-        art["text"].set_text(
-            f"Sun\n  azimuth   {azimuth:6.1f} deg\n  elevation {elevation:6.1f} deg\n\n"
-            f"Sun lies towards Unreal\n  X {-math.sin(math.radians(azimuth)):+5.2f}  "
-            f"Y {-math.cos(math.radians(azimuth)):+5.2f}\n"
-            f"Shadows point {(azimuth + 180) % 360:5.1f} deg\n"
-            f"  length  {1 / math.tan(math.radians(elevation)):6.2f} x height\n\n"
-            f"Map\n  cast shadow  {cast:5.1f} %\n  facing away  {dark:5.1f} %\n\n"
-            f"Preview {dem.shape[1]} x {dem.shape[0]} px\n  at {res:.3g} m/px")
+        cast, dark = logic.shadow_shares(dem, self.lit["shadow"], self.lit["light"])
+        azimuth, elevation = self.lit["az"], self.lit["el"]
+        art["axes"].set_title(logic.map_title(azimuth, elevation, cast), fontsize=9)
+        art["text"].set_text(logic.readout_text(azimuth, elevation, cast, dark, dem.shape, res))
         self._draw_sky(draw=False)
         self._draw_probe(draw=False)
         self.canvas.draw_idle()
@@ -652,10 +524,7 @@ class SunPage(ttk.Frame):
     def _draw_sky(self, draw=True):
         if not self._map_artists:
             return
-        azimuth, elevation = self.sun()
-        theta, radius = math.radians(azimuth), 90.0 - elevation
-        self._map_artists["sun_dot"].set_data([theta], [radius])
-        self._map_artists["sun_line"].set_data([theta, theta], [0.0, radius])
+        plots.place_sun(self._map_artists, *self.sun())
         if draw:
             self.canvas.draw_idle()
 
@@ -667,24 +536,13 @@ class SunPage(ttk.Frame):
             artist.remove()
         self._probe_artists = []
         if self.probe is not None:
-            axes = self._map_artists["axes"]
             x0, y0 = self.probe
             if tip is None:
                 azimuth, elevation = self.sun()
-                length = sun_shadows.shadow_length(self._object_height(), elevation)
-                a = math.radians(azimuth)
-                tip = (x0 - math.sin(a) * length, y0 + math.cos(a) * length)
-            length = math.hypot(tip[0] - x0, tip[1] - y0)
-            line, = axes.plot([x0, tip[0]], [y0, tip[1]], color="#ff9f1c", linewidth=2.2,
-                              solid_capstyle="round")
-            base, = axes.plot([x0], [y0], "^", color="white", markeredgecolor="black",
-                              markersize=8)
-            end, = axes.plot([tip[0]], [tip[1]], "o", color="#ff9f1c", markersize=4)
-            label = axes.annotate(f"{self._object_height():g} m object: {length:.2f} m shadow",
-                                  (tip[0], tip[1]), xytext=(6, 6), textcoords="offset points",
-                                  fontsize=8, color="white",
-                                  bbox=dict(boxstyle="round,pad=0.2", fc="#000000aa", ec="none"))
-            self._probe_artists = [line, base, end, label]
+                tip = logic.probe_tip(x0, y0, azimuth, sun_shadows.shadow_length(
+                    self._object_height(), elevation))
+            self._probe_artists = plots.draw_probe(self._map_artists["axes"], x0, y0, tip,
+                                                   self._object_height())
         if draw:
             self.canvas.draw_idle()
 
@@ -695,45 +553,7 @@ class SunPage(ttk.Frame):
             return
         self._3d_stale = False
         dem, res = self.view
-        stride = max(1, int(math.ceil(max(dem.shape) / SUN_3D_CELLS)))
-        z = dem[::stride, ::stride]
-        z = np.where(np.isfinite(z), z, np.nanmin(z))
-        colours = self._display_rgb()[::stride, ::stride]
-        rows, cols = z.shape
-        step = res * stride
-        xs, ys = np.meshgrid(np.arange(cols) * step, np.arange(rows) * step)
-
-        self.figure3d.clear()
-        # Draw in call order so the sun ray stays above the surface.
-        axes = self.figure3d.add_subplot(111, projection="3d", computed_zorder=False)
-        axes.plot_surface(xs, ys, z, facecolors=colours, rstride=1, cstride=1,
-                          shade=False, linewidth=0, antialiased=False)
-        width, depth = cols * step, rows * step
-        relief = max(float(np.ptp(z)), 1e-6)
-        # Flat maps are exaggerated to a relief of at least 8% of their width.
-        exaggeration = max(1.0, 0.08 * max(width, depth) / relief)
-
-        # Sun ray to the map centre, at its true angle before exaggeration.
-        azimuth, elevation = self.lit["az"], self.lit["el"]
-        toward_sun = sun_shadows.sun_vector(azimuth, elevation)
-        centre = np.array([width / 2, depth / 2, float(np.nanmax(z))])
-        start = centre + toward_sun * 0.45 * max(width, depth)
-        axes.plot(*zip(start, centre), color="#ffd34d", linewidth=2.5)
-        axes.scatter(*start, color="#ffd34d", s=90, edgecolor="white", depthshade=False)
-
-        z_low, z_high = float(np.nanmin(z)), max(float(np.nanmax(z)), start[2])
-        axes.set_xlim(0, width)
-        axes.set_ylim(depth, 0)        # Rows grow towards the viewer, as on the map
-        axes.set_zlim(z_low, z_high)
-        axes.set_box_aspect((width, depth, (z_high - z_low) * exaggeration))
-        axes.zaxis.set_major_locator(MaxNLocator(4))
-        axes.set_title(f"Sun from {azimuth:.1f} deg at {elevation:.1f} deg"
-                       + (f"  -  heights x{exaggeration:.1f}" if exaggeration > 1.05 else ""),
-                       fontsize=9)
-        axes.set_xlabel("x (m)")
-        axes.set_ylabel("y (m)")
-        axes.set_zlabel("z (m)")
-        axes.view_init(elev=35, azim=-60)
+        plots.draw_3d(self.figure3d, dem, res, self._display_rgb(), self.lit["az"], self.lit["el"])
         self.canvas3d.draw_idle()
 
     # -------------------------------------------------------------- mouse
@@ -802,15 +622,11 @@ class SunPage(ttk.Frame):
         if self._unreal_busy():
             self.log("Unreal is still busy with the last request.", level="warn")
             return
-        try:
-            intensity = float(self.intensity_var.get())
-            disc = float(self.disc_var.get())
-        except ValueError:
-            self.log("Intensity and sun disc must be numbers.", level="error")
+        settings = logic.parse_sun_settings(self.intensity_var.get(), self.disc_var.get())
+        if isinstance(settings, str):
+            self.log(settings, level="error")
             return
-        if intensity <= 0 or disc < 0:
-            self.log("Intensity must be positive and the sun disc not negative.", level="error")
-            return
+        intensity, disc = settings
         azimuth, elevation = self.sun()
         save_level = self.save_level_var.get()
         self.log(f"Sending the sun to Unreal: azimuth {azimuth:.1f}, elevation "
@@ -855,10 +671,7 @@ class SunPage(ttk.Frame):
                     self.set_sun(payload["azimuth"], payload["elevation"])
                     self.intensity_var.set(f"{payload['intensity']:.0f}")
                     self.disc_var.set(f"{payload['source_angle']:.2f}")
-                    where = "running game" if payload.get("pie") else "level"
-                    self.log(f"Read '{payload['label']}' from the {where}: azimuth "
-                             f"{payload['azimuth']:.1f}, elevation {payload['elevation']:.1f} deg, "
-                             f"{payload['intensity']:.0f} lux.", level="ok")
+                    self.log(logic.unreal_sun_log(payload), level="ok")
                 elif kind == "log":
                     text, level = payload
                     self.log(text, level=level)

@@ -11,72 +11,21 @@ import traceback
 
 import tkinter as tk
 from tkinter import filedialog, ttk
-import matplotlib
-import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
-from matplotlib.colors import LightSource
 from matplotlib.figure import Figure
-from matplotlib.lines import Line2D
-from matplotlib.patches import Patch
 
+from gui import generator_logic
 from gui import paths
+from gui import rock_planner_logic as logic
+from gui import rock_planner_plots as plots
+from gui.rock_planner_logic import ROCK_PARAM_GROUPS
 from gui.backend import (terrain_core, rock_field, heightmap_files, send_rocks, rock_models,
                          LOADER_AVAILABLE)
 from gui.dem_files import (DEM_FILETYPES, dem_group_name, dem_source_note, drop_dem_menu,
                            load_dem_array, planned_rock_files)
-from gui.ground_truth_page import DEFAULT_MASK_IDS, mask_ids
+from gui.ground_truth_logic import DEFAULT_MASK_IDS, mask_ids
 from gui.paths import map_browse_dir
 from gui.widgets import ParamRow, ProgressPanel, Tooltip, ask_confirmation, format_path_block
-
-
-# Planned-to-model size ratio beyond which the planner warns about visible scaling.
-MODEL_SCALE_WARN = 3.0
-
-
-# Measured Unreal placement cost (10,338 rocks in 158 s). Above UNREAL_ROCKS_WARN
-# rocks, the estimate also reports the expected placement time.
-UNREAL_SECONDS_PER_ROCK = 0.015
-
-
-UNREAL_ROCKS_WARN = 20_000
-
-
-# Parameter schema for the Rock Field & Rover Paths window (same tuple layout as
-# PARAM_GROUPS). Keys map directly onto rock_field.DEFAULTS.
-ROCK_PARAM_GROUPS = [
-    ("Rover Path", [
-        ("PATH_WIDTH_M", "Path width (m)", 0.5, 30.0, 'float',
-         "Full width of the cleared rover corridor. No rock is placed within half\n"
-         "this distance of a road, so the whole lane stays drivable (this now\n"
-         "includes what used to be the separate path margin)."),
-    ]),
-    ("Crater Hazards", [
-        ("MIN_CRATER_DEPTH_M", "Min crater depth (m)", 0.05, 20.0, 'log',
-         "A closed depression at least this deep is treated as a crater: impassable\n"
-         "to the rover and excluded from rock placement.\n"
-         "Lower values flag shallower craters; higher values ignore them."),
-    ]),
-    ("Rock Population", [
-        ("ROCK_COVERAGE", "Coverage (fraction)", 0.0, 0.05, 'float',
-         "Target fraction of the drivable ground covered by rock footprints.\n"
-         "Small rocks need many more instances for the same coverage: the\n"
-         "estimate below shows the count before you preview."),
-        ("ROCK_MIN_SCALE", "Min radius (m)", 0.01, 10.0, 'log',
-         "Smallest rock footprint radius, in metres. In Unreal each model is\n"
-         "scaled uniformly so its footprint matches the planned radius, so plan\n"
-         "near the models' own size (Place in Unreal > Match Rock Sizes to\n"
-         "Models) to avoid stretching them."),
-        ("ROCK_MAX_SCALE", "Max radius (m)", 0.01, 30.0, 'log',
-         "Largest rock footprint radius, in metres. Radii follow the lunar\n"
-         "size-frequency law (count of rocks larger than r ~ r^-2.5), so most\n"
-         "rocks are near the minimum and large boulders are rare."),
-        ("ROCK_HEIGHT_RATIO", "Height / radius", 0.1, 3.0, 'float',
-         "Rock height as a multiple of its footprint radius, written to the\n"
-         "instance list as height_m. In Unreal this is each rock's maximum\n"
-         "height: models taller than that are flattened to it, squatter models\n"
-         "keep their own proportions."),
-    ]),
-]
 
 
 class RockPlannerPage(ttk.Frame):
@@ -87,7 +36,8 @@ class RockPlannerPage(ttk.Frame):
 
     Computation runs in a worker thread and is drawn on the main thread through a
     queue, mirroring the studio; the plan itself lives in the UI-free rock_field
-    module.
+    module, the read-outs in rock_planner_logic and the drawing in
+    rock_planner_plots.
     """
 
     def __init__(self, master, figure_dpi=100, source_path=None, resolution=1.0):
@@ -486,26 +436,20 @@ class RockPlannerPage(ttk.Frame):
             self.request_preview(debounce_ms=500)
 
     def _seed(self):
-        text = self.seed_var.get().strip()
-        try:
-            return int(text) if text else None
-        except ValueError:
-            return None
+        return generator_logic.parse_seed(self.seed_var.get())
 
     def _resolution(self):
-        try:
-            return max(1e-6, float(self.resolution_var.get()))
-        except ValueError:
-            return 1.0
+        return logic.parse_resolution(self.resolution_var.get())
+
+    def _base_name(self):
+        return generator_logic.base_name_or_default(self.export_name_var.get())
 
     # --------------------------------------------------------------- I/O
     def _refresh_output_preview(self, *_trace_args):
         """Lists the filenames an export will write, under the base filename field."""
-        base_name = self.export_name_var.get().strip() or "procedural_lunar_terrain"
-        files = planned_rock_files(base_name, self.obstacle_map_var.get())
-        self.output_preview_var.set(
-            f"outputs/{base_name}/\n"
-            + "\n".join(f"  {name}" for name, _ in files))
+        base_name = self._base_name()
+        self.output_preview_var.set(generator_logic.output_preview_text(
+            base_name, planned_rock_files(base_name, self.obstacle_map_var.get())))
 
     def open_dem_menu(self):
         """Drops the list of project DEMs under the Load button."""
@@ -571,7 +515,7 @@ class RockPlannerPage(ttk.Frame):
         resolution = self._resolution()
         dem = self.dem
         do_map = self.obstacle_map_var.get()
-        base_name = self.export_name_var.get().strip() or "procedural_lunar_terrain"
+        base_name = self._base_name()
 
         self._cancel.clear()
         self.preview_button.state(["disabled"])
@@ -609,13 +553,12 @@ class RockPlannerPage(ttk.Frame):
             self.log("Load a DEM first.", level="warn")
             return
         self._collect_params()
-        base_name = self.export_name_var.get().strip() or "procedural_lunar_terrain"
+        base_name = self._base_name()
         group_dir = os.path.join(paths.GENERATOR_OUTPUT_DIR, base_name)
-        files = planned_rock_files(base_name, self.obstacle_map_var.get())
-        file_list = "\n".join(f"    {name}\n        {desc}" for name, desc in files)
-        message = (f"Plan the rock field on {os.path.basename(self.dem_path)} "
-                   f"and write:\n\n{file_list}\n\nInto:\n"
-                   + format_path_block(group_dir) + "\n\nContinue?")
+        message = logic.export_confirmation(
+            os.path.basename(self.dem_path),
+            planned_rock_files(base_name, self.obstacle_map_var.get()),
+            format_path_block(group_dir))
         if not ask_confirmation(self, "Generate & export rock field", message,
                                 ok_label="Generate"):
             return
@@ -666,23 +609,12 @@ class RockPlannerPage(ttk.Frame):
             self.match_button.state(["disabled"])
             return
         if not self.model_sizes:
-            self.model_info_var.set("Model sizes unknown (only .fbx, or none found): "
-                                    "rocks are scaled to the planned radius.")
+            self.model_info_var.set(logic.model_info_text(None, None, 0.0))
             self.match_button.state(["disabled"])
             return
-        low, high, ratio = self.model_sizes
-        smallest, largest = self._model_scale_range()
-        text = (f"Models: radius {low:.3f}-{high:.3f} m, height {ratio:.2f} x radius.\n"
-                f"Planned radii scale them {smallest:.2g}x-{largest:.2g}x.")
-        planned_ratio = self.rows_widgets['ROCK_HEIGHT_RATIO'].get()
-        stretched = largest > MODEL_SCALE_WARN or smallest < 1.0 / MODEL_SCALE_WARN
-        if stretched:
-            text += (" Rocks will look much larger or smaller than modelled: "
-                     "use Match Rock Sizes to Models.")
-        if abs(planned_ratio - ratio) > 0.25 * ratio:
-            text += (f"\nHeight / radius is {planned_ratio:.2f}, the models are {ratio:.2f}: "
-                     "height_m in the CSV will not match the placed rocks.")
-        self.model_info_var.set(text)
+        self.model_info_var.set(logic.model_info_text(
+            self.model_sizes, self._model_scale_range(),
+            self.rows_widgets['ROCK_HEIGHT_RATIO'].get()))
         self.match_button.state(["!disabled"] if LOADER_AVAILABLE else ["disabled"])
 
     def match_sizes_to_models(self):
@@ -711,25 +643,13 @@ class RockPlannerPage(ttk.Frame):
         area = self.dem.shape[0] * self.dem.shape[1] * self._resolution() ** 2
         if self.result:
             area *= self.result['drivable_frac']
-            where = "the drivable ground"
-        else:
-            where = "the whole map (before craters are excluded)"
         count = rock_field.estimate_rock_count(params, area)
-        text = f"About {count:,} rocks on {where}."
-        if count > rock_field.MAX_ROCKS:
-            text += (f"\nOver the {rock_field.MAX_ROCKS:,} limit: the plan stops there and "
-                     "covers less than asked. Lower the coverage or raise the radii.")
-        placed = min(count, rock_field.MAX_ROCKS)
-        if placed > UNREAL_ROCKS_WARN:
-            minutes = placed * UNREAL_SECONDS_PER_ROCK / 60.0
-            text += (f"\nPlacing them in Unreal takes roughly {minutes:.0f} min "
-                     "(one actor per rock).")
-        self.rock_estimate_var.set(text)
+        self.rock_estimate_var.set(logic.rock_estimate_text(
+            count, rock_field.MAX_ROCKS, bool(self.result)))
 
     def _rocks_csv_path(self):
-        base_name = self.export_name_var.get().strip() or "procedural_lunar_terrain"
-        return base_name, os.path.join(paths.GENERATOR_OUTPUT_DIR, base_name,
-                                       f"{base_name}_rocks.csv")
+        base_name = self._base_name()
+        return base_name, logic.rocks_csv_path(paths.GENERATOR_OUTPUT_DIR, base_name)
 
     def refresh_mask_ids(self):
         """Loads the shared rock mask ids into the fields."""
@@ -741,15 +661,9 @@ class RockPlannerPage(ttk.Frame):
 
     def _stencil_settings(self):
         """Returns (boulder_id, small_rock_id, boulder_min_radius_m), or None if invalid."""
-        try:
-            boulder = int(self.boulder_stencil_var.get())
-            small = int(self.small_rock_stencil_var.get())
-            radius = float(self.boulder_radius_var.get())
-        except ValueError:
-            return None
-        if not (1 <= boulder <= 255 and 1 <= small <= 255 and radius >= 0):
-            return None
-        return boulder, small, radius
+        return logic.parse_stencils(self.boulder_stencil_var.get(),
+                                    self.small_rock_stencil_var.get(),
+                                    self.boulder_radius_var.get())
 
     def _stencils_changed(self, *_trace_args):
         settings = self._stencil_settings()
@@ -768,25 +682,15 @@ class RockPlannerPage(ttk.Frame):
         boulder, small, radius = settings
         _base, rocks_csv = self._rocks_csv_path()
         try:
-            scales = np.loadtxt(rocks_csv, delimiter=",", skiprows=1, usecols=5, ndmin=1)
+            scales = logic.read_rock_scales(rocks_csv)
         except (OSError, ValueError, IndexError):
             self.stencil_preview_var.set("Export the rock field to see how it splits.")
             return
-        n_boulder = int((scales >= radius).sum())
-        text = (f"This field: {n_boulder} boulders (id {boulder}), "
-                f"{len(scales) - n_boulder} small rocks (id {small}).")
-        if len(scales) and n_boulder in (0, len(scales)):
-            text += (f"\nAll rocks fall in one class: planned radii run "
-                     f"{scales.min():.2f}-{scales.max():.2f} m.")
-        self.stencil_preview_var.set(text)
+        self.stencil_preview_var.set(logic.stencil_split_text(scales, boulder, small, radius))
 
     def _rock_count(self):
         """Rows in the exported rock list (the work an Unreal job scales with)."""
-        try:
-            with open(self._rocks_csv_path()[1]) as handle:
-                return max(sum(1 for _ in handle) - 1, 1)
-        except OSError:
-            return 1
+        return logic.count_rows(self._rocks_csv_path()[1])
 
     def _start_unreal_job(self, status, job, key="rock_unreal"):
         """Runs `job(log)` on a worker thread, disabling the planner buttons meanwhile."""
@@ -814,7 +718,7 @@ class RockPlannerPage(ttk.Frame):
             return
         settings = self._stencil_settings()
         if settings is None:
-            self.log("Mask ids must be whole numbers 1-255 and the radius >= 0.", level="error")
+            self.log(logic.STENCIL_RULE, level="error")
             return
         boulder, small, radius = settings
         base_name, _csv = self._rocks_csv_path()
@@ -849,7 +753,7 @@ class RockPlannerPage(ttk.Frame):
             return
         settings = self._stencil_settings()
         if settings is None:
-            self.log("Mask ids must be whole numbers 1-255 and the radius >= 0.", level="error")
+            self.log(logic.STENCIL_RULE, level="error")
             return
         boulder, small, radius = settings
 
@@ -866,8 +770,7 @@ class RockPlannerPage(ttk.Frame):
         if self.model_sizes is None:
             self._read_model_sizes()
         scale_range = self._model_scale_range()
-        if scale_range and (scale_range[1] > MODEL_SCALE_WARN
-                            or scale_range[0] < 1.0 / MODEL_SCALE_WARN):
+        if logic.is_stretched(scale_range):
             self.log(f"The planned radii scale the models {scale_range[0]:.2g}x-"
                      f"{scale_range[1]:.2g}x. Use Match Rock Sizes to Models and "
                      "re-export to place them at their real size.", level="warn")
@@ -886,7 +789,7 @@ class RockPlannerPage(ttk.Frame):
                 save_level=save_level, log=log))
 
     def open_output_folder(self):
-        base_name = self.export_name_var.get().strip() or "procedural_lunar_terrain"
+        base_name = self._base_name()
         target = os.path.join(paths.GENERATOR_OUTPUT_DIR, base_name)
         target = target if os.path.isdir(target) else paths.GENERATOR_OUTPUT_DIR
         os.makedirs(target, exist_ok=True)
@@ -944,24 +847,8 @@ class RockPlannerPage(ttk.Frame):
         self.after(80, self._drain_queue)
 
     def _log_result(self, result):
-        if result.get('rock_capped'):
-            self.log(f"The coverage asked for {result['rock_requested']:,} rocks; the plan "
-                     f"stops at {rock_field.MAX_ROCKS:,}, so it covers less than asked.",
-                     level="warn")
-        self.log(
-            f"Placed {result['rock_count']} rocks. "
-            f"Drivable {result['drivable_frac'] * 100:.1f}% of map "
-            f"(craters cover {result['crater_frac'] * 100:.1f}%, impassable), "
-            f"free after rocks {result['free_frac'] * 100:.1f}%.")
-        if result['road_segments'] == 0:
-            self.log("Fewer than two craters found, so no Voronoi roads were laid. "
-                     "Lower the crater depth threshold to catch shallower craters.",
-                     level="warn")
-        elif result['connected']:
-            self.log("Voronoi road network is one connected route.", level="ok")
-        else:
-            self.log("The Voronoi road network is split by impassable terrain into "
-                     "more than one piece.", level="warn")
+        for text, level in logic.result_log_lines(result, rock_field.MAX_ROCKS):
+            self.log(text, level=level)
 
     def log(self, text, level=None):
         self.log_text.configure(state="normal")
@@ -971,75 +858,10 @@ class RockPlannerPage(ttk.Frame):
 
     # ---------------------------------------------------------- drawing
     def _show_message(self, text):
-        self.figure.clear()
-        axes = self.figure.add_subplot(111)
-        axes.axis("off")
-        axes.text(0.5, 0.5, text, ha="center", va="center", fontsize=12,
-                  transform=axes.transAxes)
+        plots.draw_message(self.figure, text)
         self.canvas.draw_idle()
 
     def _render(self, result):
         """Draws the hillshade with the impassable, corridor and rock overlays."""
-        self.figure.clear()
-        axes = self.figure.add_subplot(111)
-
-        plan = result['plan_elevation']
-        res_row, res_col = result['plan_res']
-        relief = max(float(np.ptp(plan)), 1e-6)
-        light = LightSource(azdeg=315, altdeg=45)
-        vert_exag = (0.1 * max(plan.shape)) / relief
-        shaded = light.shade(plan, cmap=matplotlib.colormaps["gray"],
-                             blend_mode="soft", vert_exag=vert_exag)
-        axes.imshow(shaded, origin="upper", interpolation="bilinear")
-
-        # Craters: impassable and off-limits for rocks. Fill value 0.0 so the
-        # winter colormap paints them blue (its 1.0 end is green, which would
-        # clash with the corridors).
-        crater = result['crater_mask']
-        axes.imshow(np.where(crater, 0.0, np.nan), origin="upper",
-                    cmap="winter", alpha=0.45, vmin=0, vmax=1)
-
-        # Guaranteed corridors.
-        for rr, cc in result['paths']:
-            axes.plot(cc, rr, color="#39d353", linewidth=1.4, alpha=0.9)
-
-        # Markers: crater centres, i.e. the Voronoi sites.
-        marker_label = result.get('marker_label', 'Waypoint')
-        if result.get('markers'):
-            mr = [r for r, _ in result['markers']]
-            mc = [c for _, c in result['markers']]
-            axes.plot(mc, mr, "o", color="#58a6ff", markersize=5,
-                      markeredgecolor="white", linewidth=0, label=marker_label)
-
-        # Rocks, sized by footprint radius (points^2 area at the display scale).
-        rocks = result['rocks_px']
-        if len(rocks):
-            axes.scatter(rocks[:, 1], rocks[:, 0], s=np.maximum(2, (rocks[:, 2] * 1.6) ** 2),
-                         facecolor="#d9a066", edgecolor="#3a2a17", linewidths=0.2,
-                         alpha=0.8, label="Rocks")
-
-        rows, cols = result['plan_shape']
-        if result['road_segments'] == 0:
-            status = "no craters found for roads"
-        elif result['connected']:
-            status = "connected route OK"
-        else:
-            status = "route split by terrain"
-        axes.set_title(
-            f"Rock field & Voronoi rover corridors  -  {result['rock_count']} rocks, "
-            f"{result['drivable_frac'] * 100:.0f}% drivable, {status}\n"
-            f"craters cover {result['crater_frac'] * 100:.0f}%   |   "
-            f"planning grid {cols} x {rows} px  ({res_col:.2f} m/px)", fontsize=9)
-        axes.set_xlabel("planning pixels")
-        axes.set_ylabel("planning pixels")
-
-        legend_handles = [
-            Line2D([0], [0], color="#39d353", lw=2, label="Rover corridor"),
-            Line2D([0], [0], marker="o", color="#58a6ff", lw=0,
-                   markeredgecolor="white", label=marker_label),
-            Patch(facecolor="#d9a066", edgecolor="#3a2a17", label="Rock"),
-            Patch(facecolor="blue", alpha=0.45, label="Crater"),
-        ]
-        axes.legend(handles=legend_handles, loc="upper right", fontsize=7,
-                    framealpha=0.9)
+        plots.draw_plan(self.figure, result)
         self.canvas.draw_idle()

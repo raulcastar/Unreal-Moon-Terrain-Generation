@@ -1,6 +1,10 @@
 """
 Generate view: the procedural terrain's parameters, the fast preview (relief,
 3D surface, slope) and the full-resolution run. A mixin of the main window.
+
+This file is the Tk side: layout, events and the background jobs. The
+parameter schema, seeds and read-outs are in generator_logic, the drawing in
+generator_plots.
 """
 
 import os
@@ -11,15 +15,13 @@ import traceback
 
 import tkinter as tk
 from tkinter import filedialog, ttk
-import matplotlib
-import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
-from matplotlib.cm import ScalarMappable
-from matplotlib.colors import LightSource, Normalize
 from matplotlib.figure import Figure
-from matplotlib.ticker import MaxNLocator
 
+from gui import generator_logic as logic
+from gui import generator_plots as plots
 from gui import paths
+from gui.generator_logic import COLORMAPS, PARAM_GROUPS, PREVIEW_SIZES  # noqa: F401  (used by other pages)
 from gui.backend import terrain_core, heightmap_files, LOADER_AVAILABLE, LOADER_IMPORT_ERROR
 from gui.dem_files import (DEM_FILETYPES, dem_source_note, dem_source_problem, drop_dem_menu,
                            planned_output_files)
@@ -28,67 +30,6 @@ from gui.map_views import MapViewer, SURFACE_DRAG_DETAIL, SURFACE_MESH_DETAIL
 from gui.paths import map_browse_dir, output_group_dir
 from gui.widgets import (ParamRow, ProgressPanel, Tooltip, ask_confirmation, format_path_block,
                          show_message)
-
-
-# =========================================================================
-# PARAMETER SCHEMA FOR THE UI
-# =========================================================================
-
-# (key, label, minimum, maximum, kind, tooltip)
-#   kind: 'int'   -> integer slider
-#         'float' -> linear float slider
-#         'log'   -> logarithmic slider (for values spanning orders of magnitude)
-PARAM_GROUPS = [
-    ("Map Geometry", [
-        ("ROWS", "Rows (px)", 64, 8192, 'int',
-         "Vertical pixel count of the generated DEM."),
-        ("COLS", "Columns (px)", 64, 8192, 'int',
-         "Horizontal pixel count of the generated DEM."),
-        ("RESOLUTION_M_PER_PX", "Resolution (m/px)", 0.01, 10.0, 'float',
-         "Ground distance covered by one pixel. Drives the Unreal landscape XY scale;\n"
-         "it does not change the generated relief."),
-        ("BASE_ELEVATION", "Base elevation (m)", 0.0, 500.0, 'float',
-         "Datum the terrain is built around. Kept above zero because the Unreal\n"
-         "converter treats exact zeros as 'no data'."),
-    ]),
-    ("Macro Terrain (rolling hills)", [
-        ("MACRO_ELEVATION_MIN", "Relief min (m)", 0.0, 200.0, 'float',
-         "Lower bound of the total hill height differential across the map."),
-        ("MACRO_ELEVATION_MAX", "Relief max (m)", 0.0, 200.0, 'float',
-         "Upper bound of the total hill height differential. The actual value is\n"
-         "drawn uniformly between min and max each run."),
-        ("EROSION_BLUR_DIVISOR", "Erosion divisor", 2.0, 400.0, 'float',
-         "Smoothing sigma is (largest map dimension / this value).\n"
-         "Lower = heavily eroded and smooth. Higher = sharper terrain."),
-    ]),
-    ("Micro Terrain", [
-        ("MICRO_ROUGHNESS", "Micro roughness (m)", 1e-5, 1.0, 'log',
-         "Amplitude of high-frequency noise. Acts as dithering that prevents\n"
-         "16-bit quantization banding (terracing) once imported into Unreal."),
-    ]),
-    ("Crater Morphology", [
-        ("CRATER_DENSITY", "Crater density", 1e-7, 1e-2, 'log',
-         "Impacts per pixel of surface area. Total craters = rows x cols x density."),
-        ("CRATER_MIN_RADIUS_PCT", "Min radius (% of map)", 0.0005, 0.3, 'log',
-         "Smallest crater radius as a fraction of the largest map dimension."),
-        ("CRATER_MAX_RADIUS_PCT", "Max radius (% of map)", 0.001, 0.5, 'log',
-         "Largest crater radius as a fraction of the largest map dimension.\n"
-         "Radii are cubically biased towards the minimum, as on real surfaces."),
-        ("CRATER_DEPTH_RATIO", "Depth ratio", 0.001, 1.0, 'log',
-         "Floor depth below the surrounding ground, relative to crater radius.\n"
-         "Rim-to-floor depth is this x (1 + rim ratio). Mature mare craters sit\n"
-         "near 0.15, fresh craters up to about 0.3."),
-        ("CRATER_RIM_HEIGHT_RATIO", "Rim height ratio", 0.0, 1.0, 'float',
-         "Ejecta rim height relative to the bowl depth. 1.0 raises the rim as far\n"
-         "as the bowl digs down."),
-    ]),
-]
-
-
-COLORMAPS = ["gray", "magma", "cividis", "bone", "terrain", "gist_earth", "inferno"]
-
-
-PREVIEW_SIZES = ["128", "192", "256", "384", "512", "768"]
 
 
 class GeneratorPage:
@@ -488,11 +429,9 @@ class GeneratorPage:
 
     def _refresh_output_preview(self, *_trace_args):
         """Lists the filenames Step 1 will write, under the base filename field."""
-        base_name = self.export_name_var.get().strip() or "procedural_lunar_terrain"
+        base_name = logic.base_name_or_default(self.export_name_var.get())
         files = planned_output_files(base_name, self.params.get('EXPORT_CSV', True))
-        folder = f"outputs/{base_name}/"
-        self.output_preview_var.set(
-            folder + "\n" + "\n".join(f"  {name}" for name, _ in files))
+        self.output_preview_var.set(logic.output_preview_text(base_name, files))
 
     def _apply_params_to_widgets(self):
         for key, row in self.rows_widgets.items():
@@ -507,12 +446,9 @@ class GeneratorPage:
         for key, row in self.rows_widgets.items():
             self.params[key] = row.get()
 
-        seed_text = self.seed_var.get().strip()
-        try:
-            self.params['RANDOM_SEED'] = int(seed_text) if seed_text else None
-        except ValueError:
-            self.params['RANDOM_SEED'] = None
-            self.seed_var.set("")
+        self.params['RANDOM_SEED'] = logic.parse_seed(self.seed_var.get())
+        if self.params['RANDOM_SEED'] is None and self.seed_var.get().strip():
+            self.seed_var.set("")                    # not a number: cleared
 
         self.params = terrain_core.coerce_params(self.params)
         return self.params
@@ -525,7 +461,7 @@ class GeneratorPage:
             self.request_preview(debounce_ms=450)
 
     def roll_seed(self):
-        self.seed_var.set(str(int(np.random.randint(0, 2 ** 31 - 1))))
+        self.seed_var.set(str(logic.roll_seed()))
         self.on_param_change()
 
     def _ensure_seed(self):
@@ -534,7 +470,7 @@ class GeneratorPage:
         describe the same surface. A blank field is filled with a rolled value.
         """
         if self.params.get('RANDOM_SEED') is None:
-            seed = int(np.random.randint(0, 2 ** 31 - 1))
+            seed = logic.roll_seed()
             self.params['RANDOM_SEED'] = seed
             self.seed_var.set(str(seed))
         return self.params['RANDOM_SEED']
@@ -544,8 +480,7 @@ class GeneratorPage:
     # =====================================================================
 
     def _refresh_preset_list(self):
-        os.makedirs(paths.CONFIG_DIR, exist_ok=True)
-        files = sorted(f for f in os.listdir(paths.CONFIG_DIR) if f.endswith((".yaml", ".yml")))
+        files = logic.list_presets(paths.CONFIG_DIR)
         self.preset_combo.configure(values=files + ["Browse..."])
         if files and not self.preset_var.get():
             self.preset_var.set(files[0])
@@ -597,79 +532,19 @@ class GeneratorPage:
     # =====================================================================
 
     def _refresh_derived_readouts(self):
-        params = self.params
-        rows, cols = params['ROWS'], params['COLS']
-        resolution = params['RESOLUTION_M_PER_PX']
-        craters = terrain_core.full_crater_count(params)
-
-        lines = [
-            f"DEM grid        {cols} x {rows} px",
-            f"Ground extent   {cols * resolution:,.0f} x {rows * resolution:,.0f} m",
-            f"Resolution      {resolution:g} m/px",
-            f"Target craters  {craters}",
-            f"Crater radii    {max(rows, cols) * params['CRATER_MIN_RADIUS_PCT'] * resolution:,.1f}"
-            f" - {max(rows, cols) * params['CRATER_MAX_RADIUS_PCT'] * resolution:,.1f} m",
-            f"Erosion sigma   {max(1.0, max(rows, cols) / params['EROSION_BLUR_DIVISOR']):,.1f} px",
-        ]
-
-        if self.displayed is not None:
-            elevation = self.displayed['elevation']
-            scale = max(rows, cols) / max(elevation.shape)
-            effective_res = resolution * scale
-            gradient_y, gradient_x = np.gradient(elevation, effective_res, effective_res)
-            slope_degrees = np.degrees(np.arctan(np.hypot(gradient_x, gradient_y)))
-            source = "full resolution" if self.displayed is self.full_result else "preview"
-            lines += [
-                "",
-                f"-- rendered ({source}) --",
-                f"Min elevation   {np.min(elevation):,.3f} m",
-                f"Max elevation   {np.max(elevation):,.3f} m",
-                f"Mean elevation  {np.mean(elevation):,.3f} m",
-                f"Total relief    {np.ptp(elevation):,.3f} m",
-                f"Craters placed  {self.displayed['crater_count']}",
-                f"Mean slope      {np.mean(slope_degrees):,.2f} deg",
-                f"P99 slope       {np.percentile(slope_degrees, 99):,.2f} deg",
-                f"Max slope       {np.max(slope_degrees):,.2f} deg",
-            ]
-
+        lines = logic.stats_lines(self.params, terrain_core.full_crater_count(self.params),
+                                  self.displayed, self.displayed is self.full_result)
         self._set_text(self.stats_text, "\n".join(lines))
         self._refresh_topology_readout()
 
     def _refresh_topology_readout(self):
         """Mirrors the loader's component solver so the UI can warn before export."""
-        rows, cols = self.params['ROWS'], self.params['COLS']
-        resolution = self.params['RESOLUTION_M_PER_PX']
-
         if not LOADER_AVAILABLE:
-            self._set_text(self.topology_text,
-                           "Unreal loader modules unavailable.\n"
-                           f"{LOADER_IMPORT_ERROR}")
-            return
-
-        config = heightmap_files.calculate_optimal_landscape_config(cols, rows)
-        if config is None:
-            self._set_text(
-                self.topology_text,
-                "DEM exceeds the 50x50 component\n"
-                "ceiling of a single Landscape.\n\n"
-                "Reduce rows/columns or split the\n"
-                "map across World Partition tiles.")
-            return
-
-        comp_x, comp_y, quads, sections, final_width, final_height = config
-        padded = (final_width - cols) + (final_height - rows)
-        vertices = final_width * final_height
-        self._set_text(self.topology_text, "\n".join([
-            f"Section size    {quads} quads",
-            f"Sections/comp   {sections}",
-            f"Components      {comp_x} x {comp_y}",
-            f"Landscape verts {final_width} x {final_height}",
-            f"Total vertices  {vertices:,}",
-            f"Edge padding    {padded} px",
-            f"World size      {final_width * resolution:,.0f} x"
-            f" {final_height * resolution:,.0f} m",
-            f"XY scale        {resolution * 100:g} (cm/px)",
-        ]))
+            text = logic.topology_text(self.params, None, LOADER_IMPORT_ERROR)
+        else:
+            text = logic.topology_text(self.params, heightmap_files.calculate_optimal_landscape_config(
+                self.params['COLS'], self.params['ROWS']))
+        self._set_text(self.topology_text, text)
 
     def _set_text(self, widget, content):
         widget.configure(state="normal")
@@ -821,12 +696,8 @@ class GeneratorPage:
         seed = self._ensure_seed()
 
         # Preserve the map aspect ratio while capping the longest edge.
-        target = int(self.preview_size_var.get())
-        rows, cols = self.params['ROWS'], self.params['COLS']
-        longest = max(rows, cols)
-        scale = min(1.0, target / longest)
-        preview_rows = max(32, int(round(rows * scale)))
-        preview_cols = max(32, int(round(cols * scale)))
+        preview_rows, preview_cols = logic.preview_shape(
+            self.params['ROWS'], self.params['COLS'], int(self.preview_size_var.get()))
         crater_count = terrain_core.full_crater_count(self.params)
         params = dict(self.params)
 
@@ -847,29 +718,16 @@ class GeneratorPage:
         self._collect_params()
         seed = self._ensure_seed()
         params = dict(self.params)
-        base_name = self.export_name_var.get().strip() or "procedural_lunar_terrain"
+        base_name = logic.base_name_or_default(self.export_name_var.get())
         elevation_name = f"{base_name}_elevationMap"
 
         # Describe the run and its outputs, and let the user confirm.
         # Outputs land in a per-run subfolder named after the base filename.
         pixels = params['ROWS'] * params['COLS']
         target_dir = os.path.join(paths.GENERATOR_OUTPUT_DIR, base_name)
-        files = planned_output_files(base_name, params['EXPORT_CSV'])
-        file_list = "\n".join(f"    {name}\n        {desc}" for name, desc in files)
-
-        message = (
-            f"Generate a {params['COLS']} x {params['ROWS']} px DEM "
-            f"({pixels / 1e6:.1f} megapixels) with seed {seed}.\n\n"
-            "Files will be written to:\n"
-            + format_path_block(target_dir) + f"\n\n{file_list}"
-        )
-        if pixels > 25_000_000:
-            message += (
-                "\n\nThis map is large: generation and file writing may take a "
-                "while and use several GB of RAM. You can abort with the Stop "
-                "button once it starts."
-            )
-        message += "\n\nContinue?"
+        message = logic.generation_confirmation(
+            params, seed, format_path_block(target_dir),
+            planned_output_files(base_name, params['EXPORT_CSV']))
 
         if not ask_confirmation(self, "Generate full-resolution DEM", message,
                                 ok_label="Generate"):
@@ -958,7 +816,7 @@ class GeneratorPage:
                            work=max(os.path.getsize(source_path) / 1e6, 0.01) if os.path.exists(source_path) else 1.0)
 
     def open_output_folder(self):
-        base_name = self.export_name_var.get().strip() or "procedural_lunar_terrain"
+        base_name = logic.base_name_or_default(self.export_name_var.get())
         target = os.path.join(paths.OUTPUT_ROOT, base_name)
         target = target if os.path.isdir(target) else paths.OUTPUT_ROOT
         os.makedirs(target, exist_ok=True)
@@ -1029,136 +887,28 @@ class GeneratorPage:
         currently on screen, accounting for preview downsampling.
         """
         elevation = self.displayed['elevation']
-        rows, cols = elevation.shape
-        scale = max(self.params['ROWS'], self.params['COLS']) / max(rows, cols)
-        effective_res = self.params['RESOLUTION_M_PER_PX'] * scale
-        extent = (0, cols * effective_res, 0, rows * effective_res)
+        extent, effective_res = logic.display_geometry(elevation, self.params)
         return elevation, extent, effective_res
 
     def _title_suffix(self):
-        source = "FULL RESOLUTION" if self.displayed is self.full_result else "preview"
-        rows, cols = self.displayed['elevation'].shape
-        return f"{cols}x{rows} {source} - seed {self.displayed['seed']}"
+        return logic.title_suffix(self.displayed, self.displayed is self.full_result)
 
     def _draw_relief(self):
         elevation, extent, effective_res = self._display_geometry()
-        figure = self.figures['relief']
-        figure.clear()
-        axes = figure.add_subplot(111)
-
-        light = LightSource(azdeg=self.sun_azimuth_var.get(),
-                            altdeg=self.sun_altitude_var.get())
-        shaded = light.shade(
-            elevation, cmap=matplotlib.colormaps[self.cmap_var.get()],
-            blend_mode="soft", vert_exag=self.exaggeration_var.get(),
-            dx=effective_res, dy=effective_res)
-
-        axes.imshow(shaded, extent=extent, origin="lower", interpolation="bilinear")
-        axes.set_title(f"Sun-lit shaded relief - {self._title_suffix()}", fontsize=10)
-        axes.set_xlabel("metres")
-        axes.set_ylabel("metres")
-        axes.set_aspect("equal")
-
-        # The shaded image carries lighting rather than scalar values, so the
-        # colourbar is driven by a standalone mappable over the elevation range.
-        mappable = ScalarMappable(
-            norm=Normalize(vmin=float(np.min(elevation)), vmax=float(np.max(elevation))),
-            cmap=self.cmap_var.get())
-        figure.colorbar(mappable, ax=axes, shrink=0.8, label="Elevation (m)")
+        plots.draw_relief(self.figures['relief'], elevation, extent, effective_res,
+                          self.cmap_var.get(), self.sun_azimuth_var.get(),
+                          self.sun_altitude_var.get(), self.exaggeration_var.get(),
+                          self._title_suffix())
 
     def _draw_surface(self):
         elevation, extent, effective_res = self._display_geometry()
-        figure = self.figures['surface']
-        figure.clear()
-        self._surface_artists = None
-        axes = figure.add_subplot(111, projection="3d")
-
-        rows, cols = elevation.shape
-        # Cap the mesh density so large previews stay interactive
-        step = max(1, int(np.ceil(max(rows, cols) / SURFACE_MESH_DETAIL)))
-        sub = elevation[::step, ::step]
-        sub_res = effective_res * step
-        x_axis = np.linspace(extent[0], extent[1], sub.shape[1])
-        y_axis = np.linspace(extent[2], extent[3], sub.shape[0])
-        grid_x, grid_y = np.meshgrid(x_axis, y_axis)
-
-        span_x = extent[1] - extent[0]
-        span_y = extent[3] - extent[2]
-        span = max(span_x, span_y)
-        relief = max(float(np.ptp(sub)), 1e-6)
-
-        # Relief is metres over kilometres, so a true-scale box would look flat.
-        # Fit the Z box to a readable height and report the implied exaggeration
-        # in the title instead of hiding it.
-        z_box = 0.35
-        implied_exaggeration = (z_box * span) / relief
-
-        light = LightSource(azdeg=self.sun_azimuth_var.get(),
-                            altdeg=self.sun_altitude_var.get())
-
-        def plot_mesh(mesh, mesh_res):
-            """Draws one level of detail and returns its collection."""
-            mesh_x = np.linspace(extent[0], extent[1], mesh.shape[1])
-            mesh_y = np.linspace(extent[2], extent[3], mesh.shape[0])
-            mesh_gx, mesh_gy = np.meshgrid(mesh_x, mesh_y)
-            colors = light.shade(
-                mesh, cmap=matplotlib.colormaps[self.cmap_var.get()],
-                blend_mode="soft", vert_exag=implied_exaggeration,
-                dx=mesh_res, dy=mesh_res)
-            # rcount/ccount match the mesh so Matplotlib does not downsample the
-            # grid out of alignment with the pre-computed face colours.
-            return axes.plot_surface(
-                mesh_gx, mesh_gy, mesh, facecolors=colors, shade=False,
-                linewidth=0, antialiased=False,
-                rcount=mesh.shape[0], ccount=mesh.shape[1])
-
-        fine_surface = plot_mesh(sub, sub_res)
-
-        # A coarse copy, drawn once and swapped in during a drag to keep rotation
-        # responsive (see _on_surface_press).
-        drag_step = max(1, int(np.ceil(max(rows, cols) / SURFACE_DRAG_DETAIL)))
-        if drag_step > step:
-            coarse_surface = plot_mesh(elevation[::drag_step, ::drag_step],
-                                       effective_res * drag_step)
-            coarse_surface.set_visible(False)
-            self._surface_artists = (fine_surface, coarse_surface)
-
-        axes.set_title(
-            f"3D surface - {self._title_suffix()}\n"
-            f"vertical exaggeration x{implied_exaggeration:,.0f} (auto-fit)",
-            fontsize=10)
-        axes.set_xlabel("metres")
-        axes.set_ylabel("metres")
-        axes.set_zlabel("elevation (m)")
-        axes.view_init(elev=32, azim=-125)
-        axes.set_zlim(float(np.min(sub)) - relief * 0.15,
-                      float(np.max(sub)) + relief * 0.15)
-        axes.zaxis.set_major_locator(MaxNLocator(5))
-        axes.set_box_aspect((span_x / span, span_y / span, z_box))
-        figure.subplots_adjust(left=0.0, right=0.97, top=0.93, bottom=0.02)
+        # (fine, coarse) meshes, swapped during a drag (see _on_surface_press)
+        self._surface_artists = plots.draw_surface(
+            self.figures['surface'], elevation, extent, effective_res, self.cmap_var.get(),
+            self.sun_azimuth_var.get(), self.sun_altitude_var.get(), self._title_suffix(),
+            SURFACE_MESH_DETAIL, SURFACE_DRAG_DETAIL)
 
     def _draw_slope(self):
         elevation, extent, effective_res = self._display_geometry()
-        figure = self.figures['slope']
-        figure.clear()
-
-        gradient_y, gradient_x = np.gradient(elevation, effective_res, effective_res)
-        slope_degrees = np.degrees(np.arctan(np.hypot(gradient_x, gradient_y)))
-
-        # The map carries the detail, so it gets two thirds of the frame.
-        grid = figure.add_gridspec(3, 1)
-        axes = figure.add_subplot(grid[0:2, 0])
-        image = axes.imshow(slope_degrees, extent=extent, origin="lower",
-                            cmap="inferno", interpolation="bilinear",
-                            vmax=max(1.0, np.percentile(slope_degrees, 99.5)))
-        axes.set_title(f"Slope magnitude - {self._title_suffix()}", fontsize=10)
-        axes.set_xlabel("metres")
-        axes.set_ylabel("metres")
-        axes.set_aspect("equal")
-        figure.colorbar(image, ax=axes, shrink=0.85, label="Slope (deg)")
-
-        histogram_axes = figure.add_subplot(grid[2, 0])
-        histogram_axes.hist(elevation.ravel(), bins=120, color="#4a7ebb")
-        histogram_axes.set_title("Elevation distribution", fontsize=10)
-        histogram_axes.set_xlabel("Elevation (m)")
-        histogram_axes.set_ylabel("Pixels")
+        plots.draw_slope(self.figures['slope'], elevation, extent, effective_res,
+                         self._title_suffix())

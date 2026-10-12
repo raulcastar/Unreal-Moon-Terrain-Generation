@@ -557,11 +557,20 @@ Terrain_Studio/
   terrain_studio.py              Starts the studio (gui.app.main)
   gui/                           The studio's window (Tk)
     app.py                       Main window: home screen, view switching, DPI scaling
-    generator_page.py            Generate view: parameters, preview, full-resolution run
+    generator_page.py            Generate view: layout, events, background jobs
+    generator_logic.py             its parameter schema, seeds, read-outs (no Tk)
+    generator_plots.py             its relief, 3D surface and slope drawing (Matplotlib)
     landscape_page.py            Send to Unreal view: DEM to Landscape
-    rock_planner_page.py         Rock Planner view
+    rock_planner_page.py         Rock Planner view: layout, events, jobs
+    rock_planner_logic.py          its schema, input parsing, read-outs (no Tk)
+    rock_planner_plots.py          its plan drawing
     ground_truth_page.py         Ground Truth view: crater map, mask ids, mask camera, tracks
-    sun_page.py                  Sun view
+    ground_truth_logic.py          its mask ids and classes, crater source, track look, cameras
+    ground_truth_plots.py          its crater-mask drawing
+    sun_page.py                  Sun view: layout, events, jobs
+    sun_logic.py                   its sun position, tone curve, shadow read-outs (no Tk)
+    sun_plots.py                   its map, sky dome and 3D drawing
+    plot_common.py               Drawing helpers shared by the views
     map_views.py                 Shaded-relief map view, map viewer and map browser
     widgets.py                   Tooltips, progress panel, dialogs, parameter rows, log
     dem_files.py                 Finding and loading DEMs; the files each step writes

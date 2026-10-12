@@ -3,7 +3,6 @@ Ground Truth view: crater labels for the rover's object mask, shadow, sun and
 wheel-track ids, the mask camera, and the ids GNC uses.
 """
 
-import json
 import os
 import queue
 import subprocess
@@ -12,13 +11,15 @@ import traceback
 
 import tkinter as tk
 from tkinter import filedialog, ttk
-import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
-from matplotlib.colors import LightSource
 from matplotlib.figure import Figure
-from matplotlib.patches import Patch
 
+from gui import ground_truth_logic as logic
+from gui import ground_truth_plots as plots
 from gui import paths
+from gui import rock_planner_logic
+from gui.ground_truth_logic import (DEFAULT_MASK_IDS, GNC_CLASSES_FILE, LUG_SPACINGS_CM,  # noqa: F401
+                                    SUN_GLARE_ID, TRACK_PATTERNS, mask_ids)
 from gui.backend import rock_field, crater_map, heightmap_files, send_masks, LOADER_AVAILABLE
 from gui.dem_files import DEM_FILETYPES, dem_group_name, drop_dem_menu, load_dem_array
 from gui.paths import map_browse_dir
@@ -27,42 +28,13 @@ from gui.widgets import ParamRow, ProgressPanel, Tooltip
 import mask_classes  # noqa: E402  (unreal_link, put on the path by gui.paths)
 
 
-# =========================================================================
-# CRATER MASKS
-# =========================================================================
-
-# Object-mask ids, from config/mask_classes.json. Rocks can be changed in the
-# rock planner and craters here; both views read them for placement and the GNC
-# labels.
-DEFAULT_MASK_IDS = {"boulder": mask_classes.id_of("boulder"),
-                    "small_rock": mask_classes.id_of("small_rock"), "boulder_radius_m": 0.15,
-                    "crater": crater_map.CRATER_ID, "rim": crater_map.RIM_ID}
-SUN_GLARE_ID = mask_classes.id_of("sun_glare")
-
-
-GNC_CLASSES_FILE = "GNC-Moon-Simulator/component_stereo_depth/config/mask_classes.json"
-
-
-# Tread looks (unreal_wheel_tracks.TRACK_PATTERNS) and lug spacings that divide its
-# 12 cm decal spacing.
-TRACK_PATTERNS = (("Straight lugs", "straight"), ("Chevron", "chevron"),
-                  ("Staggered blocks", "blocks"), ("Smooth (no tread)", "smooth"))
-
-
-LUG_SPACINGS_CM = ("2", "3", "4", "6")
-
-
-def mask_ids(app):
-    """The studio's current object-mask ids (defaults when not set)."""
-    return getattr(app, "mask_ids", None) or dict(DEFAULT_MASK_IDS)
-
-
 class GroundTruthPage(ttk.Frame):
     """
     Crater labels for the rover's object mask. Maps the craters on a DEM,
     exports the crater map, and sends it to Unreal, where the mask material
     draws it on the Landscape for the chosen mask camera. Also lists the GNC
-    mask labels for every id in use.
+    mask labels for every id in use. The ids, classes and read-outs are in
+    ground_truth_logic, the drawing in ground_truth_plots.
     """
 
     def __init__(self, master, figure_dpi=100, source_path=None, resolution=1.0):
@@ -448,14 +420,7 @@ class GroundTruthPage(ttk.Frame):
 
     def _read_ids(self):
         """All mask ids: rocks from the shared ids, craters from the fields; None if invalid."""
-        ids = dict(DEFAULT_MASK_IDS, **mask_ids(self.app))
-        try:
-            ids["crater"], ids["rim"] = int(self.crater_var.get()), int(self.rim_var.get())
-        except ValueError:
-            return None
-        if not (1 <= ids["crater"] <= 255 and 0 <= ids["rim"] <= 255 and ids["crater"] != ids["rim"]):
-            return None
-        return ids
+        return logic.parse_crater_ids(mask_ids(self.app), self.crater_var.get(), self.rim_var.get())
 
     def _ids_changed(self, *_trace_args):
         ids = self._read_ids()
@@ -469,50 +434,19 @@ class GroundTruthPage(ttk.Frame):
         self.labels_text.delete("1.0", "end")
         self._classes = None
         if ids is None:
-            self.labels_text.insert("end", "Crater ids must be different whole numbers\n1-255 (rim 0-255).")
+            self.labels_text.insert("end", logic.CRATER_ID_RULE)
             status = ""
         else:
             # Every class, in order (an id stays reserved when its option is off).
-            self._classes = self._effective_classes(ids)
-            lines = [f"{c['id']:3d}  {c['name']:<12} {c['group']:<8} rgb{tuple(c['rgb'])}"
-                     for c in self._classes]
-            self.labels_text.insert("end", "\n".join(lines))
-            difference = mask_classes.gnc_difference({c["id"]: c["name"] for c in self._classes})
-            status = ("GNC copy not found next to this repository: keep it in step by hand."
-                      if difference is None else
-                      "GNC copy matches." if difference == "" else
-                      "GNC copy differs; Copy, then paste over it:\n" + difference)
+            self._classes = logic.effective_classes(ids)
+            self.labels_text.insert("end", "\n".join(logic.class_lines(self._classes)))
+            status = logic.gnc_status(
+                mask_classes.gnc_difference({c["id"]: c["name"] for c in self._classes}))
         self.labels_status.configure(text=status)
         self.labels_text.configure(state="disabled")
 
-    @staticmethod
-    def _effective_classes(ids):
-        """config/mask_classes.json with the crater and rock ids chosen in the studio."""
-        chosen = {"crater": ids["crater"], "crater_rim": ids["rim"], "boulder": ids["boulder"],
-                  "small_rock": ids["small_rock"]}
-        out = []
-        for entry in mask_classes.classes():
-            entry = dict(entry, id=chosen.get(entry["name"], entry["id"]))
-            if entry["name"] == "crater_rim" and not ids["rim"]:
-                continue                                   # rim off
-            if entry["name"] == "small_rock" and ids["small_rock"] == ids["boulder"]:
-                continue                                   # a single rock class
-            out.append(entry)
-        return sorted(out, key=lambda e: e["id"])
-
-    # Shadow class ids published by the GNC stereo node (SHADOW_IDS there).
-    SHADOW_IDS = ((0, "sky"), (1, "sunlit ground"), (2, "shadowed ground"),
-                  (3, "sunlit rock / rover"), (4, "shadowed rock / rover"),
-                  (5, "rover shadow (on ground or rocks)"))
-
     def _refresh_shadow_ids(self, *_trace_args):
-        shadows, rover = self.shadows_var.get(), self.rover_shadow_var.get()
-        if not shadows:
-            lines = ["Shadow feed off."]
-        else:
-            lines = [f"{i}  {name}" for i, name in self.SHADOW_IDS if i != 5 or rover]
-            if not rover:
-                lines.append("(5 rover shadow: off)")
+        lines = logic.shadow_id_lines(self.shadows_var.get(), self.rover_shadow_var.get())
         self.shadow_ids_text.configure(state="normal", height=len(lines))
         self.shadow_ids_text.delete("1.0", "end")
         self.shadow_ids_text.insert("end", "\n".join(lines))
@@ -520,20 +454,14 @@ class GroundTruthPage(ttk.Frame):
 
     def _glare_deg(self):
         """Glare ring radius in degrees from the field; 0 when blank or invalid."""
-        try:
-            return max(float(self.sun_glare_var.get()), 0.0)
-        except ValueError:
-            return 0.0
+        return logic.parse_glare_deg(self.sun_glare_var.get())
 
     def copy_labels(self):
         if not self._classes:
             self.log("Fix the crater ids first.", level="warn")
             return
-        with open(mask_classes.CLASSES_FILE, encoding="utf-8") as handle:
-            document = json.load(handle)
-        document["classes"] = self._classes
         self.clipboard_clear()
-        self.clipboard_append(json.dumps(document, indent=2) + "\n")
+        self.clipboard_append(logic.classes_document(mask_classes.CLASSES_FILE, self._classes))
         self.log("mask_classes.json copied to the clipboard.", level="ok")
 
     # --------------------------------------------------------------- files
@@ -554,8 +482,7 @@ class GroundTruthPage(ttk.Frame):
         self.dem_path = path
         self.source_var.set(os.path.basename(path))
         self.craters = None
-        candidate = os.path.join(os.path.dirname(path), f"{dem_group_name(path)}_craters.csv")
-        self.crater_list_path = candidate if os.path.isfile(candidate) else None
+        self.crater_list_path = logic.crater_list_for(path, dem_group_name(path))
         self.crater_source_var.set("generator" if self.crater_list_path else "detect")
         self._source_changed()
         self.log(f"Loading DEM: {os.path.basename(path)} ...")
@@ -572,10 +499,7 @@ class GroundTruthPage(ttk.Frame):
         threading.Thread(target=worker, daemon=True).start()
 
     def _resolution(self):
-        try:
-            return max(1e-6, float(self.resolution_var.get()))
-        except ValueError:
-            return 1.0
+        return rock_planner_logic.parse_resolution(self.resolution_var.get())
 
     def open_output_folder(self):
         group = self._group_name()
@@ -624,13 +548,8 @@ class GroundTruthPage(ttk.Frame):
         for widget in (self.depth_row.slider, self.depth_row.entry):
             widget.state(["disabled"] if generator else ["!disabled"])
         self.find_button.configure(text="Load Craters" if generator else "Find Craters")
-        if generator:
-            self.crater_source_info_var.set(
-                f"Generated here: using {os.path.basename(self.crater_list_path)}.")
-        elif has_list:
-            self.crater_source_info_var.set("A generator crater list exists; detecting anyway.")
-        else:
-            self.crater_source_info_var.set("No generator crater list for this map: detecting.")
+        self.crater_source_info_var.set(logic.crater_source_info(
+            has_list, generator, os.path.basename(self.crater_list_path) if has_list else None))
         if self.craters is not None and self._crater_depth != self._crater_key():
             self.craters = None
             self.crater_info_var.set("Crater source changed: press "
@@ -709,13 +628,7 @@ class GroundTruthPage(ttk.Frame):
             self.log("Load a DEM first.", level="warn")
             return
         group = self._group_name()
-        folder = os.path.join(paths.GENERATOR_OUTPUT_DIR, group)
-        png = os.path.join(folder, f"{group}_craterMask.png")
-        try:
-            with open(os.path.join(folder, f"{group}_craterMask.json")) as handle:
-                meta = json.load(handle)
-        except (OSError, ValueError):
-            meta = None
+        png, meta = logic.load_crater_mask_meta(os.path.join(paths.GENERATOR_OUTPUT_DIR, group), group)
         if meta is None or not os.path.isfile(png):
             self.export_crater_map(then=self.send_crater_map)
             return
@@ -747,44 +660,18 @@ class GroundTruthPage(ttk.Frame):
 
     def _track_style(self):
         """The tread look chosen in the Wheel Tracks group (unreal_wheel_tracks style)."""
-        pattern = dict(TRACK_PATTERNS).get(self.track_pattern_var.get(), "straight")
-        return {"pattern": pattern, "period_cm": float(self.track_spacing_var.get() or 3),
-                "relief": round(float(self.track_relief_var.get()), 2),
-                "shade": round(float(self.track_shade_var.get()), 2)}
+        return logic.track_style(self.track_pattern_var.get(), self.track_spacing_var.get(),
+                                 self.track_relief_var.get(), self.track_shade_var.get())
 
     def _refresh_track_preview(self, *_args):
         """Draws one wheel's track from above: 18 cm of tread, travel left to right."""
         style = self._track_style()
-        self.track_style_info.set(
-            f"{self.track_pattern_var.get()}, lugs every {style['period_cm']:g} cm, relief "
-            f"{style['relief']:.1f}, shade {style['shade']:.2f}")
+        self.track_style_info.set(logic.track_style_info(self.track_pattern_var.get(), style))
         canvas = self.track_preview
         canvas.delete("all")
-        width, height = max(canvas.winfo_width(), 160), 46
-        grey = int(208 * (0.85 + 0.15 * style["shade"]))
-        top, bottom = 8, height - 8
-        canvas.create_rectangle(0, top, width, bottom, outline="", fill=f"#{grey:02x}{grey:02x}{grey - 6:02x}")
-        if style["pattern"] == "smooth" or style["relief"] <= 0.01:
-            return
-        dark = max(0, grey - int(60 * min(style["relief"], 2.0)))
-        colour = f"#{dark:02x}{dark:02x}{max(dark - 6, 0):02x}"
-        cm = width / 18.0                       # 18 cm of track across the preview
-        period, lug = style["period_cm"] * cm, 0.4 * style["period_cm"] * cm
-        middle, inset = (top + bottom) / 2, 3
-        x = 0.0
-        while x < width + period:
-            if style["pattern"] == "straight":
-                canvas.create_rectangle(x, top + inset, x + lug, bottom - inset, outline="", fill=colour)
-            elif style["pattern"] == "chevron":
-                skew = 0.5 * period
-                canvas.create_polygon(x + skew, top + inset, x + skew + lug, top + inset, x + lug, middle,
-                                      x + skew + lug, bottom - inset, x + skew, bottom - inset, x, middle,
-                                      outline="", fill=colour)
-            else:                                # staggered blocks
-                canvas.create_rectangle(x, top + inset, x + lug, middle - 2, outline="", fill=colour)
-                canvas.create_rectangle(x + period / 2, middle + 2, x + period / 2 + lug, bottom - inset,
-                                        outline="", fill=colour)
-            x += period
+        for kind, coords, colour in logic.track_preview_shapes(style, canvas.winfo_width()):
+            draw = canvas.create_rectangle if kind == "rect" else canvas.create_polygon
+            draw(*coords, outline="", fill=colour)
 
     def apply_track_style(self):
         style = self._track_style()
@@ -821,69 +708,34 @@ class GroundTruthPage(ttk.Frame):
                 self.log("No answer from Unreal: is the editor running with Remote Execution?",
                          level="warn")
             return
-        options, streamed = [], None
-        for actor in found.get("actors", []):
-            for capture in actor["captures"]:
-                options.append(f"{actor['actor']} / {capture}")
-            if actor.get("streamer_mask"):
-                streamed = f"{actor['actor']} / {actor['streamer_mask']}"
+        options, streamed, info = logic.camera_choices(found)
         self.camera_box.configure(values=options)
         if streamed and (self.camera_var.get() not in options):
             self.camera_var.set(streamed)
-        self.camera_info_var.set(
-            (f"Streamed as the object mask now: {streamed}." if streamed
-             else "No UnrealStereoCam found: the mask is not streamed.")
-            + (" Play In Editor is running: camera changes last until it stops."
-               if found.get("pie") else ""))
+        self.camera_info_var.set(info)
         if not quiet:
             self.log(f"{len(options)} cameras listed.", level="ok")
 
     def _camera(self):
         """(actor label, capture name) from the camera box, or ('', '') when blank."""
-        text = self.camera_var.get().strip()
-        if " / " not in text:
-            return "", ""
-        actor, capture = text.split(" / ", 1)
-        return actor.strip(), capture.strip()
+        return logic.parse_camera(self.camera_var.get())
 
     # ------------------------------------------------------------- drawing
     def _message(self, text):
-        self.figure.clear()
-        axes = self.figure.add_subplot(111)
-        axes.axis("off")
-        axes.text(0.5, 0.5, text, ha="center", va="center", fontsize=12, transform=axes.transAxes)
+        plots.draw_message(self.figure, text)
         self.canvas.draw_idle()
 
     def _redraw(self):
-        """Relief with the crater map and the exported rocks, coloured by mask class."""
+        """Relief with the crater map, coloured by mask class."""
         if self.dem is None or not hasattr(self, "canvas"):
             return
-        self.figure.clear()
-        axes = self.figure.add_subplot(111)
-        dem, res = self.dem, self._resolution()
-        finite = np.where(np.isfinite(dem), dem, np.nanmin(dem))
-        relief = LightSource(azdeg=315, altdeg=45).hillshade(
-            finite, vert_exag=(0.1 * max(dem.shape)) / max(float(np.ptp(finite)), 1e-6))
-        extent = (-0.5 * res, (dem.shape[1] - 0.5) * res, (dem.shape[0] - 0.5) * res, -0.5 * res)
-        axes.imshow(relief, cmap="gray", extent=extent, vmin=0, vmax=1)
-        handles = []
         ids = self._read_ids()
-        title = "Crater mask"
+        labels = None
         if self.craters is not None and ids is not None:
             labels, _ids = self._labels()
-            overlay = np.zeros(labels.shape + (4,))
-            overlay[labels == ids["crater"]] = (1.0, 0.69, 0.0, 0.45)
-            overlay[(labels == ids["rim"]) & (ids["rim"] > 0)] = (0.23, 0.63, 1.0, 0.45)
-            axes.imshow(overlay, extent=extent, interpolation="nearest")
-            handles += [Patch(facecolor=(1.0, 0.69, 0.0, 0.6), label=f"Crater ({ids['crater']})")]
-            if ids["rim"] and self.rim_row.get() > 0:
-                handles.append(Patch(facecolor=(0.23, 0.63, 1.0, 0.6), label=f"Rim ({ids['rim']})"))
-            title += f"  -  {len(self.craters)} craters"
-        if handles:
-            axes.legend(handles=handles, loc="upper right", fontsize=7, framealpha=0.9)
-        axes.set_title(title, fontsize=9)
-        axes.set_xlabel("x (m)")
-        axes.set_ylabel("y (m)")
+        plots.draw_crater_mask(self.figure, self.dem, self._resolution(), labels, ids,
+                               self.rim_row.get() > 0,
+                               len(self.craters) if self.craters is not None else None)
         self.canvas.draw_idle()
 
     # ---------------------------------------------------------- main pump
@@ -900,11 +752,11 @@ class GroundTruthPage(ttk.Frame):
                 elif kind == "craters":
                     self.craters, self._crater_depth, then = payload
                     labels, ids = self._labels()
-                    cover = 100.0 * (labels == ids["crater"]).mean()
-                    origin = "from the generator" if self._crater_depth == "generator" else "detected"
-                    self.crater_info_var.set(f"{len(self.craters)} craters ({origin}), "
-                                             f"{cover:.1f}% of the map.")
-                    self.log(f"{len(self.craters)} craters {origin}.", level="ok")
+                    readout, line = logic.crater_summary(
+                        len(self.craters), 100.0 * (labels == ids["crater"]).mean(),
+                        self._crater_depth == "generator")
+                    self.crater_info_var.set(readout)
+                    self.log(line, level="ok")
                     self._redraw()
                     if then:
                         self.after(250, then)   # Once the worker thread has ended

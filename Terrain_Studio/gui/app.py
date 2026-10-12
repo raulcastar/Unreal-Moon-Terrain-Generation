@@ -19,7 +19,8 @@ from gui import paths
 from gui.backend import terrain_core, LOADER_AVAILABLE, LOADER_IMPORT_ERROR
 from gui.dem_files import scan_dem_folder
 from gui.generator_page import GeneratorPage
-from gui.ground_truth_page import GroundTruthPage, DEFAULT_MASK_IDS
+from gui.ground_truth_logic import DEFAULT_MASK_IDS
+from gui.ground_truth_page import GroundTruthPage
 from gui.landscape_page import LandscapePage
 from gui.map_views import MapBrowser
 from gui.rock_planner_page import RockPlannerPage
