@@ -44,6 +44,10 @@ Every view opens in the same window and has a **⌂ Home** button to return.
   lists the exact filenames before you run. It also writes `<name>_craters.csv`,
   every crater it placed (`id, row, col, radius_px, x_m, y_m, radius_m, depth_m,
   rim_height_m, ejecta_radius_m`), which step 3 uses as exact crater ground truth.
+  With CSV export, `<name>_elevationMap.csv` and `<name>_soilMap.csv` (interior
+  1, border 0) are the maps the GNC path planner reads: copy them to
+  `GNC-Moon-Simulator/component_path_planner/maps/` and name them in its
+  `config/params.yaml`.
 
 Column widths are adjustable with the drag handles.
 
@@ -134,9 +138,12 @@ Shows craters and shadows in the rover's object mask, alongside the rocks:
      streamed mask camera.
 
    **Restore Original Mask Material** undoes the material change.
-4. **GNC Labels** lists the `mask_labels` that
-   `GNC-Moon-Simulator/component_stereo_depth/config/params.yaml` needs, for the
-   rock and crater ids together, ready to copy.
+4. **GNC Labels** shows the object-mask classes with the rock and crater ids
+   chosen here, and whether the GNC simulator's copy
+   (`GNC-Moon-Simulator/component_stereo_depth/config/mask_classes.json`, read
+   when that repository sits next to this one) differs. **Copy** puts a complete
+   `mask_classes.json` with these ids on the clipboard, to paste into the GNC
+   copy (and into `config/` here to keep changed ids).
 
 Where the craters come from:
 
@@ -205,10 +212,14 @@ ground, objects and sky.
 
 ### Object mask ids
 
-The object mask's ids are consecutive, and each is drawn in one fixed colour
-(`MASK_IDS` and `MASK_PALETTE` in `Terrain_Studio/unreal_commands/unreal_ground_truth.py`;
-the GNC dashboard's `MASK_COLOURS` and `mask_labels` in
-`component_stereo_depth/config/params.yaml` match them):
+The object mask's ids are consecutive, and each is drawn in one fixed colour.
+They are defined once, in `config/mask_classes.json` (id, name, group, colour),
+read by `Terrain_Studio/unreal_link/mask_classes.py` for the mask material's
+palette, the actors' stencils, the crater map and the GUI. The GNC simulator
+keeps a copy of the same file (`component_stereo_depth/config/mask_classes.json`):
+its stereo node publishes the classes and its dashboard draws the legends from
+them. Edit both together; the file is read on every action, so an edit applies
+without restarting the editor.
 
 | Id | Class | Colour (RGB) | Comes from |
 | --- | --- | --- | --- |
@@ -483,7 +494,7 @@ already on disk.
 
 | Folder | Contents | Tracked |
 | --- | --- | --- |
-| `config/` | Terrain presets (YAML) | yes |
+| `config/` | Terrain presets (YAML; `settings.yaml` is the CLI's default) and `mask_classes.json` | yes |
 | `input_maps/` | Source DEMs: `.npy`, `.csv`, `.txt`, `.tif` | no |
 | `outputs/<name>/` | Everything generated for one map | no |
 
@@ -498,7 +509,7 @@ python generate_cli.py -c ../../config/lunar_1m.yaml -n my_terrain --no-preview
 
 | Flag | Meaning |
 | --- | --- |
-| `-c, --config` | YAML preset (created with defaults if missing) |
+| `-c, --config` | YAML preset (default `config/settings.yaml`; created with defaults if missing) |
 | `-o, --output-dir` | Destination (default `<repo>/outputs`) |
 | `-n, --name` | Base filename |
 | `--no-preview` | Skip the Matplotlib window |
@@ -591,6 +602,7 @@ Terrain_Studio/
     send_sun.py                  Sun
     heightmap_files.py           DEM reading, 16-bit heightmap, Landscape sizing
     rock_models.py               Rock model sizes (also used inside Unreal)
+    mask_classes.py              Object-mask classes from config/mask_classes.json (also used inside Unreal)
     runtime_sync.py              Copies unreal_runtime/ into the Unreal project
   unreal_commands/               Runs inside Unreal when the studio sends
     unreal_landscape.py          Builds the Landscape
