@@ -89,16 +89,19 @@ def update_sun_mask(world, state=None):
 
 def find_streamer(actor):
     """
-    The actor's UnrealStereoCam that streams the object mask: an actor can carry
-    several (e.g. the navcam rig plus a rear camera), and only one has a mask
-    capture. Falls back to the first one when none has.
+    The actor's UnrealStereoCam that streams the main object mask: an actor can
+    carry several (e.g. the navcam rig plus a rear camera), and more than one
+    may stream a mask (the rear camera's own). The stereo rig's (it has a left
+    eye) wins, then any with a mask capture, then the first one.
     """
+    def named(streamer, prop):
+        return str(streamer.get_editor_property(prop)) not in ("", "None")
+
     streamers = [c for c in actor.get_components_by_class(unreal.ActorComponent)
                  if c.get_class().get_name() == "UnrealStereoCam"]
-    for streamer in streamers:
-        if str(streamer.get_editor_property("mask_capture_name")) not in ("", "None"):
-            return streamer
-    return streamers[0] if streamers else None
+    with_mask = [s for s in streamers if named(s, "mask_capture_name")]
+    rig = [s for s in with_mask if named(s, "left_capture_name")]
+    return (rig or with_mask or streamers or [None])[0]
 
 
 def place_shadow_map(world, helper, capture, state=None):

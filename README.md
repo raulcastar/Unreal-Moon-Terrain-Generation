@@ -135,7 +135,13 @@ Shows craters and shadows in the rover's object mask, alongside the rocks:
      ([Rover shadow](#rover-shadow));
    - sets up the chosen camera: it gets `PPM_GroundTruthMask` and the sun-only render
      shadows need, and, if its actor has an UnrealStereoCam, it becomes the
-     streamed mask camera.
+     streamed mask camera (of the navcam rig's UnrealStereoCam, when the actor
+     has several).
+
+   The rover's rear camera has a mask capture of its own, `RearCam_Mask`,
+   streamed by `RearCam_Stream` (see the GNC simulator's UnrealStereoCam
+   README). It uses the same `PPM_GroundTruthMask`, so every send updates it too;
+   keep `Navcam_Mask` as the mask camera chosen here.
 
    **Restore Original Mask Material** undoes the material change.
 4. **GNC Labels** shows the object-mask classes with the rock and crater ids
