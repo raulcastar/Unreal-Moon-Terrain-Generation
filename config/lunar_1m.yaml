@@ -6,7 +6,7 @@
 ROWS: 1000
 COLS: 1000
 BASE_ELEVATION: 200.0
-RANDOM_SEED: null           # Set to null for infinite variations, or a number (e.g., 42) to lock it.
+RANDOM_SEED: 10           # Set to null for infinite variations, or a number (e.g., 42) to lock it.
 
 # --- Macro-Terrain (Rolling Hills) ---
 MACRO_ELEVATION_MIN: 30.0    # Minimum height differential for hills
