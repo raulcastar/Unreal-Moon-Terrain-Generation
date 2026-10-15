@@ -114,6 +114,9 @@ def test_cameras():
     assert options == ["Leo_Raph0 / Navcam_Mask", "Leo_Raph0 / RearCam"]
     assert streamed == "Leo_Raph0 / Navcam_Mask" and "Play In Editor" in info
     assert logic.camera_choices({"actors": []})[1] is None
+    # Any rover's mask capture is the default, not one rover's label
+    assert logic.default_camera(["Yutu_Rover0 / Rear_Mask", "Yutu_Rover0 / Navcam_Mask"]) == "Yutu_Rover0 / Navcam_Mask"
+    assert logic.default_camera(["Probe / Capture"]) is None
 
 
 def test_crater_mask_drawing():

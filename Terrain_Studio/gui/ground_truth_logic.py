@@ -206,6 +206,11 @@ def parse_camera(text):
     return actor.strip(), capture.strip()
 
 
+def default_camera(options, capture="Navcam_Mask"):
+    """The first rover's mask capture among the camera box's options (any rover), or None."""
+    return next((o for o in options if parse_camera(o)[1] == capture), None)
+
+
 def camera_choices(found):
     """
     From send_masks.list_mask_cameras' answer: (options for the camera box,

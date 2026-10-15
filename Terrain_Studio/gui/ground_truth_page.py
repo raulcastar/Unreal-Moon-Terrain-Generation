@@ -282,7 +282,8 @@ class GroundTruthPage(ttk.Frame):
                            "streamed as the mask camera.")
         camera_row = ttk.Frame(camera)
         camera_row.pack(fill="x", pady=(4, 0))
-        self.camera_var = tk.StringVar(value="Leo_Raph0 / Navcam_Mask")
+        # Blank (mask camera unchanged) until Find lists the level's cameras: any rover's.
+        self.camera_var = tk.StringVar(value="")
         self.camera_box = ttk.Combobox(camera_row, textvariable=self.camera_var,
                                        font=("Consolas", 8))
         self.camera_box.pack(side="left", fill="x", expand=True)
@@ -710,8 +711,9 @@ class GroundTruthPage(ttk.Frame):
             return
         options, streamed, info = logic.camera_choices(found)
         self.camera_box.configure(values=options)
-        if streamed and (self.camera_var.get() not in options):
-            self.camera_var.set(streamed)
+        default = streamed or logic.default_camera(options)
+        if default and (self.camera_var.get() not in options):
+            self.camera_var.set(default)
         self.camera_info_var.set(info)
         if not quiet:
             self.log(f"{len(options)} cameras listed.", level="ok")
