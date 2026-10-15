@@ -3,12 +3,10 @@ Rock Field & Rover Paths logic: the parameter schema, input parsing and the
 text read-outs. No Tk, no Matplotlib.
 """
 
+import json
 import os
 
 import numpy as np
-
-# Planned-to-model size ratio beyond which the planner warns about visible scaling.
-MODEL_SCALE_WARN = 3.0
 
 # Measured Unreal placement cost (10,338 rocks in 158 s, one actor per rock;
 # fields are now instanced). Above UNREAL_ROCKS_WARN rocks, the estimate also
@@ -33,15 +31,18 @@ ROCK_PARAM_GROUPS = [
          "Lower values flag shallower craters; higher values ignore them."),
     ]),
     ("Rock Population", [
-        ("ROCK_COVERAGE", "Coverage (fraction)", 0.0, 0.05, 'float',
+        # Logarithmic: on 1 km2 the useful range runs from tens of rocks (1e-4)
+        # to tens of thousands (0.05), and a linear slider crammed everything
+        # below a few thousand rocks into its first few pixels.
+        ("ROCK_COVERAGE", "Coverage (fraction)", 1e-4, 0.05, 'log',
          "Target fraction of the drivable ground covered by rock footprints.\n"
+         "On 1 km2: 1e-3 is about 900 rocks, 0.01 about 8,600, 0.03 about 26,000.\n"
          "Small rocks need many more instances for the same coverage: the\n"
-         "estimate below shows the count before you preview."),
+         "estimate below shows the count before you preview. Type 0 for none."),
         ("ROCK_MIN_SCALE", "Min radius (m)", 0.01, 10.0, 'log',
          "Smallest rock footprint radius, in metres. In Unreal each model is\n"
-         "scaled uniformly so its footprint matches the planned radius, so plan\n"
-         "near the models' own size (Place in Unreal > Match Rock Sizes to\n"
-         "Models) to avoid stretching them."),
+         "scaled uniformly so its footprint matches the planned radius, whatever\n"
+         "size the model itself is."),
         ("ROCK_MAX_SCALE", "Max radius (m)", 0.01, 30.0, 'log',
          "Largest rock footprint radius, in metres. Radii follow the lunar\n"
          "size-frequency law (count of rocks larger than r ~ r^-2.5), so most\n"
@@ -76,6 +77,64 @@ def parse_stencils(boulder_text, small_text, radius_text):
     return boulder, small, radius
 
 
+# What an exported rock field was made from, saved beside it so placing can
+# tell whether the file on disk is what the controls now describe.
+SETTINGS_LABELS = {
+    "PATH_WIDTH_M": "path width", "MIN_CRATER_DEPTH_M": "min crater depth",
+    "ROCK_COVERAGE": "coverage", "ROCK_MIN_SCALE": "min radius", "ROCK_MAX_SCALE": "max radius",
+    "ROCK_HEIGHT_RATIO": "height / radius", "seed": "seed", "resolution": "resolution",
+    "dem": "DEM", "craters": "crater source",
+}
+
+
+def export_settings(params, seed, resolution, dem_path, craters):
+    """The settings an export is made from (craters: 'generator' or 'detected')."""
+    out = {key: round(float(params[key]), 9) for key in SETTINGS_LABELS if key in params}
+    out.update({"seed": seed, "resolution": round(float(resolution), 9),
+                "dem": os.path.normcase(os.path.abspath(dem_path)) if dem_path else None,
+                "craters": craters})
+    return out
+
+
+def settings_path(rocks_csv):
+    """<group>_rocks_settings.json, beside <group>_rocks.csv."""
+    return os.path.splitext(rocks_csv)[0] + "_settings.json"
+
+
+def save_settings(rocks_csv, settings):
+    with open(settings_path(rocks_csv), "w", encoding="utf-8") as handle:
+        json.dump(settings, handle, indent=1)
+
+
+def load_settings(rocks_csv):
+    """The settings saved with an export, or None (none saved, or unreadable)."""
+    try:
+        with open(settings_path(rocks_csv), encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return None
+
+
+def settings_changes(saved, current):
+    """Readable names of what differs between an export's settings and the current ones."""
+    if saved is None:
+        return None
+    keys = [k for k in SETTINGS_LABELS if saved.get(k) != current.get(k)]
+    return [SETTINGS_LABELS[k] for k in keys]
+
+
+def export_status(rocks_exists, changes):
+    """(text, level) under the Export & Unreal buttons: is the rock file current?"""
+    if not rocks_exists:
+        return "No rock field exported yet: Generate & Export first.", "warn"
+    if changes is None:
+        return "Rock file exported earlier; its settings were not recorded.", "warn"
+    if changes:
+        return ("Settings changed since the last export (" + ", ".join(changes) +
+                "): Place would use the old field.", "warn")
+    return "The exported rock field matches the current settings.", "ok"
+
+
 def rocks_csv_path(output_dir, base_name):
     """Where a field's rock list is exported: <output_dir>/<base>/<base>_rocks.csv."""
     return os.path.join(output_dir, base_name, f"{base_name}_rocks.csv")
@@ -96,12 +155,6 @@ def export_confirmation(dem_name, files, path_block):
             + path_block + "\n\nContinue?")
 
 
-def is_stretched(scale_range):
-    """Whether the models are scaled far from their own size (MODEL_SCALE_WARN)."""
-    return bool(scale_range) and (scale_range[1] > MODEL_SCALE_WARN
-                                  or scale_range[0] < 1.0 / MODEL_SCALE_WARN)
-
-
 def model_info_text(model_sizes, scale_range, planned_ratio):
     """
     The read-out comparing planned rock sizes with the models: model_sizes is
@@ -115,12 +168,14 @@ def model_info_text(model_sizes, scale_range, planned_ratio):
     smallest, largest = scale_range
     text = (f"Models: radius {low:.3f}-{high:.3f} m, height {ratio:.2f} x radius.\n"
             f"Planned radii scale them {smallest:.2g}x-{largest:.2g}x.")
-    if is_stretched(scale_range):
-        text += (" Rocks will look much larger or smaller than modelled: "
-                 "use Match Rock Sizes to Models.")
-    if abs(planned_ratio - ratio) > 0.25 * ratio:
-        text += (f"\nHeight / radius is {planned_ratio:.2f}, the models are {ratio:.2f}: "
-                 "height_m in the CSV will not match the placed rocks.")
+    # height_m is a maximum in Unreal (unreal_rocks): taller models are flattened
+    # to it, squatter ones keep their proportions and stay below it.
+    if ratio > 1.25 * planned_ratio:
+        text += (f"\nThe models are taller ({ratio:.2f} x radius) than Height / radius "
+                 f"({planned_ratio:.2f}): Unreal flattens them to height_m.")
+    elif ratio < 0.8 * planned_ratio:
+        text += (f"\nThe models are squatter ({ratio:.2f} x radius) than Height / radius "
+                 f"({planned_ratio:.2f}): placed rocks stay lower than height_m in the CSV.")
     return text
 
 

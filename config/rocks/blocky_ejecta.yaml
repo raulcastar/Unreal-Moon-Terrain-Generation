@@ -1,0 +1,22 @@
+# ==========================================
+# ROCK FIELD PRESET: blocky ejecta around a fresh crater
+# ==========================================
+# Fresh craters are ringed by boulder fields covering several percent of the
+# ground, much rockier than the average surface (see lunar_mare.yaml). A
+# demanding test for obstacle avoidance. Rough count: ~69,000 rocks per km2 of
+# drivable ground; ~17 min to place in Unreal (the planner stops at 100,000).
+
+# --- Rover corridor ---
+PATH_WIDTH_M: 4.0
+
+# --- Crater hazards ---
+MIN_CRATER_DEPTH_M: 0.5
+
+# --- Rock population ---
+ROCK_COVERAGE: 0.04
+ROCK_MIN_SCALE: 0.2
+ROCK_MAX_SCALE: 3.0
+ROCK_HEIGHT_RATIO: 0.7
+
+# --- Object mask (when placing in Unreal) ---
+BOULDER_MIN_RADIUS_M: 0.5   # Rocks this radius and larger are 'boulder' (id 9), smaller 'small_rock' (id 10)

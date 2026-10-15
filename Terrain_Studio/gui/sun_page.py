@@ -21,7 +21,7 @@ from gui.sun_logic import SUN_DISPLAY_MODES, SUN_ORIENTATIONS, SUN_PREVIEW_SIZES
 from gui.backend import sun_shadows, send_sun, LOADER_AVAILABLE
 from gui.dem_files import DEM_FILETYPES, dem_source_note, drop_dem_menu, load_dem_array
 from gui.paths import map_browse_dir
-from gui.widgets import ParamRow, ProgressPanel, Tooltip
+from gui.widgets import ParamRow, ProgressPanel, StepTabs, Tooltip
 
 
 class SunPage(ttk.Frame):
@@ -82,15 +82,19 @@ class SunPage(ttk.Frame):
         ttk.Label(top_bar, text="Sun & Shadows",
                   font=("Segoe UI Semibold", 11)).pack(side="left", padx=(8, 0))
 
-        actions = ttk.Frame(left)
-        actions.pack(side="bottom", fill="x", pady=(6, 0))
-        self.send_button = ttk.Button(actions, text="Send Sun to Unreal",
+        # One tab per step, each with its settings and, pinned beneath them, its
+        # buttons; the map they all use stays above the tabs.
+        self.steps = StepTabs(left, background=self.app.cget("background"),
+                              on_width=self._rewrap_labels)
+        sun_tab, _ = self.steps.add_step("Sun")
+        unreal_tab, unreal_actions = self.steps.add_step("Unreal")
+
+        self.send_button = ttk.Button(unreal_actions, text="Send Sun to Unreal",
                                       style="Accent.TButton", command=self.send_to_unreal)
         self.send_button.pack(fill="x")
         Tooltip(self.send_button,
-                "Points the level's sun at this position, with lunar settings.\n"
-                "See 'Unreal Light' below for what is changed.")
-        self.read_button = ttk.Button(actions, text="Read Sun from Unreal",
+                "Points the level's sun at this position, with lunar settings.")
+        self.read_button = ttk.Button(unreal_actions, text="Read Sun from Unreal",
                                       command=self.read_from_unreal)
         self.read_button.pack(fill="x", pady=(4, 0))
         Tooltip(self.read_button, "Sets the sliders to the sun currently in the Unreal level.")
@@ -98,34 +102,13 @@ class SunPage(ttk.Frame):
             self.send_button.state(["disabled"])
             self.read_button.state(["disabled"])
 
-        scroll_host = ttk.Frame(left)
-        scroll_host.pack(side="top", fill="both", expand=True, pady=(8, 0))
-        canvas = tk.Canvas(scroll_host, highlightthickness=0, borderwidth=0,
-                           background=self.app.cget("background"))
-        scrollbar = ttk.Scrollbar(scroll_host, orient="vertical", command=canvas.yview)
-        inner = ttk.Frame(canvas)
-        inner.bind("<Configure>",
-                   lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        window = canvas.create_window((0, 0), window=inner, anchor="nw")
-
-        def on_canvas_resize(event):
-            canvas.itemconfigure(window, width=event.width)
-            self._rewrap_labels(event.width)
-
-        canvas.bind("<Configure>", on_canvas_resize)
-        canvas.configure(yscrollcommand=scrollbar.set)
-        # The scrollbar is packed first: packed after an expanding canvas it is the
-        # one squeezed out when the panel is narrow, and the panel no longer shows
-        # that it scrolls (the controls below the window looked missing).
-        scrollbar.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-
-        self._add_hint(inner, "Places the sun so shadows fall where you want them, shows "
+        self._add_hint(sun_tab, "Places the sun so shadows fall where you want them, shows "
                               "the terrain lit by it, and sets the matching light in Unreal.",
                        pady=(0, 8))
 
         # Source DEM
-        source_group = self._group(inner, "Source DEM")
+        source_group = self._group(left, "Source DEM")
+        source_group.pack_configure(pady=(8, 6))
         self.source_var = tk.StringVar(value="(none - load a DEM)")
         ttk.Entry(source_group, textvariable=self.source_var, state="readonly",
                   font=("Consolas", 8)).pack(fill="x")
@@ -164,7 +147,7 @@ class SunPage(ttk.Frame):
         self._wrapping_labels[-1].pack(anchor="w", pady=(4, 0))
 
         # Sun position
-        sun_group = self._group(inner, "Sun Position")
+        sun_group = self._group(sun_tab, "Sun Position")
         self.azimuth_row = ParamRow(sun_group, (
             "SUN_AZ", "Azimuth (deg)", 0.0, 360.0, 'float',
             "Direction the sunlight comes from, clockwise from the top of the DEM\n"
@@ -184,7 +167,7 @@ class SunPage(ttk.Frame):
         self._wrapping_labels[-1].pack(anchor="w", pady=(4, 0))
 
         # Shadow tool
-        shadow_group = self._group(inner, "Place a Shadow")
+        shadow_group = self._group(sun_tab, "Place a Shadow")
         self._add_hint(shadow_group,
                        "On the map, click where an object stands and drag to where its "
                        "shadow should end: the sun moves to cast exactly that shadow. "
@@ -218,7 +201,7 @@ class SunPage(ttk.Frame):
                    command=self.clear_probe).pack(side="left", fill="x", expand=True, padx=(4, 0))
 
         # Display
-        display_group = self._group(inner, "Display")
+        display_group = self._group(sun_tab, "Display")
         mode_row = ttk.Frame(display_group)
         mode_row.pack(fill="x")
         ttk.Label(mode_row, text="Map", font=("Segoe UI", 8)).pack(side="left")
@@ -246,7 +229,7 @@ class SunPage(ttk.Frame):
                 "DEM image flipped left to right.")
 
         # Unreal light settings
-        unreal_group = self._group(inner, "Unreal Light")
+        unreal_group = self._group(unreal_tab, "Unreal Light")
         settings = ttk.Frame(unreal_group)
         settings.pack(fill="x")
         settings.columnconfigure(0, weight=1)
@@ -275,8 +258,8 @@ class SunPage(ttk.Frame):
                        "running game changes; send again after stopping it to keep the sun.",
                        parent_pad=(6, 0))
 
-        self._bind_mousewheel(inner, canvas)
-        self._bind_mousewheel(canvas, canvas)
+        self.steps.pack(fill="both", expand=True)
+        self.steps.bind_mousewheel()
 
         # Right: map / 3D tabs on top, log at the bottom.
         right = ttk.Frame(self._panes)
@@ -345,12 +328,6 @@ class SunPage(ttk.Frame):
                 return
         if attempt < 6:
             self.after(60, lambda: self._place_sash(attempt + 1))
-
-    def _bind_mousewheel(self, widget, canvas):
-        widget.bind("<MouseWheel>",
-                    lambda e: canvas.yview_scroll(int(-e.delta / 120), "units"))
-        for child in widget.winfo_children():
-            self._bind_mousewheel(child, canvas)
 
     def _rewrap_labels(self, width):
         wrap = max(160, width - 24)

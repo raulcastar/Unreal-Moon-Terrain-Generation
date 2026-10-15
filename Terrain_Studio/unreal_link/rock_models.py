@@ -127,6 +127,34 @@ def size_summary(rows):
     return min(r for r, _h in known), max(r for r, _h in known), median
 
 
+# glTF material slots (Unreal's glTF material instances) and the texture-name
+# endings that fill them (Poly Haven and similar naming: <rock>_diff, _rough or
+# _arm, _nor_gl). Unreal's importer sometimes leaves a slot on its placeholder,
+# e.g. when one material is shared by several meshes (a file holding its LODs).
+GLTF_TEXTURE_SLOTS = (
+    ("BaseColorTexture", ("_diff", "_diffuse", "_albedo", "_basecolor", "_color", "_col")),
+    ("MetallicRoughnessTexture", ("_arm", "_rough", "_roughness", "_orm", "_metallicroughness")),
+    ("NormalTexture", ("_nor_gl", "_normal_gl", "_nor", "_normal", "_nrm")),
+)
+# Engine textures a slot holds when the importer did not assign one.
+GLTF_PLACEHOLDER_TEXTURES = ("T_White_srgb", "T_White_Linear", "T_Generic_N", "T_Black_srgb",
+                             "T_Black_Linear", "T_Flat_N")
+
+
+def texture_for_slot(slot, texture_names):
+    """
+    The texture among `texture_names` (asset or file names) that belongs in a
+    glTF material `slot`, by its name's ending, or None. Name order breaks ties.
+    """
+    endings = dict(GLTF_TEXTURE_SLOTS).get(slot, ())
+    for ending in endings:                       # most specific ending first
+        for name in texture_names:
+            stem = os.path.splitext(name)[0].lower()
+            if stem.endswith(ending) or (ending + "_") in stem:
+                return name
+    return None
+
+
 # Size ratio, relative to the best fit, within which a model is eligible for a
 # rock. Keeps variety without scaling models far from their native size.
 FIT_TOLERANCE = 1.5

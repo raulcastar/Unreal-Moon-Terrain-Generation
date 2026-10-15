@@ -25,7 +25,8 @@ from gui.dem_files import (DEM_FILETYPES, dem_group_name, dem_source_note, drop_
                            load_dem_array, planned_rock_files)
 from gui.ground_truth_logic import DEFAULT_MASK_IDS, crater_list_for, crater_source_info, mask_ids
 from gui.paths import map_browse_dir
-from gui.widgets import ParamRow, ProgressPanel, Tooltip, ask_confirmation, format_path_block
+from gui.widgets import (ParamRow, ProgressPanel, StepTabs, Tooltip, ask_confirmation,
+                         format_path_block)
 
 
 class RockPlannerPage(ttk.Frame):
@@ -59,6 +60,9 @@ class RockPlannerPage(ttk.Frame):
 
         self._build_ui()
         self._apply_params_to_widgets()
+        default_preset = os.path.join(paths.ROCK_CONFIG_DIR, paths.DEFAULT_ROCK_PRESET)
+        if os.path.isfile(default_preset):
+            self.load_preset(default_preset, preview=False)
         self.resolution_var.set(f"{resolution:g}")
         self._refresh_rock_estimate()
 
@@ -89,61 +93,37 @@ class RockPlannerPage(ttk.Frame):
         ttk.Label(top_bar, text="Rock Field & Rover Paths",
                   font=("Segoe UI Semibold", 11)).pack(side="left", padx=(8, 0))
 
-        # Action bar pinned to the bottom, packed BEFORE the scroll area so it
-        # always keeps its space and the buttons stay reachable at any height.
-        actions = ttk.Frame(left)
-        actions.pack(side="bottom", fill="x", pady=(6, 0))
-        self.preview_button = ttk.Button(actions, text="Update Preview",
-                                         command=self.request_preview)
+        # Each step of the planner is a tab with its settings and, pinned beneath
+        # them, its own buttons; the map they all work on stays above the tabs.
+        self.steps = StepTabs(left, background=self.app.cget("background"),
+                              on_width=self._rewrap_labels)
+        plan, plan_actions = self.steps.add_step("Plan")
+        self._build_preset_bar(plan)
+        # Export and placing share one tab: Place Rocks in Unreal uses the field
+        # Generate & Export wrote, so the two buttons sit together, with a line
+        # saying whether that file still matches the settings.
+        export_tab, export_actions = self.steps.add_step("Export & Unreal")
+        unreal_tab, unreal_actions = export_tab, export_actions
+        self.export_status_var = tk.StringVar()
+        self.export_status_label = ttk.Label(export_actions, textvariable=self.export_status_var,
+                                             justify="left", style="Readout.TLabel")
+        self.export_status_label.pack(anchor="w", pady=(0, 4))
+        self._wrapping_labels.append(self.export_status_label)
+
+        self.preview_button = ttk.Button(plan_actions, text="Update Preview",
+                                         style="Accent.TButton", command=self.request_preview)
         self.preview_button.pack(fill="x")
-        self.stop_button = ttk.Button(actions, text="Stop", command=self.stop_job)
-        self.stop_button.pack(fill="x", pady=(4, 0))
-        self.stop_button.state(["disabled"])
-        Tooltip(self.stop_button,
-                "Stops the running plan at its next checkpoint (slope, corridors, or\n"
-                "rock placement). The DEM stays loaded so you can retune and retry.")
-        self.export_button = ttk.Button(actions, text="Generate & Export",
+        self.export_button = ttk.Button(export_actions, text="Generate & Export",
                                         style="Accent.TButton", command=self.export_plan)
-        self.export_button.pack(fill="x", pady=(4, 0))
-        ttk.Button(actions, text="Open output folder",
-                   command=self.open_output_folder).pack(fill="x", pady=(4, 0))
+        self.export_button.pack(fill="x")
+        self.open_folder_button = ttk.Button(export_actions, text="Open output folder",
+                                             command=self.open_output_folder)
 
-        # Scrollable parameter area between the top bar and the action bar.
-        scroll_host = ttk.Frame(left)
-        scroll_host.pack(side="top", fill="both", expand=True, pady=(8, 0))
-        # A ttk.Frame has no -background of its own, so take the window's.
-        canvas = tk.Canvas(scroll_host, highlightthickness=0, borderwidth=0,
-                           background=self.app.cget("background"))
-        scrollbar = ttk.Scrollbar(scroll_host, orient="vertical", command=canvas.yview)
-        inner = ttk.Frame(canvas)
-        inner.bind("<Configure>",
-                   lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        window = canvas.create_window((0, 0), window=inner, anchor="nw")
-
-        def on_canvas_resize(event):
-            canvas.itemconfigure(window, width=event.width)
-            # During <Configure>, winfo_width() still reports the old width.
-            self._rewrap_labels(event.width)
-
-        canvas.bind("<Configure>", on_canvas_resize)
-        canvas.configure(yscrollcommand=scrollbar.set)
-        # The scrollbar is packed first: packed after an expanding canvas it is the
-        # one squeezed out when the panel is narrow, and the panel no longer shows
-        # that it scrolls (the controls below the window looked missing).
-        scrollbar.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-
-        self._wrapping_labels.append(ttk.Label(
-            inner, justify="left", font=("Segoe UI", 8), foreground="#555555",
-            text="Scatters rocks as obstacles across the drivable terrain while "
-                 "keeping a connected corridor network the rover can always "
-                 "traverse."))
-        self._wrapping_labels[-1].pack(anchor="w", pady=(0, 8), fill="x")
 
         # Source DEM
-        source_group = ttk.Labelframe(inner, text="Source DEM", padding=(8, 4, 8, 8),
+        source_group = ttk.Labelframe(left, text="Source DEM", padding=(8, 4, 8, 8),
                                       style="Group.TLabelframe")
-        source_group.pack(fill="x", pady=(0, 8))
+        source_group.pack(fill="x", pady=(8, 6))
         self.source_var = tk.StringVar(value="(none - load a DEM)")
         ttk.Entry(source_group, textvariable=self.source_var, state="readonly",
                   font=("Consolas", 8)).pack(fill="x")
@@ -176,7 +156,7 @@ class RockPlannerPage(ttk.Frame):
 
         # Parameters
         for group_name, specs in ROCK_PARAM_GROUPS:
-            group = ttk.Labelframe(inner, text=group_name, padding=(8, 4, 8, 8),
+            group = ttk.Labelframe(plan, text=group_name, padding=(8, 4, 8, 8),
                                    style="Group.TLabelframe")
             group.pack(fill="x", pady=(0, 8))
             if group_name == "Crater Hazards":
@@ -190,8 +170,13 @@ class RockPlannerPage(ttk.Frame):
                     group, textvariable=self.rock_estimate_var, justify="left",
                     style="Readout.TLabel"))
                 self._wrapping_labels[-1].pack(anchor="w", pady=(4, 0))
+                # The models are scaled to these sizes, so they sit with the size
+                # parameters (with how much they are scaled); filled further down.
+                self._models_group = ttk.Labelframe(plan, text="Rock Models",
+                                                    padding=(8, 4, 8, 8), style="Group.TLabelframe")
+                self._models_group.pack(fill="x", pady=(0, 8))
 
-        seed_group = ttk.Labelframe(inner, text="Determinism", padding=(8, 4, 8, 8),
+        seed_group = ttk.Labelframe(plan, text="Determinism", padding=(8, 4, 8, 8),
                                     style="Group.TLabelframe")
         seed_group.pack(fill="x", pady=(0, 8))
         seed_row = ttk.Frame(seed_group)
@@ -205,11 +190,13 @@ class RockPlannerPage(ttk.Frame):
         seed_entry.bind("<FocusOut>", lambda e: self.request_preview())
 
         self.auto_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(inner, text="Auto-update preview on change",
-                        variable=self.auto_var).pack(anchor="w", pady=(0, 8))
+        # With the button it controls, pinned under the tab.
+        ttk.Checkbutton(self.preview_button.master, text="Auto-update preview on change",
+                        variable=self.auto_var).pack(anchor="w", pady=(0, 4),
+                                                     before=self.preview_button)
 
-        # Export options (the buttons themselves live in the pinned action bar).
-        export_group = ttk.Labelframe(inner, text="Export", padding=(8, 4, 8, 8),
+        # Export options (the buttons themselves are pinned under the tab).
+        export_group = ttk.Labelframe(export_tab, text="Export", padding=(8, 4, 8, 8),
                                       style="Group.TLabelframe")
         export_group.pack(fill="x", pady=(0, 4))
         ttk.Label(export_group, text="Base filename", font=("Segoe UI", 8)).pack(anchor="w")
@@ -242,12 +229,13 @@ class RockPlannerPage(ttk.Frame):
         self._refresh_output_preview()
 
         # Place the exported rock field in a running Unreal Editor.
-        unreal_group = ttk.Labelframe(inner, text="Place in Unreal", padding=(8, 4, 8, 8),
+        unreal_group = ttk.Labelframe(unreal_tab, text="Place in Unreal", padding=(8, 4, 8, 8),
                                       style="Group.TLabelframe")
-        unreal_group.pack(fill="x", pady=(4, 4))
-        ttk.Label(unreal_group, text="Rock models folder",
+        unreal_group.pack(fill="x", pady=(0, 4))
+        models_group = self._models_group
+        ttk.Label(models_group, text="Folder (.gltf, .glb, .obj, .fbx)",
                   font=("Segoe UI", 8)).pack(anchor="w")
-        models_row = ttk.Frame(unreal_group)
+        models_row = ttk.Frame(models_group)
         models_row.pack(fill="x", pady=(2, 2))
         self.models_folder_var = tk.StringVar(value="(none selected)")
         self.models_folder = None
@@ -256,29 +244,25 @@ class RockPlannerPage(ttk.Frame):
         ttk.Button(models_row, text="Browse...", width=9,
                    command=self.browse_models_folder).pack(side="left", padx=(4, 0))
         self._wrapping_labels.append(ttk.Label(
-            unreal_group, justify="left", style="HomeHint.TLabel",
-            text=".gltf, .glb, .obj or .fbx, in subfolders too. glTF keeps its own "
-                 "materials; .obj/.fbx take the texture with the same name. "
-                 "Import the heightmap into the Landscape first: rocks are "
-                 "dropped onto its surface."))
+            models_group, justify="left", style="HomeHint.TLabel",
+            text="Subfolders too. glTF keeps its own materials; .obj/.fbx take the "
+                 "texture with the same name. The models are what Unreal places."))
         self._wrapping_labels[-1].pack(anchor="w", pady=(0, 4))
+        self._wrapping_labels.append(ttk.Label(
+            unreal_group, justify="left", style="HomeHint.TLabel",
+            text="Places the exported rock field with the models chosen on the Plan "
+                 "tab. Send the heightmap to Unreal first: rocks are dropped onto the "
+                 "Landscape's surface."))
+        self._wrapping_labels[-1].pack(anchor="w", pady=(0, 6))
 
         # Model sizes versus planned sizes, to flag scale mismatches before placing.
         self.model_sizes = None       # rock_models.size_summary() of the folder
         self.model_radii = []         # Footprint radius (m) of each sized model
         self.model_info_var = tk.StringVar()
         self._wrapping_labels.append(ttk.Label(
-            unreal_group, textvariable=self.model_info_var, justify="left",
+            models_group, textvariable=self.model_info_var, justify="left",
             style="Readout.TLabel"))
         self._wrapping_labels[-1].pack(anchor="w", pady=(0, 4))
-        self.match_button = ttk.Button(unreal_group, text="Match Rock Sizes to Models",
-                                       command=self.match_sizes_to_models)
-        self.match_button.pack(fill="x", pady=(0, 6))
-        self.match_button.state(["disabled"])
-        Tooltip(self.match_button,
-                "Sets Min/Max radius to the smallest and largest model footprint\n"
-                "and Height / radius to the models' median, so rocks are placed\n"
-                "at their real size. Re-export before placing.")
 
         self.physics_var = tk.BooleanVar(value=False)
         physics_check = ttk.Checkbutton(unreal_group, text="Simulate physics",
@@ -329,10 +313,10 @@ class RockPlannerPage(ttk.Frame):
             style="Readout.TLabel"))
         self._wrapping_labels[-1].pack(anchor="w", pady=(4, 0))
 
-        self.place_button = ttk.Button(unreal_group, text="Place Rocks in Unreal",
-                                       command=self.place_in_unreal)
-        self.place_button.pack(fill="x", pady=(6, 0))
-        self.stencil_button = ttk.Button(unreal_group, text="Update Mask Ids Only",
+        self.place_button = ttk.Button(unreal_actions, text="Place Rocks in Unreal",
+                                       style="Accent.TButton", command=self.place_in_unreal)
+        self.place_button.pack(fill="x", pady=(4, 0))
+        self.stencil_button = ttk.Button(unreal_actions, text="Update Mask Ids Only",
                                          command=self.update_stencils_in_unreal)
         self.stencil_button.pack(fill="x", pady=(4, 0))
         Tooltip(self.stencil_button,
@@ -348,10 +332,16 @@ class RockPlannerPage(ttk.Frame):
         self.export_name_var.trace_add("write", self._refresh_stencil_preview)
         self._refresh_model_info()
 
-        # Mouse-wheel scrolling over the panel, bound locally (not app-wide) so it
+        self.open_folder_button.pack(fill="x", pady=(4, 0))       # last, under the Unreal buttons
+        self._exported = (None, None)       # (rocks csv path, its saved settings), cached
+        self._place_after_export = False
+        self._export_ok = False
+        self.after(500, self._refresh_export_status)
+
+        self.steps.pack(fill="both", expand=True)
+        # Mouse-wheel scrolling over each tab, bound locally (not app-wide) so it
         # never fights the main studio's own wheel scrolling.
-        self._bind_mousewheel(inner, canvas)
-        self._bind_mousewheel(canvas, canvas)
+        self.steps.bind_mousewheel()
 
         # Right: plot on top, log at bottom.
         right = ttk.Frame(self._panes)
@@ -360,8 +350,18 @@ class RockPlannerPage(ttk.Frame):
         self._panes.add(right, weight=1)
 
         log_frame = ttk.Frame(right, padding=(8, 4, 8, 8))
-        ttk.Label(log_frame, text="Activity log",
-                  font=("Segoe UI Semibold", 10)).pack(anchor="w")
+        log_head = ttk.Frame(log_frame)
+        log_head.pack(fill="x")
+        ttk.Label(log_head, text="Activity log",
+                  font=("Segoe UI Semibold", 10)).pack(side="left")
+        # Stop is next to the progress it stops: it ends whichever job runs,
+        # a preview from Plan or an export from Export.
+        self.stop_button = ttk.Button(log_head, text="Stop", width=8, command=self.stop_job)
+        self.stop_button.pack(side="right")
+        self.stop_button.state(["disabled"])
+        Tooltip(self.stop_button,
+                "Stops the running plan or export at its next checkpoint (slope,\n"
+                "corridors, or rock placement). The DEM stays loaded so you can retune.")
         self.progress = ProgressPanel(log_frame)
         self.progress.pack(fill="x", pady=(4, 4))
         self.log_text = tk.Text(log_frame, height=7, font=("Consolas", 8), wrap="word",
@@ -395,13 +395,6 @@ class RockPlannerPage(ttk.Frame):
         if attempt < 6:
             self.after(60, lambda: self._place_sash(attempt + 1))
 
-    def _bind_mousewheel(self, widget, canvas):
-        """Binds vertical wheel scrolling on `widget` and all its descendants."""
-        widget.bind("<MouseWheel>",
-                    lambda e: canvas.yview_scroll(int(-e.delta / 120), "units"))
-        for child in widget.winfo_children():
-            self._bind_mousewheel(child, canvas)
-
     def _rewrap_labels(self, width):
         """Retunes the column's wrapped text to the width the drag handle gave it."""
         wrap = max(160, width - 24)
@@ -432,6 +425,11 @@ class RockPlannerPage(ttk.Frame):
     def _collect_params(self):
         for key, row in self.rows_widgets.items():
             self.params[key] = row.get()
+        # The boulder threshold is a rock setting too (presets carry it), edited
+        # with the mask ids on the Export & Unreal tab.
+        stencils = self._stencil_settings() if hasattr(self, "boulder_radius_var") else None
+        if stencils is not None:
+            self.params['BOULDER_MIN_RADIUS_M'] = stencils[2]
         self.params = rock_field.coerce_params(self.params)
         return self.params
 
@@ -456,6 +454,63 @@ class RockPlannerPage(ttk.Frame):
         base_name = self._base_name()
         self.output_preview_var.set(generator_logic.output_preview_text(
             base_name, planned_rock_files(base_name, self.obstacle_map_var.get())))
+
+    def _build_preset_bar(self, parent):
+        """Rock presets (config/rocks/*.yaml): pick one to load it, or save the current values."""
+        bar = ttk.Frame(parent)
+        bar.pack(fill="x", pady=(0, 8))
+        ttk.Label(bar, text="Preset", font=("Segoe UI", 8)).pack(side="left")
+        self.preset_var = tk.StringVar()
+        self.preset_combo = ttk.Combobox(bar, textvariable=self.preset_var, state="readonly")
+        self.preset_combo.pack(side="left", fill="x", expand=True, padx=(6, 0))
+        self.preset_combo.bind("<<ComboboxSelected>>", self._on_preset_selected)
+        Tooltip(self.preset_combo,
+                "Rock field presets in config/rocks/: lunar_mare (typical surface, the\n"
+                "default), lunar_highlands, blocky_ejecta, quick_test. Each file explains\n"
+                "its values; Save as... writes the current ones as a new preset.")
+        ttk.Button(bar, text="Save as...", width=10,
+                   command=self.save_preset_as).pack(side="left", padx=(4, 0))
+        self._refresh_presets()
+
+    def _refresh_presets(self):
+        self.preset_combo.configure(values=generator_logic.list_presets(paths.ROCK_CONFIG_DIR))
+
+    def _on_preset_selected(self, _event=None):
+        self.load_preset(os.path.join(paths.ROCK_CONFIG_DIR, self.preset_var.get()))
+
+    def load_preset(self, path, preview=True):
+        """Puts a preset's values in the controls (and previews, when a DEM is loaded)."""
+        try:
+            self.params = rock_field.load_preset(path)
+        except Exception as exc:
+            self.log(f"Could not load the rock preset {os.path.basename(path)}: {exc}", level="error")
+            return
+        self.preset_var.set(os.path.basename(path))
+        self._apply_params_to_widgets()
+        self.boulder_radius_var.set(f"{self.params['BOULDER_MIN_RADIUS_M']:g}")
+        self._refresh_rock_estimate()
+        self._refresh_model_info()
+        self.log(f"Rock preset: {os.path.basename(path)}.", level="ok")
+        if preview:
+            self.request_preview()
+
+    def save_preset_as(self):
+        self._collect_params()
+        path = filedialog.asksaveasfilename(
+            parent=self, title="Save rock preset", initialdir=paths.ROCK_CONFIG_DIR,
+            defaultextension=".yaml", initialfile="my_rock_field.yaml",
+            filetypes=[("YAML preset", "*.yaml"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            rock_field.save_preset(path, self.params)
+        except Exception as exc:
+            self.log(f"Could not save the rock preset: {exc}", level="error")
+            return
+        self._refresh_presets()
+        if os.path.dirname(os.path.abspath(path)) == os.path.abspath(paths.ROCK_CONFIG_DIR):
+            self.preset_var.set(os.path.basename(path))
+        self.log(f"Saved rock preset: {path}", level="ok")
 
     def _build_crater_source(self, group):
         """Exact craters from the generator's list, or detected in the DEM (as in Crater Masks)."""
@@ -565,6 +620,7 @@ class RockPlannerPage(ttk.Frame):
         do_map = self.obstacle_map_var.get()
         base_name = self._base_name()
         crater_list = self.crater_list_path if self._use_generator_craters() else None
+        settings = self._current_settings()
 
         self._cancel.clear()
         self.preview_button.state(["disabled"])
@@ -588,6 +644,7 @@ class RockPlannerPage(ttk.Frame):
                         export_obstacle_map=do_map,
                         progress=lambda m, f: self._queue.put(("progress", (m, f))),
                         cancel_check=self._cancel.is_set)
+                    logic.save_settings(written.get("rocks_csv") or self._rocks_csv_path()[1], settings)
                     self._queue.put(("written", written))
             except terrain_core.TerrainCancelled:
                 self._queue.put(("cancelled", None))
@@ -657,30 +714,13 @@ class RockPlannerPage(ttk.Frame):
             return
         if not self.models_folder:
             self.model_info_var.set("")
-            self.match_button.state(["disabled"])
             return
         if not self.model_sizes:
             self.model_info_var.set(logic.model_info_text(None, None, 0.0))
-            self.match_button.state(["disabled"])
             return
         self.model_info_var.set(logic.model_info_text(
             self.model_sizes, self._model_scale_range(),
             self.rows_widgets['ROCK_HEIGHT_RATIO'].get()))
-        self.match_button.state(["!disabled"] if LOADER_AVAILABLE else ["disabled"])
-
-    def match_sizes_to_models(self):
-        """Sets the radius range and height ratio from the measured models."""
-        if not self.model_sizes:
-            return
-        low, high, ratio = self.model_sizes
-        self.rows_widgets['ROCK_MIN_SCALE'].set(low)
-        self.rows_widgets['ROCK_MAX_SCALE'].set(high)
-        self.rows_widgets['ROCK_HEIGHT_RATIO'].set(ratio)
-        self._collect_params()
-        self.log(f"Rock radii set to the models: {low:.3f}-{high:.3f} m, "
-                 f"height {ratio:.2f} x radius. Generate & Export again before placing.",
-                 level="ok")
-        self._on_param_change()
 
     def _refresh_rock_estimate(self, *_trace_args):
         """Updates the rock-count estimate for the loaded map."""
@@ -782,15 +822,55 @@ class RockPlannerPage(ttk.Frame):
             lambda log: send_rocks.send_stencils_to_unreal(
                 base_name, boulder, small, radius, save_level=save_level, log=log))
 
-    def place_in_unreal(self):
+    def _current_settings(self):
+        self._collect_params()
+        return logic.export_settings(self.params, self._seed(), self._resolution(), self.dem_path,
+                                     "generator" if self._use_generator_craters() else "detected")
+
+    def _export_changes(self):
+        """(rocks csv exists, what changed since its export or None if unrecorded)."""
+        _base, rocks_csv = self._rocks_csv_path()
+        if not os.path.isfile(rocks_csv):
+            return False, []
+        if self._exported[0] != rocks_csv or self._exported[1] is None:
+            self._exported = (rocks_csv, logic.load_settings(rocks_csv))
+        return True, logic.settings_changes(self._exported[1], self._current_settings())
+
+    def _refresh_export_status(self):
+        """Keeps the line under the Export & Unreal buttons current."""
+        if not self.winfo_exists():
+            return
+        if self.dem_path:
+            text, level = logic.export_status(*self._export_changes())
+            self.export_status_var.set(text)
+            self.export_status_label.configure(foreground="#2e7d32" if level == "ok" else "#b8860b")
+        else:
+            self.export_status_var.set("")
+        self.after(700, self._refresh_export_status)
+
+    def place_in_unreal(self, checked=False):
         """Sends the exported rock field to a running Unreal Editor."""
         if self._busy():
             self.log("A job is already running; wait for it to finish.", level="warn")
             return
         if not self.models_folder:
-            self.log("Choose the folder with the rock models first.", level="warn")
+            self.log("Choose the rock models folder first (Plan tab, Rock Models).", level="warn")
             return
         base_name, rocks_csv = self._rocks_csv_path()
+        exists, changes = self._export_changes()
+        if not checked and self.dem is not None and (not exists or changes is None or changes):
+            # The file on disk is not what the controls describe (or cannot be told):
+            # export the current settings first, then place.
+            reason = ("No rock field has been exported for this map yet." if not exists else
+                      "The exported rock field's settings were not recorded." if changes is None else
+                      "The settings changed since the last export: " + ", ".join(changes) + ".")
+            if ask_confirmation(self, "Export the current rock field first?",
+                                reason + "\n\nPlacing uses the exported file, so it would not show "
+                                "the current settings. Export them now, then place?",
+                                ok_label="Export, then Place"):
+                self._place_after_export = True
+                self._launch(export=True)
+            return
         if not os.path.isfile(rocks_csv):
             self.log(f"No {base_name}_rocks.csv yet: run Generate & Export first.",
                      level="warn")
@@ -820,11 +900,6 @@ class RockPlannerPage(ttk.Frame):
 
         if self.model_sizes is None:
             self._read_model_sizes()
-        scale_range = self._model_scale_range()
-        if logic.is_stretched(scale_range):
-            self.log(f"The planned radii scale the models {scale_range[0]:.2g}x-"
-                     f"{scale_range[1]:.2g}x. Use Match Rock Sizes to Models and "
-                     "re-export to place them at their real size.", level="warn")
 
         models_folder = self.models_folder
         self.log(f"Placing {os.path.basename(rocks_csv)} in Unreal "
@@ -869,6 +944,8 @@ class RockPlannerPage(ttk.Frame):
                     self._log_result(payload)
                     self._refresh_rock_estimate()
                 elif kind == "written":
+                    self._export_ok = True
+                    self._exported = (None, None)          # re-read the saved settings
                     self.log("Rock field written:", level="ok")
                     for label, path in payload.items():
                         self.log(f"  {label}: {path}")
@@ -877,11 +954,13 @@ class RockPlannerPage(ttk.Frame):
                     text, level = payload
                     self.log(text, level=level)
                 elif kind == "cancelled":
+                    self._place_after_export = False
                     self.log("Job cancelled.", level="warn")
                     self.progress.finish("cancelled")
                 elif kind == "job_failed":
                     self.progress.finish("failed")
                 elif kind == "error":
+                    self._place_after_export = False
                     self.log(payload, level="error")
                     self.progress.finish("failed")
                     self._show_message("Rock planning failed.\nSee the activity log.")
@@ -893,6 +972,10 @@ class RockPlannerPage(ttk.Frame):
                         self.stencil_button.state(["!disabled"])
                     self.stop_button.state(["disabled"])
                     self.progress.finish()
+                    if self._place_after_export and self._export_ok:
+                        self._place_after_export = False
+                        self.after(200, lambda: self.place_in_unreal(checked=True))
+                    self._place_after_export = self._export_ok = False
         except queue.Empty:
             pass
         self.after(80, self._drain_queue)

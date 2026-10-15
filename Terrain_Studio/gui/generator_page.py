@@ -28,8 +28,13 @@ from gui.dem_files import (DEM_FILETYPES, dem_source_note, dem_source_problem, d
 from gui.landscape_page import UnrealUnavailable, convert_and_dispatch
 from gui.map_views import MapViewer, SURFACE_DRAG_DETAIL, SURFACE_MESH_DETAIL
 from gui.paths import map_browse_dir, output_group_dir
-from gui.widgets import (ParamRow, ProgressPanel, Tooltip, ask_confirmation, format_path_block,
-                         show_message)
+from gui.widgets import (ParamRow, ProgressPanel, StepTabs, Tooltip, ask_confirmation,
+                         format_path_block, show_message)
+
+STOP_TIP = "Stops the running generation or Unreal export at its next checkpoint."
+PREVIEW_SIZE_TIP = ("Longest edge of the preview render. Crater radii and erosion sigma are\n"
+                    "fractions of the map size, so a downscaled preview keeps the same\n"
+                    "morphology as the full-resolution export.")
 
 
 class GeneratorPage:
@@ -108,11 +113,20 @@ class GeneratorPage:
                    command=self.save_config_as).pack(side="left", padx=(4, 0))
         self._refresh_preset_list()
 
-        # Preview controls are pinned outside the scroll area: they drive the
-        # main loop of the tool, so they must stay reachable at any scroll offset.
-        preview_group = ttk.Labelframe(parent, text="Preview", padding=(8, 4, 8, 8),
+        # One tab per step, each with its settings and, pinned beneath them, its
+        # buttons. Export and Unreal are filled by _build_preview_panel.
+        self._step_labels = []
+        self.steps = StepTabs(parent, background=self.cget("background"),
+                              on_width=self._rewrap_step_labels, width=self.px(336))
+        inner, terrain_actions = self.steps.add_step("Terrain")
+        craters_tab, craters_actions = self.steps.add_step("Craters")
+        display_tab, _ = self.steps.add_step("Display")
+        self._export_tab, self._export_actions = self.steps.add_step("Export")
+        self._unreal_tab, self._unreal_actions = self.steps.add_step("Unreal")
+
+        preview_group = ttk.Labelframe(inner, text="Preview", padding=(8, 4, 8, 8),
                                        style="Group.TLabelframe")
-        preview_group.pack(fill="x", pady=(0, 8))
+        preview_group.pack(fill="x", pady=(0, 8), padx=(0, 4))
 
         res_row = ttk.Frame(preview_group)
         res_row.pack(fill="x", pady=(0, 4))
@@ -122,25 +136,24 @@ class GeneratorPage:
                                      values=PREVIEW_SIZES, state="readonly", width=6)
         preview_combo.pack(side="right")
         preview_combo.bind("<<ComboboxSelected>>", lambda e: self.request_preview())
-        Tooltip(preview_combo,
-                "Longest edge of the preview render. Crater radii and erosion sigma are\n"
-                "fractions of the map size, so a downscaled preview keeps the same\n"
-                "morphology as the full-resolution export.")
+        Tooltip(preview_combo, PREVIEW_SIZE_TIP)
 
         self.auto_preview_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(preview_group, text="Auto-update on change",
                         variable=self.auto_preview_var).pack(anchor="w")
 
-        self.preview_button = ttk.Button(preview_group, text="Update Preview",
-                                         command=self.request_preview)
-        self.preview_button.pack(fill="x", pady=(6, 0))
+        self.preview_button = ttk.Button(terrain_actions, text="Update Preview",
+                                         style="Accent.TButton", command=self.request_preview)
+        self.preview_button.pack(fill="x")
+        # The same action under the crater parameters (one button per tab).
+        self.crater_preview_button = ttk.Button(craters_actions, text="Update Preview",
+                                                style="Accent.TButton", command=self.request_preview)
+        self.crater_preview_button.pack(fill="x")
 
-        # Scroll container
-        inner = self._scrollable_column(parent, width=self.px(336))
-
-        # Parameter groups
+        # Parameter groups: the crater ones in their own tab
         for group_name, specs in PARAM_GROUPS:
-            group = ttk.Labelframe(inner, text=group_name, padding=(8, 4, 8, 8),
+            group = ttk.Labelframe(craters_tab if "Crater" in group_name else inner,
+                                   text=group_name, padding=(8, 4, 8, 8),
                                    style="Group.TLabelframe")
             group.pack(fill="x", pady=(0, 8), padx=(0, 4))
             for spec in specs:
@@ -168,7 +181,7 @@ class GeneratorPage:
             fill="x", pady=(6, 0))
 
         # Lighting / display
-        light_group = ttk.Labelframe(inner, text="Display & Sun", padding=(8, 4, 8, 8),
+        light_group = ttk.Labelframe(display_tab, text="Display & Sun", padding=(8, 4, 8, 8),
                                      style="Group.TLabelframe")
         light_group.pack(fill="x", pady=(0, 8), padx=(0, 4))
 
@@ -194,6 +207,14 @@ class GeneratorPage:
             "metres of relief over kilometres of ground, so unexaggerated lighting\n"
             "looks flat. The 3D tab fits its own exaggeration and reports it.\n"
             "Exported data is never exaggerated.")
+        self.steps.pack(fill="both", expand=True)
+
+    def _rewrap_step_labels(self, width):
+        """Re-wraps the text in the step tabs to the column's width."""
+        wrap = max(self.px(150), width - self.px(24))
+        for label in self._step_labels:
+            if label.winfo_exists():
+                label.configure(wraplength=wrap)
 
     def _add_display_slider(self, parent, label, minimum, maximum, initial, tooltip):
         """Creates a display-only slider (does not invalidate the generated terrain)."""
@@ -272,23 +293,24 @@ class GeneratorPage:
         surface_canvas.mpl_connect("button_press_event", self._on_surface_press)
         surface_canvas.mpl_connect("button_release_event", self._on_surface_release)
 
-        # --- Export & Unreal ---
-        # Packed first, against the bottom, so the action buttons stay reachable
-        # no matter how little vertical room the readouts leave.
-        export_group = ttk.Labelframe(side, text="Export & Unreal", padding=(8, 4, 8, 8),
-                                      style="Group.TLabelframe")
-        export_group.pack(side="bottom", fill="x", pady=(4, 0))
-        wrap = self.px(250)
+        # --- Export and Unreal: their tabs in the parameter column ---
+        export_group = ttk.Labelframe(self._export_tab, text="Full-resolution DEM",
+                                      padding=(8, 4, 8, 8), style="Group.TLabelframe")
+        export_group.pack(fill="x", pady=(0, 8), padx=(0, 4))
+        unreal_group = ttk.Labelframe(self._unreal_tab, text="Landscape in Unreal",
+                                      padding=(8, 4, 8, 8), style="Group.TLabelframe")
+        unreal_group.pack(fill="x", pady=(0, 8), padx=(0, 4))
+        wrap = self.px(290)
 
         ttk.Label(export_group, text="Base filename", font=("Segoe UI", 8)).pack(anchor="w")
         self.export_name_var = tk.StringVar(value="procedural_lunar_terrain")
         ttk.Entry(export_group, textvariable=self.export_name_var,
                   font=("Consolas", 9)).pack(fill="x", pady=(2, 6))
 
-        self._wrapping_labels.append(ttk.Label(
+        self._step_labels.append(ttk.Label(
             export_group, wraplength=wrap, justify="left", font=("Segoe UI", 8),
-            text="Step 1 - generate the full-resolution DEM."))
-        self._wrapping_labels[-1].pack(anchor="w", pady=(0, 2))
+            text="Generates the DEM at full resolution with the Terrain tab's settings."))
+        self._step_labels[-1].pack(anchor="w", pady=(0, 2))
 
         # Lists the files that will be written, derived from the base filename.
         self.output_preview_var = tk.StringVar()
@@ -301,39 +323,28 @@ class GeneratorPage:
         self.export_name_var.trace_add("write", self._refresh_output_preview)
         self._refresh_output_preview()
 
-        self.generate_button = ttk.Button(export_group, text="Generate Full Resolution",
+        self.generate_button = ttk.Button(self._export_actions, text="Generate Full Resolution",
                                           style="Accent.TButton",
                                           command=self.run_full_generation)
         self.generate_button.pack(fill="x")
+        ttk.Button(self._export_actions, text="Open output folder",
+                   command=self.open_output_folder).pack(fill="x", pady=(4, 0))
 
-        # Cancels whichever long job is running (generation or Unreal export).
-        # Disabled until one starts.
-        self.stop_button = ttk.Button(export_group, text="Stop",
-                                      command=self.stop_generation)
-        self.stop_button.pack(fill="x", pady=(4, 0))
-        self.stop_button.state(["disabled"])
-        Tooltip(self.stop_button,
-                "Stops the running generation or Unreal export at its next checkpoint.\n"
-                "Partial output files may remain and should be regenerated.")
-
-        ttk.Separator(export_group, orient="horizontal").pack(fill="x", pady=8)
-
-        self._wrapping_labels.append(ttk.Label(
-            export_group, wraplength=wrap, justify="left", font=("Segoe UI", 8),
-            text="Step 2 - convert a DEM to a .r16 heightmap and spawn "
-                 "the Landscape actor."))
-        self._wrapping_labels[-1].pack(anchor="w", pady=(0, 2))
+        self._step_labels.append(ttk.Label(
+            unreal_group, wraplength=wrap, justify="left", font=("Segoe UI", 8),
+            text="Converts a DEM to a .r16 heightmap and spawns the Landscape actor."))
+        self._step_labels[-1].pack(anchor="w", pady=(0, 2))
 
         # Expected input; companion rasters are filtered or flagged elsewhere.
-        self._wrapping_labels.append(ttk.Label(
-            export_group, wraplength=wrap, justify="left",
+        self._step_labels.append(ttk.Label(
+            unreal_group, wraplength=wrap, justify="left",
             style="HomeHint.TLabel",
-            text="Needs an elevation map in metres, usually Step 1's "
+            text="Needs an elevation map in metres, usually the Export tab's "
                  "_elevationMap.npy. Accepts .npy, .csv, .txt, .tif, .tiff."))
-        self._wrapping_labels[-1].pack(anchor="w", pady=(0, 5))
+        self._step_labels[-1].pack(anchor="w", pady=(0, 5))
 
-        ttk.Label(export_group, text="Source map", font=("Segoe UI", 8)).pack(anchor="w")
-        source_row = ttk.Frame(export_group)
+        ttk.Label(unreal_group, text="Source map", font=("Segoe UI", 8)).pack(anchor="w")
+        source_row = ttk.Frame(unreal_group)
         source_row.pack(fill="x", pady=(2, 2))
         self.unreal_source_var = tk.StringVar(value="(none - generate or browse)")
         source_entry = ttk.Entry(source_row, textvariable=self.unreal_source_var,
@@ -355,15 +366,15 @@ class GeneratorPage:
         # Warns when a pick is one of the companion rasters; empty otherwise.
         self.unreal_source_note_var = tk.StringVar()
         self.unreal_source_note = ttk.Label(
-            export_group, textvariable=self.unreal_source_note_var,
+            unreal_group, textvariable=self.unreal_source_note_var,
             wraplength=wrap, justify="left", style="Readout.TLabel",
             foreground="#b8860b")
-        self._wrapping_labels.append(self.unreal_source_note)
+        self._step_labels.append(self.unreal_source_note)
         self.unreal_source_note.pack(anchor="w", pady=(0, 4))
 
         self.dispatch_var = tk.BooleanVar(value=True)
         dispatch_check = ttk.Checkbutton(
-            export_group, text="Dispatch to running Unreal Editor",
+            unreal_group, text="Dispatch to running Unreal Editor",
             variable=self.dispatch_var)
         dispatch_check.pack(anchor="w")
         Tooltip(dispatch_check,
@@ -372,20 +383,19 @@ class GeneratorPage:
                 "heightmap automatically.\n"
                 "When disabled, only the .r16 / .json / .txt files are written.")
         self.save_level_var = tk.BooleanVar(value=True)
-        save_check = ttk.Checkbutton(export_group, text="Save the level afterwards",
+        save_check = ttk.Checkbutton(unreal_group, text="Save the level afterwards",
                                      variable=self.save_level_var)
         save_check.pack(anchor="w")
         Tooltip(save_check, 'Saves the open Unreal level once the Landscape is spawned and its\nheightmap applied.')
 
-        self.unreal_button = ttk.Button(export_group, text="Send to Unreal",
+        self.unreal_button = ttk.Button(self._unreal_actions, text="Send to Unreal",
                                         style="Accent.TButton",
                                         command=self.run_unreal_dispatch)
-        self.unreal_button.pack(fill="x", pady=(4, 0))
+        self.unreal_button.pack(fill="x")
         if not LOADER_AVAILABLE:
             self.unreal_button.state(["disabled"])
 
-        ttk.Button(export_group, text="Open output folder",
-                   command=self.open_output_folder).pack(fill="x", pady=(8, 0))
+        self.steps.bind_mousewheel()
 
         # --- Readouts (fill whatever space is left above the actions) ---
         ttk.Label(side, text="Surface Statistics", style="Header.TLabel").pack(anchor="w")
@@ -413,6 +423,13 @@ class GeneratorPage:
         status_row.pack(fill="x")
 
         ttk.Label(status_row, text="Activity log", style="Header.TLabel").pack(side="left")
+        # Cancels whichever long job is running (generation or Unreal export),
+        # whichever tab started it. Disabled until one starts.
+        self.stop_button = ttk.Button(status_row, text="Stop", width=8,
+                                      command=self.stop_generation)
+        self.stop_button.pack(side="right")
+        self.stop_button.state(["disabled"])
+        Tooltip(self.stop_button, STOP_TIP)
 
         self.progress = ProgressPanel(footer)
         self.progress.pack(fill="x", pady=(6, 4))
@@ -568,7 +585,8 @@ class GeneratorPage:
             return False
         self.progress.start(label, key, work)
         self._cancel_event.clear()
-        for button in (self.preview_button, self.generate_button, self.unreal_button):
+        for button in (self.preview_button, self.crater_preview_button, self.generate_button,
+                       self.unreal_button):
             button.state(["disabled"])
         # The Stop button only arms for long, cancellable jobs (generation and
         # the Unreal export); previews are fast and relaunch on their own.
@@ -642,7 +660,8 @@ class GeneratorPage:
                     self.log("Job cancelled.", level="warn")
                     self.progress.finish("cancelled")
                 elif kind == "done":
-                    for button in (self.preview_button, self.generate_button):
+                    for button in (self.preview_button, self.crater_preview_button,
+                                   self.generate_button):
                         button.state(["!disabled"])
                     if LOADER_AVAILABLE:
                         self.unreal_button.state(["!disabled"])

@@ -28,12 +28,27 @@ terrain, place rocks, mask craters, position the sun. A library holds the map
 browser and a standalone sender.
 Every view opens in the same window and has a **⌂ Home** button to return.
 
+In every view, the left column is split into tabs, one per step: for
+example, the rock planner has **Plan | Export & Unreal**. Each tab holds that
+step's settings, with its buttons pinned underneath. The map the view works on
+stays above the tabs. **Stop**, which ends whatever job is running, is next to
+the activity log.
+
+In the rock planner, **Place Rocks in Unreal** places the rock field that
+**Generate & Export** last wrote. Each export saves the settings it was made
+with (`<map>_rocks_settings.json`). A line above the buttons says whether the
+file still matches the controls or lists what changed. If you press Place
+with an out-of-date export, or none, the studio offers **Export, then Place**.
+
 ## 1. Create a terrain and send it to Unreal
 
 ![Creating a terrain](docs/images/create-terrain.gif)
 
-- **Parameters** (left): every setting as a slider with a typed entry and tooltip.
-  Presets are the YAML files in `config/`, shared with the CLI.
+- **Parameters** (left), in tabs: **Terrain** (preview, map geometry, relief,
+  seed), **Craters**, **Display** (colormap and shading), **Export** (Generate
+  Full Resolution) and **Unreal** (Send to Unreal). Every setting is a slider
+  with a typed entry and a tooltip. Presets are the YAML files in `config/`,
+  shared with the CLI.
 - **Preview** (centre): shaded relief, 3D surface and slope analysis, updated as
   you drag. A fixed seed reproduces a surface; a blank seed rolls a new one.
 
@@ -51,8 +66,8 @@ Every view opens in the same window and has a **⌂ Home** button to return.
 
 Column widths are adjustable with the drag handles.
 
-**Send to Unreal**, in the same panel, takes the generated map (or any other you
-pick):
+**Send to Unreal**, on the **Unreal** tab, takes the generated map (or any other
+you pick):
 
 Converts an elevation map to Unreal's 16-bit `.r16` heightmap, spawns the
 Landscape actor in a running editor, applies the heightmap to it and saves the
@@ -86,6 +101,28 @@ Scatters rocks across the drivable ground while guaranteeing a connected route:
    crater circles as the crater map (step 3), so no rock lands on a crater id.
    The circles are fitted on a grid of up to 1024 px, so small craters are kept
    clear too.
+
+   **Presets** (Plan tab, `config/rocks/*.yaml`; **Save as…** adds your own).
+   Each file explains its values:
+
+   | Preset | Coverage | Rock radius | Rocks per km² | Time to place in Unreal |
+   |---|---|---|---|---|
+   | `lunar_mare` (default) | 0.6% | 0.2–2.0 m | ~11,000 | ~3 min |
+   | `lunar_highlands` | 1.5% | 0.2–2.5 m | ~27,000 | ~7 min |
+   | `blocky_ejecta` | 4% | 0.2–3.0 m | ~69,000 | ~17 min |
+   | `quick_test` | 0.1% | 0.3–2.0 m | ~900 | seconds |
+
+   The mare coverage follows LRO Diviner's rock abundance: about 0.4–0.5% of
+   the Moon's surface is covered by rocks of about 1 m or larger (Bandfield et
+   al., 2011), scaled to the smaller rocks counted here. The minimum radius,
+   0.2 m (0.14 m tall), matches the GNC planner's 0.15 m obstacle height.
+
+   Each preset also sets `BOULDER_MIN_RADIUS_M`, the object-mask split when
+   placing: rocks at least this radius are `boulder` (id 9), smaller ones
+   `small_rock` (id 10). It is 0.5 m (rocks of 1 m and up, the size Diviner
+   counts), which tags about 10% of a lunar_mare field as boulders. It is the
+   **Boulder if radius ≥** field on the Export & Unreal tab; changing it does not
+   require a new export.
 
    For a map generated in step 1, **Crater Hazards → Exact, from the generator**
    (chosen automatically when `<map>_craters.csv` is next to the DEM) uses the

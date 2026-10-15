@@ -1,0 +1,25 @@
+# ==========================================
+# ROCK FIELD PRESET: typical lunar mare (the default)
+# ==========================================
+# Rock Field & Rover Paths (step 2) loads the presets in config/rocks/.
+# Rough count: ~11,000 rocks per km2 of drivable ground; ~3 min to place in Unreal.
+#
+# Coverage: LRO Diviner thermal mapping puts the Moon's average at ~0.4-0.5 % of
+# the surface covered by rocks of ~1 m and larger (Bandfield et al. 2011, JGR
+# Planets 116, E00H02). Counting down to the 0.4 m rocks below (size law
+# N(>r) ~ r^-2.5) raises that by ~1.6x: about 0.6 %.
+
+# --- Rover corridor ---
+PATH_WIDTH_M: 4.0            # Full width kept free of rocks along each road (Yutu is 1.9 m wide with its wings out)
+
+# --- Crater hazards ---
+MIN_CRATER_DEPTH_M: 0.5      # Craters at least this deep are impassable
+
+# --- Rock population ---
+ROCK_COVERAGE: 0.006         # Fraction of the drivable ground under rocks
+ROCK_MIN_SCALE: 0.2          # Smallest rock radius (m): 0.14 m tall, about the planner's 0.15 m obstacle height
+ROCK_MAX_SCALE: 2.0          # Largest boulder radius (m); boulders are rare under the size law
+ROCK_HEIGHT_RATIO: 0.7       # Height / radius
+
+# --- Object mask (when placing in Unreal) ---
+BOULDER_MIN_RADIUS_M: 0.5   # Rocks this radius and larger are 'boulder' (id 9), smaller 'small_rock' (id 10)

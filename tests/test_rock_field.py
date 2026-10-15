@@ -200,3 +200,42 @@ def test_no_rock_inside_any_generator_crater(generated):
     for row, col, *_ in field["rocks_px"]:
         for r, c, radius, _depth in craters:
             assert np.hypot(row - r, col - c) > radius
+
+
+# ---------------------------------------------------------------- presets (config/rocks)
+
+def _rock_presets():
+    import glob
+    import os
+    folder = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "rocks")
+    return {os.path.basename(p): p for p in sorted(glob.glob(os.path.join(folder, "*.yaml")))}
+
+
+def test_rock_presets_are_valid_and_sensible():
+    import yaml
+    from gui.rock_planner_logic import ROCK_PARAM_GROUPS
+    ranges = {spec[0]: (spec[2], spec[3]) for _, specs in ROCK_PARAM_GROUPS for spec in specs}
+    presets = _rock_presets()
+    assert "lunar_mare.yaml" in presets and len(presets) >= 4
+    for name, path in presets.items():
+        raw = yaml.safe_load(open(path, encoding="utf-8"))
+        assert set(raw) <= set(rock_field.DEFAULTS), name             # no unknown keys
+        params = rock_field.load_preset(path)
+        for key, (low, high) in ranges.items():
+            assert low <= params[key] <= high, (name, key)          # inside the sliders
+        assert params["ROCK_MIN_SCALE"] < params["ROCK_MAX_SCALE"], name
+        # Both object-mask classes get rocks: the boulder threshold is inside the size range.
+        assert params["ROCK_MIN_SCALE"] < params["BOULDER_MIN_RADIUS_M"] < params["ROCK_MAX_SCALE"], name
+        count = rock_field.estimate_rock_count(params, 1e6)
+        assert 100 < count < rock_field.MAX_ROCKS, (name, count)    # a field, under the cap
+
+
+def test_the_defaults_are_the_lunar_mare_preset():
+    assert rock_field.load_preset(_rock_presets()["lunar_mare.yaml"]) == rock_field.default_params()
+
+
+def test_save_and_load_a_preset(tmp_path):
+    params = rock_field.coerce_params({"ROCK_COVERAGE": 0.002, "PATH_WIDTH_M": 3.0})
+    path = tmp_path / "mine.yaml"
+    rock_field.save_preset(str(path), params)
+    assert rock_field.load_preset(str(path)) == params

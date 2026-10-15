@@ -23,7 +23,7 @@ def _placer_call(call):
 
 def build_command(rocks_csv, models_folder, resolution, landscape_label,
                   landscape_width, seed, simulate_physics,
-                  boulder_stencil=None, small_rock_stencil=None, boulder_min_radius_m=0.15,
+                  boulder_stencil=None, small_rock_stencil=None, boulder_min_radius_m=0.5,
                   save_level=True):
     """Builds the placement command; paths are quoted with repr()."""
     boulder_stencil, small_rock_stencil = _default_stencils(boulder_stencil, small_rock_stencil)
@@ -62,7 +62,7 @@ def build_instance_command(group, save_level=True):
 def send_rocks_to_unreal(rocks_csv, models_folder, resolution, landscape_label="",
                          landscape_width=0, seed=1, simulate_physics=False,
                          boulder_stencil=None, small_rock_stencil=None,
-                         boulder_min_radius_m=0.15, save_level=True, log=print,
+                         boulder_min_radius_m=0.5, save_level=True, log=print,
                          discovery_seconds=2.0):
     """
     Places the rock field in a running Unreal Editor and optionally saves the
@@ -87,7 +87,7 @@ def send_instance_to_unreal(group, save_level=True, log=print, discovery_seconds
 
 
 def send_stencils_to_unreal(group, boulder_stencil=None, small_rock_stencil=None,
-                            boulder_min_radius_m=0.15, save_level=True, log=print,
+                            boulder_min_radius_m=0.5, save_level=True, log=print,
                             discovery_seconds=2.0):
     """
     Re-tags the placed rocks of `group` with new stencil ids and optionally

@@ -595,6 +595,65 @@ class ActivityLog(ttk.Frame):
         self.text.configure(state="disabled")
 
 
+class StepTabs(ttk.Notebook):
+    """
+    The left column of a view as tabs, one per step of its workflow.
+
+    add_step(title) returns (settings, actions): a scrolling frame for the
+    step's settings and a bar pinned beneath it for the step's buttons, so a
+    button always sits under the settings it uses and never scrolls away.
+    """
+
+    def __init__(self, parent, background, on_width=None, width=None):
+        super().__init__(parent)
+        self._background = background
+        self._width = width                  # requested column width (px), or Tk's default
+        self._on_width = on_width            # fn(width): re-wrap labels to the column
+        self._canvases = []
+
+    def add_step(self, title):
+        tab = ttk.Frame(self, padding=(0, 6, 0, 0))
+        self.add(tab, text=f"  {title}  ")
+        # The action bar is packed before the scrolling area so it keeps its
+        # height however tall the settings are.
+        actions = ttk.Frame(tab)
+        actions.pack(side="bottom", fill="x", pady=(6, 0))
+        host = ttk.Frame(tab)
+        host.pack(side="top", fill="both", expand=True)
+        canvas = tk.Canvas(host, highlightthickness=0, borderwidth=0,
+                           background=self._background,
+                           **({"width": self._width} if self._width else {}))
+        scrollbar = ttk.Scrollbar(host, orient="vertical", command=canvas.yview)
+        settings = ttk.Frame(canvas)
+        settings.bind("<Configure>",
+                      lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        window = canvas.create_window((0, 0), window=settings, anchor="nw")
+
+        def on_resize(event):
+            canvas.itemconfigure(window, width=event.width)
+            if self._on_width:
+                self._on_width(event.width)
+
+        canvas.bind("<Configure>", on_resize)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        # Packed before the expanding canvas, or it is the one squeezed out.
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        self._canvases.append((canvas, settings))
+        return settings, actions
+
+    def bind_mousewheel(self):
+        """Wheel scrolling over each step's settings; call once they are built."""
+        def bind(widget, canvas):
+            widget.bind("<MouseWheel>",
+                        lambda e: canvas.yview_scroll(int(-e.delta / 120), "units"))
+            for child in widget.winfo_children():
+                bind(child, canvas)
+        for canvas, settings in self._canvases:
+            bind(canvas, canvas)
+            bind(settings, canvas)
+
+
 class ViewHeader(ttk.Frame):
     """
     Header shared by the full-window views: Home button, title, subtitle.

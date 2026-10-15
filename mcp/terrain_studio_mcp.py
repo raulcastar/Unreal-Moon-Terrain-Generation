@@ -160,21 +160,35 @@ def _presets():
             for p in sorted(glob.glob(os.path.join(paths.CONFIG_DIR, '*.yaml')))}
 
 
+def _rock_presets():
+    return {os.path.splitext(os.path.basename(p))[0]: p
+            for p in sorted(glob.glob(os.path.join(paths.ROCK_CONFIG_DIR, '*.yaml')))}
+
+
 # =============================================================================
 # Terrain and rock planning (files only)
 # =============================================================================
 
 @server.tool(annotations=READ)
 def list_presets() -> dict:
-    """Terrain presets (config/*.yaml) with their parameters, and the parameter defaults."""
-    out = {}
+    """
+    Terrain presets (config/*.yaml) and rock field presets (config/rocks/*.yaml,
+    for plan_rocks) with their parameters, and both sets of defaults. Each rock
+    preset file explains its values (lunar_mare is the default).
+    """
+    out, rocks = {}, {}
     for name, path in _presets().items():
         try:
             out[name] = terrain_core.load_config(path)
         except Exception as exc:
             out[name] = {'error': str(exc)}
+    for name, path in _rock_presets().items():
+        try:
+            rocks[name] = rock_field.load_preset(path)
+        except Exception as exc:
+            rocks[name] = {'error': str(exc)}
     return {'presets': out, 'defaults': terrain_core.default_params(),
-            'rock_defaults': rock_field.default_params()}
+            'rock_presets': rocks, 'rock_defaults': rock_field.default_params()}
 
 
 @server.tool(annotations=WRITE)
@@ -246,17 +260,23 @@ def describe_dem(path: str, resolution_m_per_px: float = 1.0) -> dict:
 @server.tool(annotations=WRITE)
 def plan_rocks(dem_path: str, resolution_m_per_px: float = 1.0, seed: int | None = None,
                overrides: dict | None = None, obstacle_map: bool = False,
-               generator_craters: bool = True) -> dict:
+               generator_craters: bool = True, preset: str = 'lunar_mare') -> dict:
     """
     Plans a rock field with connected rover corridors on a DEM and writes
     outputs/<group>/<group>_rocks.csv and _roverPaths.csv (and _obstacleMap.csv).
-    overrides: rock parameters (list_presets rock_defaults), e.g. {"ROCK_COVERAGE": 0.05}.
+    preset: a rock preset (list_presets rock_presets): lunar_mare (typical, ~11,000
+    rocks per km2), lunar_highlands, blocky_ejecta (~69,000), quick_test (~900).
+    overrides: rock parameters changed on top of it, e.g. {"ROCK_COVERAGE": 0.01}.
     generator_craters: use the exact craters a terrain generated here lists
     (<group>_craters.csv) instead of detecting them in the DEM, when the list exists.
     """
     full = _resolve_dem(dem_path)
     dem = _load_dem(full)
-    params = rock_field.coerce_params(_override(rock_field.default_params(), overrides, rock_field.DEFAULTS))
+    presets = _rock_presets()
+    if preset not in presets:
+        raise ToolError(f'Unknown rock preset {preset!r}; one of {sorted(presets)}')
+    params = rock_field.coerce_params(_override(rock_field.load_preset(presets[preset]), overrides,
+                                                rock_field.DEFAULTS))
     group = dem_group_name(os.path.splitext(os.path.basename(full))[0])
     crater_list = os.path.join(os.path.dirname(full), f'{group}_craters.csv')
     craters = (crater_map.load_crater_list(crater_list, with_depth=True)

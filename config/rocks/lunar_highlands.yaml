@@ -1,0 +1,21 @@
+# ==========================================
+# ROCK FIELD PRESET: rockier highlands
+# ==========================================
+# About 2.5x the mare's rock cover (see lunar_mare.yaml), with somewhat larger
+# boulders. Rough count: ~27,000 rocks per km2 of drivable ground; ~7 min to
+# place in Unreal.
+
+# --- Rover corridor ---
+PATH_WIDTH_M: 4.0
+
+# --- Crater hazards ---
+MIN_CRATER_DEPTH_M: 0.5
+
+# --- Rock population ---
+ROCK_COVERAGE: 0.015
+ROCK_MIN_SCALE: 0.2
+ROCK_MAX_SCALE: 2.5
+ROCK_HEIGHT_RATIO: 0.7
+
+# --- Object mask (when placing in Unreal) ---
+BOULDER_MIN_RADIUS_M: 0.5   # Rocks this radius and larger are 'boulder' (id 9), smaller 'small_rock' (id 10)

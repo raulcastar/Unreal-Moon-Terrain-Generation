@@ -24,6 +24,7 @@ import os
 
 import numpy as np
 import pandas as pd
+import yaml
 from scipy import ndimage
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import dijkstra
@@ -79,12 +80,20 @@ DEFAULTS = {
     'MIN_CRATER_DEPTH_M': 0.5,     # Closed depressions this deep are impassable craters.
 
     # --- Rock population ---
-    'ROCK_COVERAGE': 0.03,         # Target fraction of drivable ground under rocks.
+    # Typical lunar mare, as config/rocks/lunar_mare.yaml (where the values are explained).
+    'ROCK_COVERAGE': 0.006,        # Target fraction of drivable ground under rocks (~11,000 on 1 km2).
     # Rock size as a scale (metre radius of a 1 m base mesh), between these
     # bounds by the lunar size-frequency law (ROCK_SIZE_EXPONENT).
-    'ROCK_MIN_SCALE': 0.3,
-    'ROCK_MAX_SCALE': 2.5,
+    'ROCK_MIN_SCALE': 0.2,
+    'ROCK_MAX_SCALE': 2.0,
     'ROCK_HEIGHT_RATIO': 0.7,      # Rock height as a fraction of its radius.
+
+    # --- Object mask ---
+    # Rocks at least this radius are tagged 'boulder' in the object mask, the rest
+    # 'small_rock' (used when placing in Unreal, not by the plan). 0.5 m: rocks of
+    # 1 m and more, the size LRO Diviner's rock abundance counts; ~10% of a
+    # lunar_mare field.
+    'BOULDER_MIN_RADIUS_M': 0.5,
 }
 
 _INT_KEYS = ()
@@ -95,6 +104,23 @@ def default_params():
     return dict(DEFAULTS)
 
 
+def load_preset(path):
+    """A rock preset (config/rocks/*.yaml) as coerced parameters; keys it omits keep their defaults."""
+    with open(path, 'r', encoding='utf-8') as handle:
+        return coerce_params(yaml.safe_load(handle) or {})
+
+
+def save_preset(path, params):
+    """Writes the rock parameters to a preset file (YAML), in the defaults' order."""
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    params = coerce_params(params)
+    with open(path, 'w', encoding='utf-8') as handle:
+        yaml.safe_dump({key: params[key] for key in DEFAULTS}, handle,
+                       sort_keys=False, default_flow_style=False)
+
+
 def coerce_params(raw):
     """Merges a raw dict over the defaults and casts every value to its type."""
     params = dict(DEFAULTS)
@@ -102,7 +128,7 @@ def coerce_params(raw):
     for key in _INT_KEYS:
         params[key] = max(0, int(round(float(params[key]))))
     for key in ('PATH_WIDTH_M', 'MIN_CRATER_DEPTH_M', 'ROCK_COVERAGE',
-                'ROCK_MIN_SCALE', 'ROCK_MAX_SCALE', 'ROCK_HEIGHT_RATIO'):
+                'ROCK_MIN_SCALE', 'ROCK_MAX_SCALE', 'ROCK_HEIGHT_RATIO', 'BOULDER_MIN_RADIUS_M'):
         params[key] = float(params[key])
     if params['ROCK_MAX_SCALE'] < params['ROCK_MIN_SCALE']:
         params['ROCK_MAX_SCALE'] = params['ROCK_MIN_SCALE']

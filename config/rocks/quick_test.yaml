@@ -1,0 +1,21 @@
+# ==========================================
+# ROCK FIELD PRESET: quick test
+# ==========================================
+# A few hundred rocks, only the ones the rover cannot drive over: fast to plan
+# and to place in Unreal (seconds), for checking a terrain or the pipeline.
+# Rough count: ~900 rocks per km2 of drivable ground.
+
+# --- Rover corridor ---
+PATH_WIDTH_M: 4.0
+
+# --- Crater hazards ---
+MIN_CRATER_DEPTH_M: 0.5
+
+# --- Rock population ---
+ROCK_COVERAGE: 0.001
+ROCK_MIN_SCALE: 0.3
+ROCK_MAX_SCALE: 2.0
+ROCK_HEIGHT_RATIO: 0.7
+
+# --- Object mask (when placing in Unreal) ---
+BOULDER_MIN_RADIUS_M: 0.5   # Rocks this radius and larger are 'boulder' (id 9), smaller 'small_rock' (id 10)

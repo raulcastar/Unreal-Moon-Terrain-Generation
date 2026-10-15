@@ -29,8 +29,9 @@ import random
 import unreal
 
 import mask_classes
-from rock_models import (GLTF_EXTENSIONS, MESH_EXTENSIONS,  # noqa: F401
-                         find_model_files, fitting_models, instance_groups)
+from rock_models import (GLTF_EXTENSIONS, GLTF_PLACEHOLDER_TEXTURES,  # noqa: F401
+                         GLTF_TEXTURE_SLOTS, MESH_EXTENSIONS, find_model_files,
+                         fitting_models, instance_groups, texture_for_slot)
 from unreal_level_saver import save_current_level
 
 ROCK_ASSET_FOLDER = "/Game/LunarRocks"
@@ -46,7 +47,7 @@ PHYSICS_MASS_KG = 500.0
 # the GNC simulator reads its copy of that file).
 BOULDER_STENCIL = mask_classes.id_of("boulder")
 SMALL_ROCK_STENCIL = mask_classes.id_of("small_rock")
-BOULDER_MIN_RADIUS_M = 0.15
+BOULDER_MIN_RADIUS_M = 0.5   # as rock_field.DEFAULTS (the studio passes its setting)
 
 
 # =========================================================================
@@ -222,6 +223,40 @@ def _matching_texture(mesh_path):
     return os.path.join(folder, textures[0]) if len(textures) == 1 else None
 
 
+def _repair_gltf_materials(folder):
+    """
+    Fills the glTF material slots that Unreal's importer left on an engine
+    placeholder (a white base colour, a flat normal) with the model's own
+    imported textures, matched by name. Unreal leaves them empty when one
+    material is shared by several meshes, as in a file holding its LODs: the
+    rock then renders plain white. Returns how many slots were filled.
+    """
+    textures = {t.get_name(): t for t in _assets_in(folder, unreal.Texture2D)}
+    if not textures:
+        return 0
+    library = unreal.MaterialEditingLibrary
+    filled = 0
+    for material in _assets_in(folder, unreal.MaterialInstanceConstant):
+        changed = False
+        names = [str(n) for n in library.get_texture_parameter_names(material)]
+        for slot, _endings in GLTF_TEXTURE_SLOTS:
+            if slot not in names:
+                continue
+            current = library.get_material_instance_texture_parameter_value(material, slot)
+            if current is not None and current.get_name() not in GLTF_PLACEHOLDER_TEXTURES:
+                continue
+            match = texture_for_slot(slot, sorted(textures))
+            if match:
+                library.set_material_instance_texture_parameter_value(material, slot, textures[match])
+                unreal.log(f"[*] {material.get_name()}: {slot} was empty after import; set to {match}.")
+                changed = True
+                filled += 1
+        if changed:
+            library.update_material_instance(material)
+            unreal.EditorAssetLibrary.save_loaded_asset(material, only_if_is_dirty=False)
+    return filled
+
+
 def _import_model(model_path):
     """
     Imports a rock model into its own folder under ROCK_ASSET_FOLDER and returns
@@ -231,13 +266,16 @@ def _import_model(model_path):
     stem = os.path.splitext(os.path.basename(model_path))[0]
     folder = f"{ROCK_ASSET_FOLDER}/{_asset_name(stem)}"
 
-    # Reuse a previous import unless it is empty.
+    # Reuse a previous import unless it is empty (repairing its glTF materials).
     meshes = _usable(_assets_in(folder, unreal.StaticMesh))
     if meshes:
+        if model_path.lower().endswith(GLTF_EXTENSIONS):
+            _repair_gltf_materials(folder)
         return _pick_lod0(meshes)
 
     if model_path.lower().endswith(GLTF_EXTENSIONS):
         meshes = _usable(_loaded(_run_import(model_path, folder), unreal.StaticMesh))
+        _repair_gltf_materials(folder)
     else:
         meshes = _usable(_loaded(
             _run_import(model_path, folder, f"SM_{_asset_name(stem)}",

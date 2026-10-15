@@ -23,7 +23,7 @@ from gui.ground_truth_logic import (DEFAULT_MASK_IDS, GNC_CLASSES_FILE, LUG_SPAC
 from gui.backend import rock_field, crater_map, heightmap_files, send_masks, LOADER_AVAILABLE
 from gui.dem_files import DEM_FILETYPES, dem_group_name, drop_dem_menu, load_dem_array
 from gui.paths import map_browse_dir
-from gui.widgets import ParamRow, ProgressPanel, Tooltip
+from gui.widgets import ParamRow, ProgressPanel, StepTabs, Tooltip
 
 import mask_classes  # noqa: E402  (unreal_link, put on the path by gui.paths)
 
@@ -76,42 +76,24 @@ class GroundTruthPage(ttk.Frame):
         ttk.Label(top_bar, text="Crater & Shadow Masks",
                   font=("Segoe UI Semibold", 11)).pack(side="left", padx=(8, 0))
 
-        actions = ttk.Frame(left)
-        actions.pack(side="bottom", fill="x", pady=(6, 0))
-        ttk.Button(actions, text="Open output folder",
-                   command=self.open_output_folder).pack(fill="x")
+        # One tab per step, each with its settings and, pinned beneath them, its
+        # buttons; the map they all use stays above the tabs.
+        self.steps = StepTabs(left, background=self.app.cget("background"),
+                              on_width=self._rewrap)
+        craters_tab, craters_actions = self.steps.add_step("Craters")
+        shadows_tab, _ = self.steps.add_step("Shadows")
+        tracks_tab, tracks_actions = self.steps.add_step("Tracks")
+        unreal_tab, unreal_actions = self.steps.add_step("Unreal")
+        labels_tab, labels_actions = self.steps.add_step("Labels")
 
-        scroll_host = ttk.Frame(left)
-        scroll_host.pack(side="top", fill="both", expand=True, pady=(8, 0))
-        canvas = tk.Canvas(scroll_host, highlightthickness=0, borderwidth=0,
-                           background=self.app.cget("background"))
-        scrollbar = ttk.Scrollbar(scroll_host, orient="vertical", command=canvas.yview)
-        inner = ttk.Frame(canvas)
-        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        window = canvas.create_window((0, 0), window=inner, anchor="nw")
-
-        def on_canvas_resize(event):
-            canvas.itemconfigure(window, width=event.width)
-            wrap = max(160, event.width - 24)
-            for label in self._wrapping_labels:
-                if label.winfo_exists():
-                    label.configure(wraplength=wrap)
-
-        canvas.bind("<Configure>", on_canvas_resize)
-        canvas.configure(yscrollcommand=scrollbar.set)
-        # The scrollbar is packed first: packed after an expanding canvas it is the
-        # one squeezed out when the panel is narrow, and the panel no longer shows
-        # that it scrolls (the controls below the window looked missing).
-        scrollbar.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-
-        self._hint(inner, "Shows craters in the rover's object mask "
+        self._hint(craters_tab, "Shows craters in the rover's object mask "
                           "(navcam/central/object_mask): the mask camera's material draws "
                           "this crater map on the Landscape. Rocks get their ids when they "
                           "are placed (step 2).", pady=(0, 8))
 
         # Source DEM
-        source = self._group(inner, "Map")
+        source = self._group(left, "Map")
+        source.pack_configure(pady=(8, 6))
         self.source_var = tk.StringVar(value="(none - load a DEM)")
         ttk.Entry(source, textvariable=self.source_var, state="readonly",
                   font=("Consolas", 8)).pack(fill="x")
@@ -125,7 +107,7 @@ class GroundTruthPage(ttk.Frame):
                   font=("Consolas", 9)).pack(side="left", padx=(4, 0))
 
         # Craters
-        craters = self._group(inner, "Craters")
+        craters = self._group(craters_tab, "Craters")
         self.crater_source_var = tk.StringVar(value="detect")
         self.generator_radio = ttk.Radiobutton(
             craters, text="Exact, from the generator", value="generator",
@@ -164,17 +146,20 @@ class GroundTruthPage(ttk.Frame):
              "Mask id of the rim ring; 31 is 'crater_rim'. 0 disables rims.")))
         self.crater_info_var = tk.StringVar(value="Load a DEM, then Find Craters.")
         self._readout(craters, self.crater_info_var)
-        self.find_button = ttk.Button(craters, text="Find Craters", command=self.find_craters)
-        self.find_button.pack(fill="x", pady=(6, 0))
-        self.export_button = ttk.Button(craters, text="Export Crater Map",
+        self.find_button = ttk.Button(craters_actions, text="Find Craters",
+                                      style="Accent.TButton", command=self.find_craters)
+        self.find_button.pack(fill="x")
+        self.export_button = ttk.Button(craters_actions, text="Export Crater Map",
                                         command=self.export_crater_map)
         self.export_button.pack(fill="x", pady=(4, 0))
+        ttk.Button(craters_actions, text="Open output folder",
+                   command=self.open_output_folder).pack(fill="x", pady=(4, 0))
         Tooltip(self.export_button,
                 "Writes <map>_craterMask.png (mask ids, 4 cells per DEM cell) and its\n"
                 ".json into the map's output folder.")
 
         # Shadows
-        shadows = self._group(inner, "Shadows")
+        shadows = self._group(shadows_tab, "Shadows")
         self.shadows_var = tk.BooleanVar(value=True)
         shadow_check = ttk.Checkbutton(shadows, text="Stream a shadow mask feed",
                                        variable=self.shadows_var)
@@ -204,7 +189,7 @@ class GroundTruthPage(ttk.Frame):
         self._refresh_shadow_ids()
 
         # Sun
-        sun = self._group(inner, "Sun")
+        sun = self._group(shadows_tab, "Sun")
         self.sun_var = tk.BooleanVar(value=True)
         sun_check = ttk.Checkbutton(sun, text=f"Tag the sun's disc in the object mask (id {mask_classes.id_of('sun')})",
                                     variable=self.sun_var)
@@ -223,7 +208,7 @@ class GroundTruthPage(ttk.Frame):
         self.sun_glare_var.trace_add("write", self._ids_changed)
 
         # Wheel tracks
-        tracks = self._group(inner, "Wheel Tracks")
+        tracks = self._group(tracks_tab, "Wheel Tracks")
         self.tracks_var = tk.BooleanVar(value=True)
         tracks_check = ttk.Checkbutton(
             tracks, text=f"Rover leaves wheel tracks (id {mask_classes.id_of('wheel_track')})", variable=self.tracks_var)
@@ -267,8 +252,9 @@ class GroundTruthPage(ttk.Frame):
         self.track_preview = tk.Canvas(tracks, height=46, highlightthickness=0, background="#d9d6d0")
         self.track_preview.pack(fill="x", pady=(4, 0))
         Tooltip(self.track_preview, "Preview of one wheel's track from above (18 cm, travel left to right).")
-        self.track_style_button = ttk.Button(tracks, text="Apply Track Look", command=self.apply_track_style)
-        self.track_style_button.pack(fill="x", pady=(4, 0))
+        self.track_style_button = ttk.Button(tracks_actions, text="Apply Track Look",
+                                             style="Accent.TButton", command=self.apply_track_style)
+        self.track_style_button.pack(fill="x")
         Tooltip(self.track_style_button,
                 "Updates only the tread look in Unreal (the track decal material), also during\n"
                 "Play. Send Masks to Unreal applies it too.")
@@ -279,7 +265,7 @@ class GroundTruthPage(ttk.Frame):
         self._refresh_track_preview()
 
         # Mask camera and sending
-        camera = self._group(inner, "Mask Camera in Unreal")
+        camera = self._group(unreal_tab, "Mask Camera in Unreal")
         self._hint(camera, "The scene capture that renders the object mask. It gets "
                            "PPM_GroundTruthMask and, if its actor has an UnrealStereoCam, is "
                            "streamed as the mask camera.")
@@ -299,14 +285,14 @@ class GroundTruthPage(ttk.Frame):
         self.save_level_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(camera, text="Save the level afterwards",
                         variable=self.save_level_var).pack(anchor="w", pady=(4, 0))
-        self.send_button = ttk.Button(camera, text="Send Masks to Unreal",
+        self.send_button = ttk.Button(unreal_actions, text="Send Masks to Unreal",
                                       style="Accent.TButton", command=self.send_crater_map)
-        self.send_button.pack(fill="x", pady=(6, 0))
+        self.send_button.pack(fill="x")
         Tooltip(self.send_button,
                 "Exports the crater map if needed, rebuilds PPM_GroundTruthMask so Landscape\n"
                 "pixels take the crater ids (rocks keep theirs), and sets up the mask\n"
                 "camera above. The original material is kept as PPM_GroundTruthMask_Backup.")
-        self.restore_button = ttk.Button(camera, text="Restore Original Mask Material",
+        self.restore_button = ttk.Button(unreal_actions, text="Restore Original Mask Material",
                                          command=self.restore_material)
         self.restore_button.pack(fill="x", pady=(4, 0))
         Tooltip(self.restore_button,
@@ -314,7 +300,7 @@ class GroundTruthPage(ttk.Frame):
                 "(from PPM_GroundTruthMask_Backup) and removes the rover-shadow helper.")
 
         # GNC labels
-        labels = self._group(inner, "GNC Labels")
+        labels = self._group(labels_tab, "GNC Labels")
         self._hint(labels, f"Object-mask classes (config/mask_classes.json and the ids above).\n"
                            f"The GNC stereo node reads its copy, {GNC_CLASSES_FILE}:")
         self.labels_text = tk.Text(labels, height=11, font=("Consolas", 8), relief="solid",
@@ -322,8 +308,8 @@ class GroundTruthPage(ttk.Frame):
         self.labels_text.pack(fill="x", pady=(4, 0))
         self.labels_status = ttk.Label(labels, text="", wraplength=360, justify="left")
         self.labels_status.pack(fill="x", pady=(4, 0))
-        copy = ttk.Button(labels, text="Copy", command=self.copy_labels)
-        copy.pack(anchor="e", pady=(4, 0))
+        copy = ttk.Button(labels_actions, text="Copy mask_classes.json", command=self.copy_labels)
+        copy.pack(fill="x")
         Tooltip(copy, "Copies a complete mask_classes.json with these ids, to paste into\n"
                       "the GNC copy (and into config/ here to keep changed ids).")
 
@@ -334,8 +320,8 @@ class GroundTruthPage(ttk.Frame):
             for button in self._unreal_buttons:
                 button.state(["disabled"])
 
-        for widget in (inner, canvas):
-            self._bind_mousewheel(widget, canvas)
+        self.steps.pack(fill="both", expand=True)
+        self.steps.bind_mousewheel()
 
         # Right: map on top, log below.
         right = ttk.Frame(self._panes)
@@ -400,10 +386,12 @@ class GroundTruthPage(ttk.Frame):
         if attempt < 6:
             self.after(60, lambda: self._place_sash(attempt + 1))
 
-    def _bind_mousewheel(self, widget, canvas):
-        widget.bind("<MouseWheel>", lambda e: canvas.yview_scroll(int(-e.delta / 120), "units"))
-        for child in widget.winfo_children():
-            self._bind_mousewheel(child, canvas)
+    def _rewrap(self, width):
+        """Re-wraps the column's text to the width the drag handle gave it."""
+        wrap = max(160, width - 24)
+        for label in self._wrapping_labels:
+            if label.winfo_exists():
+                label.configure(wraplength=wrap)
 
     def log(self, text, level=None):
         self.log_text.configure(state="normal")

@@ -44,14 +44,18 @@ def test_export_confirmation():
     assert text.endswith("Continue?")
 
 
-def test_model_info_and_stretch():
+def test_model_info():
     assert "unknown" in logic.model_info_text(None, None, 0.8)
     ok = logic.model_info_text((0.1, 0.4, 0.8), (0.9, 1.2), 0.8)
-    assert "Planned radii scale them 0.9x-1.2x" in ok and "Match" not in ok and "height_m" not in ok
-    stretched = logic.model_info_text((0.1, 0.4, 0.8), (0.2, 5.0), 0.4)
-    assert "Match Rock Sizes" in stretched and "height_m in the CSV" in stretched
-    assert logic.is_stretched((0.2, 1.0)) and logic.is_stretched((1.0, 3.5))
-    assert not logic.is_stretched((0.5, 2.0)) and not logic.is_stretched(None)
+    assert "Planned radii scale them 0.9x-1.2x" in ok and "height_m" not in ok
+    # Scaling the models far from their own size is expected (small scans used as
+    # boulders): the read-out states it without asking to change anything.
+    scaled = logic.model_info_text((0.04, 0.13, 1.2), (1.6, 23.0), 0.7)
+    assert "1.6x-23x" in scaled and "Match" not in scaled
+    # height_m is a maximum: taller models are flattened, squatter ones stay lower.
+    assert "flattens them to height_m" in scaled
+    squat = logic.model_info_text((0.1, 0.4, 0.3), (0.9, 1.2), 0.7)
+    assert "stay lower than height_m" in squat
 
 
 def test_rock_estimate_text():
@@ -102,3 +106,29 @@ def test_plan_drawing():
     plots.draw_message(figure, "Loading ...")
     figure.canvas.draw()
     assert figure.axes[0].texts[0].get_text() == "Loading ..."
+
+
+def test_an_export_remembers_its_settings_and_flags_changes(tmp_path):
+    """Placing compares the exported field's settings with the controls (Export & Unreal tab)."""
+    import rock_field
+    params = rock_field.default_params()
+    exported = logic.export_settings(params, 1, 1.0, str(tmp_path / "map.npy"), "generator")
+    rocks_csv = str(tmp_path / "map_rocks.csv")
+    logic.save_settings(rocks_csv, exported)
+    assert logic.load_settings(rocks_csv) == exported
+    assert logic.settings_changes(logic.load_settings(rocks_csv), exported) == []
+
+    changed = logic.export_settings({**params, "ROCK_COVERAGE": 0.02}, 2, 1.0,
+                                    str(tmp_path / "map.npy"), "detected")
+    assert logic.settings_changes(exported, changed) == ["coverage", "seed", "crater source"]
+    text, level = logic.export_status(True, ["coverage", "seed"])
+    assert level == "warn" and "coverage, seed" in text and "old field" in text
+    assert logic.export_status(True, [])[1] == "ok"
+    assert "No rock field" in logic.export_status(False, [])[0]
+    assert "not recorded" in logic.export_status(True, None)[0]
+    assert logic.load_settings(str(tmp_path / "other_rocks.csv")) is None
+    # The boulder threshold only splits rocks between mask ids when placing: the
+    # exported file stays current when it changes.
+    reclassed = logic.export_settings({**params, "BOULDER_MIN_RADIUS_M": 1.0}, 1, 1.0,
+                                      str(tmp_path / "map.npy"), "generator")
+    assert logic.settings_changes(exported, reclassed) == []

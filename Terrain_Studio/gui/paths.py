@@ -25,6 +25,8 @@ UNREAL_LINK_DIR = os.path.join(STUDIO_DIR, "unreal_link")     # Senders that tal
 # Presets, source DEMs and generated files all sit at the repository root, so
 # they are visible without digging into the code folders.
 CONFIG_DIR = os.path.join(PROJECT_ROOT, "config")
+ROCK_CONFIG_DIR = os.path.join(CONFIG_DIR, "rocks")              # Rock field presets
+DEFAULT_ROCK_PRESET = "lunar_mare.yaml"
 
 
 # All generated files go under outputs/<map name>/ at the repository root.

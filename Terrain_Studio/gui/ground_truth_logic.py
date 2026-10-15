@@ -6,7 +6,7 @@ crater source, the wheel-track look and the mask cameras. No Tk.
 import json
 import os
 
-from gui.backend import crater_map
+from gui.backend import crater_map, rock_field
 
 import mask_classes  # noqa: E402  (unreal_link, put on the path by gui.paths)
 
@@ -14,7 +14,8 @@ import mask_classes  # noqa: E402  (unreal_link, put on the path by gui.paths)
 # rock planner and craters in Ground Truth; both views read them for placement
 # and the GNC labels.
 DEFAULT_MASK_IDS = {"boulder": mask_classes.id_of("boulder"),
-                    "small_rock": mask_classes.id_of("small_rock"), "boulder_radius_m": 0.15,
+                    "small_rock": mask_classes.id_of("small_rock"),
+                    "boulder_radius_m": rock_field.DEFAULTS["BOULDER_MIN_RADIUS_M"],
                     "crater": crater_map.CRATER_ID, "rim": crater_map.RIM_ID}
 SUN_GLARE_ID = mask_classes.id_of("sun_glare")
 
