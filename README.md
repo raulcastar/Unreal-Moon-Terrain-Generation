@@ -689,3 +689,14 @@ Terrain_Studio/
 config/  input_maps/  outputs/
 docs/images/                     README screenshots
 ```
+
+## License
+
+[MIT](LICENSE), © 2026 Raul Castilla Arquillo, except:
+
+- `Terrain_Studio/unreal_link/remote_execution.py` is © Epic Games (Unreal
+  Engine's Remote Execution client), under the Unreal Engine EULA.
+- The rock models in `input_rocks/` are from
+  [Poly Haven's Moon collection](https://polyhaven.com/collections/moon),
+  [CC0](https://creativecommons.org/publicdomain/zero/1.0/) (public domain).
+  The Unreal project's landscape textures come from the same collection.
