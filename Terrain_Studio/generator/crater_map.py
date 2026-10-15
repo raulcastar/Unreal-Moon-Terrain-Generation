@@ -106,13 +106,15 @@ def supersample_for(shape):
     return max(1, min(SUPERSAMPLE, MAX_MAP_SIDE // max(shape)))
 
 
-def load_crater_list(path):
+def load_crater_list(path, with_depth=False):
     """
     Craters as [(row, col, radius)] in DEM cells from a generator crater list
-    (<group>_craters.csv, see terrain_core.export_crater_list).
+    (<group>_craters.csv, see terrain_core.export_crater_list); with_depth adds
+    each bowl's depth in metres: [(row, col, radius, depth_m)].
     """
-    data = np.loadtxt(path, delimiter=",", skiprows=1, usecols=(1, 2, 3), ndmin=2)
-    return [(float(r), float(c), float(radius)) for r, c, radius in data]
+    columns = (1, 2, 3, 7) if with_depth else (1, 2, 3)
+    data = np.loadtxt(path, delimiter=",", skiprows=1, usecols=columns, ndmin=2)
+    return [tuple(float(v) for v in row) for row in data]
 
 
 # find_craters results for the last few terrains: building the rock field and

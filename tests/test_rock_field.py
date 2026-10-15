@@ -161,3 +161,42 @@ def test_export_rock_field(field, outputs_dir):
     assert obstacle.shape == field["full_shape"]
     paths = pd.read_csv(written["paths_csv"])
     assert set(paths["path_id"]) == set(range(len(field["paths"])))
+
+
+# ---------------------------------------------------------------- the generator's craters
+
+@pytest.fixture(scope="module")
+def generated():
+    """A small generated terrain and its exact crater list (row, col, radius, depth_m)."""
+    import terrain_core
+    params = terrain_core.coerce_params({**terrain_core.default_params(), "ROWS": 300, "COLS": 300})
+    result = terrain_core.generate_terrain(params, seed=5)
+    craters = [(r, c, rad, rad * params["CRATER_DEPTH_RATIO"]) for r, c, rad in result["craters"]]
+    return result["elevation"], craters
+
+
+def test_generator_craters_drive_the_plan(generated):
+    dem, craters = generated
+    params = rock_field.coerce_params({"MIN_CRATER_DEPTH_M": 0.5})
+    field = rock_field.build_rock_field(dem, RESOLUTION, params, seed=3, craters=craters)
+    assert field["crater_source"] == "generator" and field["crater_count"] == len(craters)
+    # Impassable: exactly the bowls at least MIN_CRATER_DEPTH_M deep (plan grid = DEM here).
+    deep = [c for c in craters if c[3] >= 0.5]
+    expected = rock_field._crater_disks(dem.shape, deep, 1.0, 1.0)
+    assert np.array_equal(field["crater_mask"], expected)
+    # The corridors' sites are those craters (each its centre; a crater cut by the
+    # map edge, the centre of the part on the map).
+    for row, col in field["markers"]:
+        assert any(np.hypot(r - row, c - col) <= radius for r, c, radius, _ in deep)
+    assert field["road_segments"] > 0
+
+
+def test_no_rock_inside_any_generator_crater(generated):
+    """Every crater, however shallow, keeps its bowl (up to the rim crest) free of rocks."""
+    dem, craters = generated
+    params = rock_field.coerce_params({"MIN_CRATER_DEPTH_M": 5.0, "ROCK_COVERAGE": 0.05})
+    field = rock_field.build_rock_field(dem, RESOLUTION, params, seed=3, craters=craters)
+    assert field["rock_count"] > 0
+    for row, col, *_ in field["rocks_px"]:
+        for r, c, radius, _depth in craters:
+            assert np.hypot(row - r, col - c) > radius

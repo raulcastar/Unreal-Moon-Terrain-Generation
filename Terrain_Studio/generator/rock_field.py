@@ -512,8 +512,21 @@ def _place_rocks(region, corridor, crater_mask, params, res_row, res_col, seed,
 # TOP-LEVEL DRIVER
 # =========================================================================
 
+def _crater_disks(shape, craters, scale_row, scale_col, margin=0.0):
+    """
+    Boolean mask of crater disks on a grid `scale` times coarser than the DEM.
+    `craters` are (row, col, radius, ...) in DEM cells; `margin` is in grid cells.
+    """
+    mask = np.zeros(shape, dtype=bool)
+    mean_scale = 0.5 * (scale_row + scale_col)
+    for crater in craters:
+        row, col, radius = crater[:3]
+        _stamp_disk(mask, row / scale_row, col / scale_col, radius / mean_scale + margin)
+    return mask
+
+
 def build_rock_field(elevation, resolution, params, seed=None,
-                     progress=None, cancel_check=None):
+                     progress=None, cancel_check=None, craters=None):
     """
     Plans a rock field and rover-corridor network for a DEM.
 
@@ -524,6 +537,11 @@ def build_rock_field(elevation, resolution, params, seed=None,
         seed (int|None): Random seed for reproducible placement.
         progress (callable|None): fn(message, fraction) status hook.
         cancel_check (callable|None): fn() -> bool cooperative-cancel hook.
+        craters (list|None): The generator's exact craters, [(row, col, radius,
+            depth_m)] in DEM cells (crater_map.load_crater_list(..., with_depth=True)).
+            Used instead of detecting them: those at least MIN_CRATER_DEPTH_M deep
+            are impassable (and the corridors' Voronoi sites), and every crater's
+            bowl up to its rim crest is kept free of rocks. None: detect them.
 
     Returns:
         dict describing the plan; see the assembled result at the end.
@@ -543,8 +561,13 @@ def build_rock_field(elevation, resolution, params, seed=None,
 
     # Craters are the only impassable terrain: closed depressions the rover
     # cannot cross, also off-limits for rocks. Everything else is drivable.
-    report("Detecting craters", 0.25)
-    crater_mask, depression = detect_craters(plan, params['MIN_CRATER_DEPTH_M'])
+    if craters is not None:
+        report("Using the generator's craters", 0.25)
+        deep = [c for c in craters if len(c) < 4 or c[3] >= params['MIN_CRATER_DEPTH_M']]
+        crater_mask = _crater_disks((rows, cols), deep, scale_row, scale_col)
+    else:
+        report("Detecting craters", 0.25)
+        crater_mask, _depression = detect_craters(plan, params['MIN_CRATER_DEPTH_M'])
     passable = ~crater_mask
     region, _, _ = _largest_component(passable)
 
@@ -570,7 +593,7 @@ def build_rock_field(elevation, resolution, params, seed=None,
         corridor = np.zeros((rows, cols), dtype=bool)
         paths = []
         markers = []
-    marker_label = "Crater centre (site)"
+    marker_label = "Crater centre (site)" if craters is None else "Crater centre (generator)"
 
     # Rocks also stay out of every crater bowl up to its rim crest. The mask
     # above holds only the ground at least MIN_CRATER_DEPTH_M deep, which misses
@@ -580,16 +603,21 @@ def build_rock_field(elevation, resolution, params, seed=None,
     # planning one (CRATER_GRID_CAP; the full DEM for maps up to that size), so
     # small craters are found too, and widened by a margin for the difference
     # between grids.
-    report("Fitting crater rims", 0.55)
-    from crater_map import find_craters     # crater_map imports this module
-    fine, fine_row, fine_col, fine_scale_row, fine_scale_col = _plan_grid(
-        elevation, resolution, CRATER_GRID_CAP)
-    to_plan_row, to_plan_col = fine_scale_row / scale_row, fine_scale_col / scale_col
-    rock_keepout = crater_mask.copy()
-    for row, col, radius in find_craters(fine, 0.5 * (fine_row + fine_col),
-                                         params['MIN_CRATER_DEPTH_M']):
-        _stamp_disk(rock_keepout, row * to_plan_row, col * to_plan_col,
-                    radius * 0.5 * (to_plan_row + to_plan_col) + CRATER_KEEPOUT_MARGIN_PX)
+    if craters is not None:
+        # The generator's rims are exact: every crater, however shallow.
+        rock_keepout = crater_mask | _crater_disks((rows, cols), craters, scale_row, scale_col,
+                                                   CRATER_KEEPOUT_MARGIN_PX)
+    else:
+        report("Fitting crater rims", 0.55)
+        from crater_map import find_craters     # crater_map imports this module
+        fine, fine_row, fine_col, fine_scale_row, fine_scale_col = _plan_grid(
+            elevation, resolution, CRATER_GRID_CAP)
+        to_plan_row, to_plan_col = fine_scale_row / scale_row, fine_scale_col / scale_col
+        rock_keepout = crater_mask.copy()
+        for row, col, radius in find_craters(fine, 0.5 * (fine_row + fine_col),
+                                             params['MIN_CRATER_DEPTH_M']):
+            _stamp_disk(rock_keepout, row * to_plan_row, col * to_plan_col,
+                        radius * 0.5 * (to_plan_row + to_plan_col) + CRATER_KEEPOUT_MARGIN_PX)
 
     registry, occupancy, requested = _place_rocks(
         region, corridor, rock_keepout, params, res_row, res_col, seed,
@@ -625,6 +653,8 @@ def build_rock_field(elevation, resolution, params, seed=None,
         'passable': passable,
         'crater_mask': crater_mask,
         'crater_frac': float(crater_mask.sum()) / total_px,
+        'crater_source': 'detected' if craters is None else 'generator',
+        'crater_count': None if craters is None else len(craters),
         'region': region,
         'corridor': corridor,
         'paths': paths,

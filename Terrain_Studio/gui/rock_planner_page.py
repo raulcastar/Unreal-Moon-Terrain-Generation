@@ -19,11 +19,11 @@ from gui import paths
 from gui import rock_planner_logic as logic
 from gui import rock_planner_plots as plots
 from gui.rock_planner_logic import ROCK_PARAM_GROUPS
-from gui.backend import (terrain_core, rock_field, heightmap_files, send_rocks, rock_models,
-                         LOADER_AVAILABLE)
+from gui.backend import (terrain_core, rock_field, crater_map, heightmap_files, send_rocks,
+                         rock_models, LOADER_AVAILABLE)
 from gui.dem_files import (DEM_FILETYPES, dem_group_name, dem_source_note, drop_dem_menu,
                            load_dem_array, planned_rock_files)
-from gui.ground_truth_logic import DEFAULT_MASK_IDS, mask_ids
+from gui.ground_truth_logic import DEFAULT_MASK_IDS, crater_list_for, crater_source_info, mask_ids
 from gui.paths import map_browse_dir
 from gui.widgets import ParamRow, ProgressPanel, Tooltip, ask_confirmation, format_path_block
 
@@ -47,6 +47,7 @@ class RockPlannerPage(ttk.Frame):
         self.figure_dpi = figure_dpi
         self.dem = None               # Loaded elevation array
         self.dem_path = None
+        self.crater_list_path = None  # the generator's <group>_craters.csv for this DEM, if any
         self.result = None            # Last rock_field.build_rock_field() output
         self.params = rock_field.default_params()
         self.rows_widgets = {}
@@ -178,6 +179,8 @@ class RockPlannerPage(ttk.Frame):
             group = ttk.Labelframe(inner, text=group_name, padding=(8, 4, 8, 8),
                                    style="Group.TLabelframe")
             group.pack(fill="x", pady=(0, 8))
+            if group_name == "Crater Hazards":
+                self._build_crater_source(group)
             for spec in specs:
                 self.rows_widgets[spec[0]] = ParamRow(group, spec, self._on_param_change)
             if group_name == "Rock Population":
@@ -454,6 +457,44 @@ class RockPlannerPage(ttk.Frame):
         self.output_preview_var.set(generator_logic.output_preview_text(
             base_name, planned_rock_files(base_name, self.obstacle_map_var.get())))
 
+    def _build_crater_source(self, group):
+        """Exact craters from the generator's list, or detected in the DEM (as in Crater Masks)."""
+        self.crater_source_var = tk.StringVar(value="detect")
+        self.generator_radio = ttk.Radiobutton(
+            group, text="Exact, from the generator", value="generator",
+            variable=self.crater_source_var, command=self._crater_source_changed)
+        self.generator_radio.pack(anchor="w")
+        Tooltip(self.generator_radio,
+                "Terrains generated in this studio list every crater they placed\n"
+                "(<map>_craters.csv): centre, rim radius and depth are exact.\n"
+                "Craters at least the depth below deep are impassable and the corridors'\n"
+                "sites; every crater's bowl, up to its rim, is kept free of rocks.")
+        ttk.Radiobutton(group, text="Detected in the DEM", value="detect",
+                        variable=self.crater_source_var,
+                        command=self._crater_source_changed).pack(anchor="w")
+        self.crater_source_info_var = tk.StringVar()
+        self._wrapping_labels.append(ttk.Label(
+            group, textvariable=self.crater_source_info_var, justify="left",
+            style="Readout.TLabel"))
+        self._wrapping_labels[-1].pack(anchor="w", pady=(2, 4))
+        self._refresh_crater_source()
+
+    def _use_generator_craters(self):
+        return self.crater_source_var.get() == "generator" and self.crater_list_path is not None
+
+    def _refresh_crater_source(self):
+        has_list = self.crater_list_path is not None
+        self.generator_radio.state(["!disabled"] if has_list else ["disabled"])
+        if not has_list and self.crater_source_var.get() == "generator":
+            self.crater_source_var.set("detect")
+        self.crater_source_info_var.set(crater_source_info(
+            has_list, self._use_generator_craters(),
+            os.path.basename(self.crater_list_path) if has_list else None))
+
+    def _crater_source_changed(self):
+        self._refresh_crater_source()
+        self.request_preview()
+
     def open_dem_menu(self):
         """Drops the list of project DEMs under the Load button."""
         drop_dem_menu(self, self.load_button, self.load_dem, self.browse_dem)
@@ -473,6 +514,10 @@ class RockPlannerPage(ttk.Frame):
 
         # Name the export after the map so the rocks land in its output folder.
         self.export_name_var.set(dem_group_name(path))
+        # A map generated here comes with its exact craters: use them by default.
+        self.crater_list_path = crater_list_for(path, dem_group_name(path))
+        self.crater_source_var.set("generator" if self.crater_list_path else "detect")
+        self._refresh_crater_source()
 
         self.log(f"Loading DEM: {os.path.basename(path)} ...")
         self._show_message(f"Loading {os.path.basename(path)} ...")
@@ -519,6 +564,7 @@ class RockPlannerPage(ttk.Frame):
         dem = self.dem
         do_map = self.obstacle_map_var.get()
         base_name = self._base_name()
+        crater_list = self.crater_list_path if self._use_generator_craters() else None
 
         self._cancel.clear()
         self.preview_button.state(["disabled"])
@@ -529,8 +575,10 @@ class RockPlannerPage(ttk.Frame):
 
         def worker():
             try:
+                craters = (crater_map.load_crater_list(crater_list, with_depth=True)
+                           if crater_list else None)
                 result = rock_field.build_rock_field(
-                    dem, resolution, params, seed=seed,
+                    dem, resolution, params, seed=seed, craters=craters,
                     progress=lambda m, f: self._queue.put(("progress", (m, f))),
                     cancel_check=self._cancel.is_set)
                 self._queue.put(("result", result))

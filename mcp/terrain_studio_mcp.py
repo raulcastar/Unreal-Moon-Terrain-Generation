@@ -32,6 +32,7 @@ from mcp.server.mcpserver import MCPServer  # noqa: E402
 from mcp.server.mcpserver.exceptions import ToolError  # noqa: E402
 from mcp.types import ToolAnnotations  # noqa: E402
 
+import crater_map  # noqa: E402
 import rock_field  # noqa: E402
 import send_masks  # noqa: E402
 import send_rocks  # noqa: E402
@@ -244,22 +245,28 @@ def describe_dem(path: str, resolution_m_per_px: float = 1.0) -> dict:
 
 @server.tool(annotations=WRITE)
 def plan_rocks(dem_path: str, resolution_m_per_px: float = 1.0, seed: int | None = None,
-               overrides: dict | None = None, obstacle_map: bool = False) -> dict:
+               overrides: dict | None = None, obstacle_map: bool = False,
+               generator_craters: bool = True) -> dict:
     """
     Plans a rock field with connected rover corridors on a DEM and writes
     outputs/<group>/<group>_rocks.csv and _roverPaths.csv (and _obstacleMap.csv).
     overrides: rock parameters (list_presets rock_defaults), e.g. {"ROCK_COVERAGE": 0.05}.
+    generator_craters: use the exact craters a terrain generated here lists
+    (<group>_craters.csv) instead of detecting them in the DEM, when the list exists.
     """
     full = _resolve_dem(dem_path)
     dem = _load_dem(full)
     params = rock_field.coerce_params(_override(rock_field.default_params(), overrides, rock_field.DEFAULTS))
     group = dem_group_name(os.path.splitext(os.path.basename(full))[0])
+    crater_list = os.path.join(os.path.dirname(full), f'{group}_craters.csv')
+    craters = (crater_map.load_crater_list(crater_list, with_depth=True)
+               if generator_craters and os.path.isfile(crater_list) else None)
     lines = []
     with _captured(lines):
-        result = rock_field.build_rock_field(dem, resolution_m_per_px, params, seed=seed)
+        result = rock_field.build_rock_field(dem, resolution_m_per_px, params, seed=seed, craters=craters)
         written = rock_field.export_rock_field(result, paths.GENERATOR_OUTPUT_DIR, f'{group}_elevationMap',
                                                export_obstacle_map=obstacle_map)
-    return {'group': group, 'rocks': result['rock_count'], 'capped': bool(result.get('rock_capped')),
+    return {'group': group, 'crater_source': result['crater_source'], 'rocks': result['rock_count'], 'capped': bool(result.get('rock_capped')),
             'drivable_pct': round(result['drivable_frac'] * 100, 1),
             'crater_pct': round(result['crater_frac'] * 100, 1),
             'free_after_rocks_pct': round(result['free_frac'] * 100, 1),

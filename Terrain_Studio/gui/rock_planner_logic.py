@@ -28,7 +28,8 @@ ROCK_PARAM_GROUPS = [
     ("Crater Hazards", [
         ("MIN_CRATER_DEPTH_M", "Min crater depth (m)", 0.05, 20.0, 'log',
          "A closed depression at least this deep is treated as a crater: impassable\n"
-         "to the rover and excluded from rock placement.\n"
+         "to the rover and excluded from rock placement. With the generator's\n"
+         "craters, the bowls at least this deep are impassable.\n"
          "Lower values flag shallower craters; higher values ignore them."),
     ]),
     ("Rock Population", [
@@ -161,6 +162,8 @@ def result_log_lines(result, max_rocks):
     if result.get('rock_capped'):
         lines.append((f"The coverage asked for {result['rock_requested']:,} rocks; the plan "
                       f"stops at {max_rocks:,}, so it covers less than asked.", "warn"))
+    if result.get('crater_source') == 'generator':
+        lines.append((f"Craters: the generator's {result['crater_count']} (exact).", None))
     lines.append((
         f"Placed {result['rock_count']} rocks. "
         f"Drivable {result['drivable_frac'] * 100:.1f}% of map "

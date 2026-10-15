@@ -86,6 +86,14 @@ Scatters rocks across the drivable ground while guaranteeing a connected route:
    crater circles as the crater map (step 3), so no rock lands on a crater id.
    The circles are fitted on a grid of up to 1024 px, so small craters are kept
    clear too.
+
+   For a map generated in step 1, **Crater Hazards → Exact, from the generator**
+   (chosen automatically when `<map>_craters.csv` is next to the DEM) uses the
+   generator's own crater list instead of detecting craters. The craters at
+   least *Min crater depth* deep are impassable and are the corridors' sites.
+   Every crater's bowl, up to its rim, is kept free of rocks. Detection can
+   miss craters: on a 1000 × 1000 map with 400 craters it found 186, and the
+   plan put 409 rocks inside real crater rims, against 0 with the exact list.
 2. **Corridors** follow the Voronoi diagram of the crater centres, so the rover
    drives down the middle of the gaps between them.
 3. **Rocks** are never placed within half the path width of a corridor.
