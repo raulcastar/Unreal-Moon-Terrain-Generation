@@ -1,0 +1,4 @@
+# The MCP server (terrain_studio_mcp.py) imports the studio, so it needs its dependencies too:
+#     py -m pip install -r mcp/requirements.txt
+-r ../requirements.txt
+mcp==2.3.0

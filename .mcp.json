@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "terrain-studio": {
+      "command": "py",
+      "args": ["mcp/terrain_studio_mcp.py"]
+    }
+  }
+}

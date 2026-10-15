@@ -49,7 +49,10 @@ parser.add_argument(
     action="store_true",
     help="Skip the Matplotlib preview window (useful for batch runs)"
 )
-args = parser.parse_args()
+# Only a command-line run reads the command line: an import (the tests import
+# this module) gets the defaults instead of parsing its host's arguments
+# (pytest's -k, file names, ...).
+args = parser.parse_args() if __name__ == "__main__" else parser.parse_args([])
 
 CONFIG_PATH = args.config
 OUTPUT_DIR = args.output_dir

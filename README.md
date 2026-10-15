@@ -548,6 +548,26 @@ Craters never overlap; at high densities fewer than the target may fit, which th
 studio reports. Large maps build their macro terrain on a 1024 px grid and
 upsample it, keeping a 10000×10000 map to seconds rather than tens of minutes.
 
+## AI agents (MCP)
+
+`mcp/terrain_studio_mcp.py` is an MCP server that lets an AI agent use the
+studio. It calls the same code as the GUI and writes to the same `outputs/`:
+
+- **Terrain:** generate terrains from the presets, list and describe DEMs.
+- **Rocks:** plan rock fields.
+- **Unreal:** build the Landscape and rocks, set the sun, list the mask
+  cameras, and read the editor state, including starting and stopping Play.
+
+```sh
+py -m pip install -r mcp/requirements.txt                       # once
+claude mcp add terrain-studio -- py "<repo>/mcp/terrain_studio_mcp.py"   # or use the repo's .mcp.json
+```
+
+Tools that change the level refuse while Unreal is in Play, and
+`generate_terrain` won't overwrite an existing `outputs/<name>` unless asked.
+The GNC repo has the matching server for driving the rover. `AGENTS.md` has
+guidance for coding agents working in this repo.
+
 ## Tests
 
 The generator (terrain, craters, rocks) has unit tests in `tests/`, on small
