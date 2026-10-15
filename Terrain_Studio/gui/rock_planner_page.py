@@ -126,8 +126,11 @@ class RockPlannerPage(ttk.Frame):
 
         canvas.bind("<Configure>", on_canvas_resize)
         canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.pack(side="left", fill="both", expand=True)
+        # The scrollbar is packed first: packed after an expanding canvas it is the
+        # one squeezed out when the panel is narrow, and the panel no longer shows
+        # that it scrolls (the controls below the window looked missing).
         scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
 
         self._wrapping_labels.append(ttk.Label(
             inner, justify="left", font=("Segoe UI", 8), foreground="#555555",
