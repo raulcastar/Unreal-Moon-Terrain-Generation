@@ -36,7 +36,7 @@ Python (`sudo apt install python3-tk` on Debian/Ubuntu).
 (Project Settings), and the
 [TAPython](https://github.com/cgerchenhp/UE_TAPython_Plugin_Release) plugin,
 which builds the Landscape. The
-[Unreal-Moon-Simulator](https://github.com/raulcastar/Unreal-Moon-Simulator)
+[MARE-Lunar-Simulator](https://github.com/raulcastar/MARE-Lunar-Simulator)
 project has them all.
 
 ## Workflow
