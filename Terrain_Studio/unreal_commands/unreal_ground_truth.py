@@ -1,7 +1,7 @@
 """
 Unreal Ground Truth: Craters and Shadows
 ----------------------------------------
-Executes natively within the Unreal Engine Python environment. Imports the
+Runs inside the Unreal Editor. Imports the
 studio's crater map (<name>_craterMask.png, cell values = mask ids) and builds
 the object-mask material so landscape pixels take the crater map's id:
 
@@ -28,13 +28,15 @@ of each channel:
             (with blue); without blue, the sky (sky, sun, glare)
 
 The sun's disc gets its own id in the object mask (SUN_ID): sky pixels within
-the sun's angular radius of its direction. A ring around it out to a glare radius
-gets SUN_GLARE_ID: the sky the navcam washes out with bloom around the sun. That direction and radius come from
-the level's Directional Light through MPC_Sun, which the editor watcher keeps
-current (also in a running game). The shadow feeds treat the disc as sky.
+the sun's angular radius of its direction. A ring around it out to a glare
+radius gets SUN_GLARE_ID: the sky the navcam washes out with bloom around the
+sun. That direction and radius come from the level's Directional Light through
+MPC_Sun, which the editor watcher keeps current (also in a running game). The
+shadow feeds treat the disc as sky.
 
-Wheel tracks (unreal_track_setup, laid by the watcher's unreal_wheel_tracks) are decals that write a small metallic value
-regolith never has; ground pixels carrying it get TRACK_ID.
+Wheel tracks (unreal_track_setup, laid by the watcher's unreal_wheel_tracks)
+are decals that write a small metallic value regolith never has; ground pixels
+carrying it get TRACK_ID.
 
 The colours change by at most 1/255, and the GNC stereo node splits the frame
 into object_mask (flag bits cleared) and the shadow feeds. Shadows come from the
@@ -46,10 +48,9 @@ helper capture renders only the rover's depth, looking along the sunlight
 watcher). A shadowed pixel is the rover's shadow when the rover lies between it
 and the sun, even where a rock, crater wall or slope shades it too.
 
-The crater map is read with an exact
-texel fetch at the pixel's world position, using the same DEM frame as the rock
-placer (columns run towards -X); it may hold several cells per DEM cell
-(CraterSupersample).
+The crater map is read with an exact texel fetch at the pixel's world
+position, in the same DEM frame as the rock placer (columns run towards -X); it
+may hold several cells per DEM cell (CraterSupersample).
 """
 
 import json
@@ -741,7 +742,7 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
     texture = import_mask_texture(png_path, CRATER_TEXTURE_PREFIX + stem)
     material = unreal.load_asset(MASK_MATERIAL)
     if material is None:
-        return f"[-] {MASK_MATERIAL} not found: set up the object mask first (UnrealStereoCam README)."
+        return f"[-] {MASK_MATERIAL} not found: set up the object mask first (UnrealStereoCam's docs/object-mask.md)."
     _backup_material()
     retagged = _retag_landscape(landscape, landscape_stencil)
 

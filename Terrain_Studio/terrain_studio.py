@@ -1,22 +1,20 @@
 """
 Lunar Terrain Studio
 --------------------
-Graphical front-end for the procedural lunar DEM pipeline.
+Graphical front-end for the procedural lunar terrain pipeline. A home screen
+leads to each step of the workflow:
 
-Three stages are exposed in a single window:
+  1. Create & Send Terrain   procedural DEM with a fast preview, then the 16-bit
+                             heightmap and the Landscape in a running Unreal Editor
+  2. Rocks & Rover Paths     a rock field around drivable rover corridors, placed
+                             in Unreal and tagged for the object mask
+  3. Crater & Shadow Masks   the crater map and shadow flags of the rover's
+                             object-mask camera
+  4. Sun & Shadows           a lunar Directional Light set from the shadow wanted
 
-  1. PARAMETERS  - every knob of the procedural simulation, with live tooltips
-                   and YAML preset load/save (shared with the CLI generator).
-  2. PREVIEW     - a fast, reduced-resolution render of the exact same pipeline,
-                   shown as a sun-lit shaded relief, a 3D surface, and a slope
-                   analysis, so the surface can be judged before committing to a
-                   full-resolution run.
-  3. UNREAL      - full-resolution generation, conversion to a 16-bit .r16
-                   heightmap, and dispatch to a running Unreal Editor over the
-                   Remote Execution protocol.
-
-Dependencies are limited to what the pipeline already requires (numpy, scipy,
-pandas, pyyaml, matplotlib) plus tkinter from the standard library.
+plus a map browser and the conversion of an existing DEM. Unreal is reached
+over its Remote Execution protocol. Needs numpy, scipy, pandas, pyyaml,
+matplotlib and tkinter.
 
 Run with:  python Terrain_Studio/terrain_studio.py
 """

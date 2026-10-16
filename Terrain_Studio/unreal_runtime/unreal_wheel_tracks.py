@@ -1,7 +1,7 @@
 """
 Unreal Wheel Tracks (Terrain Studio runtime)
 --------------------------------------------
-Executes natively within the Unreal Engine Python environment. Lays wheel tracks
+Runs inside the Unreal Editor. Lays wheel tracks
 on the Landscape behind a rover during Play In Editor; called every frame by the
 editor watcher (unreal_watcher).
 

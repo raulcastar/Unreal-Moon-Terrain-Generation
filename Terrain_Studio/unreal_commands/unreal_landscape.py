@@ -1,9 +1,9 @@
 """
-Unreal Engine Landscape Instantiator
-------------------------------------
-Executes natively within the Unreal Engine Python environment. 
-Receives processed DEM (Digital Elevation Model) topology from the local 
-Python client and orchestrates the generation of the Landscape Actor in the current level.
+Unreal Landscape
+----------------
+Runs inside the Unreal Editor. Spawns a Landscape in the open level with the
+layout and scale the studio computed (heightmap_files), imports its .r16
+heightmap and gives it its material and object-mask id.
 """
 
 import os
@@ -15,9 +15,7 @@ import unreal
 import mask_classes
 from unreal_level_saver import save_current_level
 
-# --- Global Constants ---
-# Unreal Engine uses Centimeters (cm) as its native base unit for all world transforms.
-CM_PER_METER = 100.0
+CM_PER_METER = 100.0             # Unreal works in centimetres
 
 # Maximum Landscape size (vertices) for the automatic heightmap import. Larger
 # Landscapes fall back to the manual import to bound editor memory use.
@@ -193,13 +191,13 @@ def setup_landscape(landscape_actor, material_path=DEFAULT_LANDSCAPE_MATERIAL,
 def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, heightmap_filepath="outputs/lunar_terrain.r16", x_offset=0.0, y_offset=0.0, z_offset=0.0, save_level=True, import_heightmap=True,
                      landscape_material=DEFAULT_LANDSCAPE_MATERIAL, mask_stencil=LANDSCAPE_MASK_STENCIL):
     """
-    Instantiates and configures a Landscape actor based on pre-calculated DEM dimensions.
-    
+    Spawns the Landscape for a converted DEM, imports its heightmap and sets it up.
+
     Args:
         landscape_config (tuple): Topology parameters (comp_x, comp_y, quads, sections, width, height).
         interpolation_resolution (float): Spatial resolution of the source DEM (meters per pixel).
-        z_axis_scale (float): Normalized vertical scaling factor for the Landscape transform.
-        heightmap_filepath (str): Absolute path to the generated .r16 file for user reference.
+        z_axis_scale (float): Landscape Z-scale (heightmap_files.convert_to_unreal_format).
+        heightmap_filepath (str): Absolute path to the .r16 heightmap.
         x_offset, y_offset, z_offset (float): World-space spawn coordinates in meters.
         save_level (bool): Save the level once the Landscape is set up.
         import_heightmap (bool): Import the .r16 automatically. The manual import
@@ -208,18 +206,16 @@ def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, h
             the engine default).
         mask_stencil (int): Custom Depth Stencil id for the object mask (0 = off).
     """
-    
-    # Unpack the pre-calculated component topology configuration
+
     optimal_comp_x, optimal_comp_y, quads, sections, final_width, final_height = landscape_config
-    
-    # Extract the base filename (e.g., 'lunar_terrain' from 'outputs/lunar_terrain.r16')
+
+    # Labelled after the heightmap ('lunar_terrain' for outputs/lunar_terrain.r16).
     base_filename = os.path.basename(heightmap_filepath)
     actor_label = os.path.splitext(base_filename)[0]
-    
+
     unreal.log(f"[*] Spawning Landscape: {optimal_comp_x}x{optimal_comp_y} components, {quads} quads")
 
-    # Compute physical scale multipliers (Meter to Centimeter conversion).
-    # Note: Float casting is strictly required here to prevent truncation of sub-centimeter resolutions (e.g., 0.015).
+    # Cell size in cm (float, so a resolution like 0.015 m is not truncated).
     unreal_map_scale_x = float(CM_PER_METER * abs(interpolation_resolution))
     unreal_map_scale_y = float(CM_PER_METER * abs(interpolation_resolution))
 
@@ -232,25 +228,24 @@ def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, h
     x_offset -= map_width_meters
 
     # =========================================================================
-    # 1. INSTANTIATE LANDSCAPE ACTOR IN UNREAL
+    # 1. SPAWN THE LANDSCAPE
     # =========================================================================
-    
-    # Construct the foundational world transform for the Landscape actor
+
     landscape_transform = unreal.Transform(
-        location=[x_offset * CM_PER_METER, y_offset * CM_PER_METER, z_offset * CM_PER_METER], 
-        rotation=[0.0, 0.0, 0.0], 
+        location=[x_offset * CM_PER_METER, y_offset * CM_PER_METER, z_offset * CM_PER_METER],
+        rotation=[0.0, 0.0, 0.0],
         scale=[unreal_map_scale_x, unreal_map_scale_y, z_axis_scale]
     )
-    
-    # Dispatch the spawn command to the Editor via the TAPython Landscape API
+
+    # PythonLandscapeLib comes from the TAPython plugin.
     landscape_actor = unreal.PythonLandscapeLib.create_landscape(
-        landscape_transform, 
-        section_size=quads, 
-        sections_per_component=sections, 
-        component_count_x=optimal_comp_x, 
+        landscape_transform,
+        section_size=quads,
+        sections_per_component=sections,
+        component_count_x=optimal_comp_x,
         component_count_y=optimal_comp_y
     )
-    
+
     landscape_actor.set_actor_label(actor_label)
 
     # Read the transform back so the Output Log shows what the Editor applied
@@ -261,7 +256,7 @@ def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, h
                f"(requested Z={z_axis_scale:.4f}); location Z={applied_location.z:.2f} cm; "
                f"full 16-bit range spans {relief_m:.2f} m")
 
-    # Enable Nanite on the Landscape (Requires UE 5.3+)
+    # Nanite Landscape (UE 5.3+)
     try:
         landscape_actor.set_editor_property("bEnableNanite", True)
         unreal.log(f"[*] Nanite enabled for Landscape '{actor_label}'.")
@@ -282,10 +277,10 @@ def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, h
         unreal.log_warning(f"[*] Heightmap not applied: {problem}. Import it manually.")
 
     # =========================================================================
-    # 3. UPDATE VIEWPORT AND EDITOR STATE
+    # 3. SELECT IT AND SAVE
     # =========================================================================
 
-    # Force the Editor selection state to the newly created actor and frame the viewport camera
+    # Select the new Landscape and frame it in the viewport.
     unreal.PythonBPLib.select_actor(landscape_actor, selected=True, notify=True)
     unreal.PythonBPLib.request_viewport_focus_on_selection()
 
@@ -301,12 +296,11 @@ def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, h
         return landscape_actor
 
     # =========================================================================
-    # 4. PROMPT USER WITH IMPORT INSTRUCTIONS
+    # 4. MANUAL IMPORT INSTRUCTIONS (when the automatic import did not run)
     # =========================================================================
 
     dialog_title = "Landscape Generation Complete"
-    
-    # Format the dialog message, dynamically injecting the target heightmap path for user reference
+
     dialog_message = (
         "The Landscape actor has been successfully generated with precise physical scaling.\n\n"
         f"The heightmap was not applied automatically ({problem}).\n"
@@ -322,7 +316,6 @@ def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, h
         dialog_message += ("\n\nThe level has been saved with the flat Landscape: "
                            "save it again (Ctrl+S) after the import.")
 
-    # Suspend Editor execution and visually notify the user of pending manual operations
     unreal.EditorDialog.show_message(
         dialog_title, dialog_message, unreal.AppMsgType.OK, unreal.AppReturnType.OK
     )

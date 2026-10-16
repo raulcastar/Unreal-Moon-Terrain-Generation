@@ -1,7 +1,7 @@
 """
-Unreal Engine Rock Placer
--------------------------
-Executes natively within the Unreal Engine Python environment. Imports rock
+Unreal Rock Placer
+------------------
+Runs inside the Unreal Editor. Imports rock
 meshes from a folder and places the rock field planned by the studio
 (<name>_rocks.csv) on the Landscape.
 

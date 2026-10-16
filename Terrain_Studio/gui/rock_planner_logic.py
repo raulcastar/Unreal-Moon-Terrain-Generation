@@ -8,9 +8,9 @@ import os
 
 import numpy as np
 
-# Measured Unreal placement cost (10,338 rocks in 158 s, one actor per rock;
-# fields are now instanced). Above UNREAL_ROCKS_WARN rocks, the estimate also
-# reports the expected placement time.
+# Unreal placement cost, measured when each rock was its own actor (10,338 rocks
+# in 158 s). Fields are now one instanced actor, which places faster, so this
+# overestimates. Above UNREAL_ROCKS_WARN rocks the estimate reports the time.
 UNREAL_SECONDS_PER_ROCK = 0.015
 UNREAL_ROCKS_WARN = 20_000
 

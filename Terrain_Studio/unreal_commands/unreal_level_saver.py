@@ -1,7 +1,7 @@
 """
 Unreal Level Saver
 ------------------
-Executes natively within the Unreal Engine Python environment. Saves the open
+Runs inside the Unreal Editor. Saves the open
 level after the studio modifies it (Landscape spawn, rock placement).
 """
 

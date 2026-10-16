@@ -73,7 +73,7 @@ def _mean_square_radius(min_r, max_r, k=ROCK_SIZE_EXPONENT):
 DEFAULTS = {
     # --- Rover corridor ---
     # Full width of the cleared rover path; no rock is placed within half of this
-    # of a road (the old separate path margin is folded into this width).
+    # of a road.
     'PATH_WIDTH_M': 4.0,
 
     # --- Crater hazards ---

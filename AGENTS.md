@@ -1,7 +1,7 @@
 # AGENTS.md: Unreal Moon Terrain Generation (Lunar Terrain Studio)
 
 Guidance for AI coding agents working in this repository. The README has the
-full documentation; this file covers what an agent needs to work safely.
+overview and links to `docs/`; this file covers what an agent needs to work safely.
 
 ## What this is
 
@@ -14,7 +14,7 @@ simulator and rover stack that use them are in the sibling repo
 
 ## Layout
 
-The code is split by where it runs; the README's "Project layout" has the full list.
+The code is split by where it runs; `docs/development.md` has the full layout.
 
 | Path | Runs in | What |
 |---|---|---|
@@ -69,7 +69,7 @@ These come from actual incidents.
 - Keep the logic Tk-free in `*_logic.py` and `generator/`, so it can be
   tested; the pages only lay out and wire events.
 - Comments explain *why*, in full sentences.
-- When you change behaviour, update the README section that documents it.
+- When you change behaviour, update the page in `docs/` that documents it (and the README if it changes the overview).
 
 ## Using the studio as an agent (MCP)
 

@@ -1,7 +1,7 @@
 """
 Unreal Wheel Tracks: setup (Terrain Studio)
 -------------------------------------------
-Executes natively within the Unreal Engine Python environment, called by the
+Runs inside the Unreal Editor, called by the
 studio when it sends masks. Places the hidden pool of track decals for a rover
 in the level and builds the track decal material with the chosen tread look; the
 editor watcher's unreal_wheel_tracks lays them during Play.

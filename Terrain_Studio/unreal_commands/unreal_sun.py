@@ -1,7 +1,7 @@
 """
 Unreal Lunar Sun
 ----------------
-Executes natively within the Unreal Engine Python environment. Points a
+Runs inside the Unreal Editor. Points a
 Directional Light at the sun chosen in the studio, with lunar settings: white
 light, a 0.53 degree solar disc and long dynamic shadows. The light stays the
 SkyAtmosphere's sun (Atmosphere Sun Light, index 0), so the sky draws its disc.

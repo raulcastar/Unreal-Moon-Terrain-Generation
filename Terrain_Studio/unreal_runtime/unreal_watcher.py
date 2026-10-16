@@ -1,8 +1,7 @@
 """
 Unreal Editor Watcher (Terrain Studio runtime)
 ----------------------------------------------
-Executes natively within the Unreal Engine Python environment, inside the Unreal
-project (<Project>/Content/Python/TerrainStudio; init_unreal.py starts it when
+Runs inside the Unreal Editor, from the Unreal project (<Project>/Content/Python/TerrainStudio; init_unreal.py starts it when
 the editor opens). It needs only this folder: unreal_wheel_tracks.
 
 A function registered as an editor tick that, on every editor frame:
@@ -119,7 +118,7 @@ def place_shadow_map(world, helper, capture, state=None):
         return
     if helper.get_editor_property("root_component").get_attach_parent() is not None:
         rule = unreal.DetachmentRule.KEEP_WORLD
-        helper.detach_from_actor(rule, rule, rule)     # An earlier version attached it
+        helper.detach_from_actor(rule, rule, rule)     # Older setups attached it to the rover
     forward = light.get_actor_forward_vector()          # Along the sunlight
     centre = capture.get_world_location()
     position = unreal.Vector(centre.x - forward.x * SHADOW_MAP_DISTANCE_CM,

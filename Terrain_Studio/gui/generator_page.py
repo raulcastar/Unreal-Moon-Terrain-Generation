@@ -67,8 +67,7 @@ class GeneratorPage:
         canvas.bind("<Configure>", lambda e: canvas.itemconfigure(window, width=e.width))
         canvas.configure(yscrollcommand=scrollbar.set)
         # The scrollbar is packed first: packed after an expanding canvas it is the
-        # one squeezed out when the panel is narrow, and the panel no longer shows
-        # that it scrolls (the controls below the window looked missing).
+        # one squeezed out when the panel is narrow.
         scrollbar.pack(side="right", fill="y")
         canvas.pack(side="left", fill="both", expand=True)
 

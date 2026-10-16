@@ -1,10 +1,9 @@
 """
 Landscape Dispatch
 ------------------
-Turns a DEM into an Unreal Landscape: converts it locally (heightmap_files)
-and has unreal_landscape build the Landscape in a running Unreal Editor.
-Executes the heavy data processing locally to bypass Unreal's internal Python limitations,
-then establishes a network connection to Unreal Engine to trigger the landscape compilation.
+Turns a DEM into an Unreal Landscape: converts it here (heightmap_files), where
+numpy is available and fast, then has unreal_landscape build the Landscape in a
+running Unreal Editor.
 """
 
 from unreal_connection import run_in_unreal, unreal_call
@@ -13,9 +12,8 @@ import sys
 import numpy as np
 import heightmap_files
 
-# --- Global Directory Configuration ---
-# Absolute paths are normalized with forward slashes to prevent escape character 
-# errors when passing these string paths over the network to Unreal Engine.
+# --- Folders ---
+# Forward slashes, so the paths survive being written into Python sent to Unreal.
 # input_maps/ and outputs/ live at the repository root, two levels up.
 BASE_DIRECTORY        = os.path.dirname(os.path.abspath(__file__)).replace("\\", "/")
 PROJECT_ROOT          = os.path.dirname(os.path.dirname(BASE_DIRECTORY)).replace("\\", "/")
@@ -37,72 +35,68 @@ def output_group_directory(source_map_filepath):
 
 def generate_lunar_terrain(input_map_filepath, output_map_directory, input_resolution):
     """
-    Manages the local data processing pipeline: reads the raw DEM, normalizes it 
-    for Unreal Engine, calculates component topology, and exports the native binary files.
-    
+    Converts a DEM for Unreal: reads it, scales it to 16 bits, chooses the
+    Landscape layout and writes the converted text, .r16 and .json files.
+
     Args:
         input_map_filepath (str): Path to the source DEM (.tif, .npy, etc.).
         output_map_directory (str): Destination for the converted .txt, .r16, and .json files.
         input_resolution (float): Spatial resolution in meters per pixel.
-        
+
     Returns:
         tuple: (landscape_config, interpolation_resolution, z_axis_scale, heightmap_filename, z_offset)
     """
-    
+
     # =========================================================================
-    # 1. READ ORIGINAL DEM
+    # 1. READ THE DEM
     # =========================================================================
     raw_elevation_data = heightmap_files.terrain_file_reading(input_map_filepath, input_resolution)
 
     # =========================================================================
-    # 2. UNREAL FORMAT CONVERSION
+    # 2. CONVERT TO UNREAL'S SCALE
     # =========================================================================
-    # Translate metric data to Unreal Engine's 16-bit range, Z-scale and actor height
+    # 16-bit heights, with the Z-scale and actor height that reproduce them
     file_header, unreal_elevation_data = heightmap_files.convert_to_unreal_format(
-        elevation_data=raw_elevation_data, 
+        elevation_data=raw_elevation_data,
         interpolation_resolution=input_resolution
     )
 
-    # Isolate the core filename to dynamically name all subsequent exported assets
+    # Every output is named after the DEM.
     filename = os.path.basename(input_map_filepath)
     filename_without_extension = os.path.splitext(filename)[0]
     converted_dem_filepath = os.path.join(output_map_directory, f"{filename_without_extension}_converted.txt")
-    
-    # Cache the structured data locally
+
+    # The converted heights as text, with the conversion in its header
     np.savetxt(
-        converted_dem_filepath, 
-        unreal_elevation_data, 
-        fmt='%s', 
-        delimiter=' ', 
-        newline='\n', 
-        header=file_header, 
-        footer='', 
-        comments='', 
+        converted_dem_filepath,
+        unreal_elevation_data,
+        fmt='%s',
+        delimiter=' ',
+        newline='\n',
+        header=file_header,
+        footer='',
+        comments='',
         encoding=None
     )
 
     # =========================================================================
-    # 3. CALCULATE TOPOLOGY & EXPORT BINARY
+    # 3. LANDSCAPE LAYOUT AND .R16 HEIGHTMAP
     # =========================================================================
-    # Extract dimensions from the cached header
     header_values = [float(val) for val in file_header.split()]
     dem_width, dem_height, interpolation_resolution, z_axis_scale, z_offset = header_values
     print(f"[*] Landscape Z-scale: {z_axis_scale:.4f}, actor Z: {z_offset:.2f} m")
 
-    # Determine the most memory-efficient landscape component grid
     landscape_config = heightmap_files.calculate_optimal_landscape_config(dem_width, dem_height)
-    
-    # Generate the 16-bit Little-Endian heightmap required by Unreal's importer
+
     heightmap_files.create_unreal_heightmap(
-        unreal_elevation_data, 
-        int(dem_width), 
-        int(dem_height), 
-        landscape_config, 
+        unreal_elevation_data,
+        int(dem_width),
+        int(dem_height),
+        landscape_config,
         output_map_directory,
-        base_filename=filename_without_extension 
+        base_filename=filename_without_extension
     )
-    
-    # Construct the exact resulting filename to pass to the Unreal receiver script
+
     heightmap_filename = f"{filename_without_extension}_heightmap.r16"
 
     return landscape_config, interpolation_resolution, z_axis_scale, heightmap_filename, z_offset
@@ -136,11 +130,11 @@ def send_to_unreal(landscape_config, interpolation_resolution, z_axis_scale, hei
 
 
 # =========================================================================
-# EXECUTION ENTRY POINT 
+# COMMAND LINE
 # =========================================================================
 if __name__ == "__main__":
-    # Establish fallback defaults for direct script execution
-    input_map_filepath   = os.path.join(BASE_MAPS_DIRECTORY, "procedural_lunar_terrain_1_elevationMap.npy").replace("\\", "/") 
+    # Defaults for a run without arguments
+    input_map_filepath   = os.path.join(BASE_MAPS_DIRECTORY, "procedural_lunar_terrain_1_elevationMap.npy").replace("\\", "/")
     output_map_directory = None
     input_resolution     = 1.0
 
@@ -156,20 +150,18 @@ if __name__ == "__main__":
     if not output_map_directory:
         output_map_directory = output_group_directory(input_map_filepath)
 
-    # Ensure the target export directory exists before execution to prevent I/O crashes
     os.makedirs(output_map_directory, exist_ok=True)
 
     print("\n========================================================")
     print(" LUNAR TERRAIN GENERATOR - INITIATING PIPELINE")
     print("========================================================\n")
 
-    # Step 1: Execute local array math and binary generation
+    # Convert here, then build the Landscape in Unreal.
     landscape_config, interpolation_resolution, z_axis_scale, heightmap_filename, z_offset = generate_lunar_terrain(
-        input_map_filepath, 
-        output_map_directory, 
+        input_map_filepath,
+        output_map_directory,
         input_resolution
     )
-    
-    # Step 2: Dispatch the compiled configuration to the Unreal Engine host
+
     send_to_unreal(landscape_config, interpolation_resolution, z_axis_scale, heightmap_filename,
                    z_offset=z_offset, output_directory=output_map_directory)
