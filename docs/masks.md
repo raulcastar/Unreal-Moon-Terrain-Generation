@@ -2,6 +2,8 @@
 
 Shows craters and shadows in the rover's object mask, alongside the rocks.
 
+![Crater & Shadow Masks: the generator's 26 craters and their rims](images/studio_masks.jpg)
+
 ## Steps
 
 1. **Find Craters** maps them on the DEM and shows them on the map preview.

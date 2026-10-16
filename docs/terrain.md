@@ -57,6 +57,15 @@ Import), with the steps shown in the editor.
 **Library → Send an Existing Map** is the same sender on its own, for any
 elevation map already on disk.
 
+## Browse maps
+
+![Browsing maps](images/browse-maps.gif)
+
+**Library → Browse Maps** lists every map in `input_maps/` and `outputs/`;
+selecting one renders it as a shaded relief or a rotatable 3D surface, and makes
+it the current map for the other steps. Soil, class and rock rasters are hidden,
+since they share extensions but are not heights.
+
 ## Parameters
 
 | Key | Meaning |

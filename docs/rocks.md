@@ -1,6 +1,12 @@
 # 2. Rocks and rover paths
 
-![Rock field planner](images/rock-planner.png)
+![Rock field planner: 974 rocks around Voronoi corridors on a 300 m mare](images/studio_rocks.jpg)
+
+![The planned rock field next to the same rocks in Unreal](images/plan_to_unreal.jpg)
+
+*Left, the plan: rocks (brown), craters (blue) and rover corridors (green).
+Right, the same field placed in Unreal under a 10° sun. Fly-over:
+[flyover.webp](images/flyover.webp) ([video](videos/flyover.mp4)).*
 
 Scatters rocks across the drivable ground while guaranteeing a connected route.
 

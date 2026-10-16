@@ -1,5 +1,14 @@
 # 4. Position the sun
 
+![The Sun view: a 300 m mare at an 8 degree sun, cast shadows tinted blue](images/studio_sun.jpg)
+
+![The studio's shadows next to Unreal's as the sun sets from 35 to 3 degrees](images/sun_studio_vs_unreal.webp)
+
+*The same terrain in the studio and in Unreal as the sun goes down from 35° to
+3° at azimuth 120° ([video](videos/sun_studio_vs_unreal.mp4)). The studio
+shows cast shadows in blue; Unreal is seen from straight above, in its Top-view
+orientation.*
+
 Places the sun so shadows fall where you want them and sets the matching light
 in Unreal. The sun is set with the azimuth and elevation sliders, by clicking
 the sky dome, or by drawing a shadow on the map: click where an object of a

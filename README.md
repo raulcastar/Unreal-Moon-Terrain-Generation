@@ -5,6 +5,19 @@ fields with guaranteed rover corridors, and builds them in Unreal Engine 5: the
 Landscape, the rocks, ground-truth masks for the rover's cameras, and the sun.
 It is part of [GNC-Moon-Simulator](https://github.com/raulcastar/GNC-Moon-Simulator).
 
+![A fly-over of a generated mare in Unreal: planned rocks and craters under a 10 degree sun](docs/images/flyover.webp)
+
+*A 300 × 300 m mare generated in the studio, built in Unreal with its 974
+planned rocks, under a 10° sun ([video](docs/videos/flyover.mp4)).*
+
+**What the studio predicts is what Unreal renders.** The same terrain as the sun
+goes down from 35° to 3°: the studio's cast shadows (blue) and Unreal's
+([video](docs/videos/sun_studio_vs_unreal.mp4)):
+
+![Terrain Studio's predicted shadows next to Unreal's, as the sun sets](docs/images/sun_studio_vs_unreal.webp)
+
+![The planned rock field in the studio, next to the same rocks in Unreal](docs/images/plan_to_unreal.jpg)
+
 <p align="center"><img src="docs/images/home.png" width="720" alt="Terrain Studio's home screen"></p>
 
 ## Quick start
