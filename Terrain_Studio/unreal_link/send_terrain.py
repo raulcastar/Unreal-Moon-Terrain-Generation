@@ -14,10 +14,9 @@ import heightmap_files
 
 # --- Folders ---
 # Forward slashes, so the paths survive being written into Python sent to Unreal.
-# input_maps/ and outputs/ live at the repository root, two levels up.
+# outputs/ lives at the repository root, two levels up.
 BASE_DIRECTORY        = os.path.dirname(os.path.abspath(__file__)).replace("\\", "/")
 PROJECT_ROOT          = os.path.dirname(os.path.dirname(BASE_DIRECTORY)).replace("\\", "/")
-BASE_MAPS_DIRECTORY   = os.path.join(PROJECT_ROOT, "input_maps").replace("\\", "/")
 BASE_OUTPUT_DIRECTORY = os.path.join(PROJECT_ROOT, "outputs").replace("\\", "/")
 
 
@@ -133,14 +132,12 @@ def send_to_unreal(landscape_config, interpolation_resolution, z_axis_scale, hei
 # COMMAND LINE
 # =========================================================================
 if __name__ == "__main__":
-    # Defaults for a run without arguments
-    input_map_filepath   = os.path.join(BASE_MAPS_DIRECTORY, "procedural_lunar_terrain_1_elevationMap.npy").replace("\\", "/")
+    if len(sys.argv) < 2:
+        sys.exit("Usage: send_terrain.py <map> [output_dir] [resolution_m_per_px]\n"
+                 "  <map>  an elevation map (.npy, .csv, .txt or .tif), e.g. from outputs/<name>/")
+    input_map_filepath   = sys.argv[1].replace("\\", "/")
     output_map_directory = None
     input_resolution     = 1.0
-
-    # Usage: send_terrain.py <map> [output_dir] [resolution]
-    if len(sys.argv) >= 2:
-        input_map_filepath   = sys.argv[1].replace("\\", "/")
     if len(sys.argv) >= 3:
         output_map_directory = sys.argv[2].replace("\\", "/")
     if len(sys.argv) >= 4:
