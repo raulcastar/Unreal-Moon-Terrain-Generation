@@ -4,6 +4,13 @@ Shows craters and shadows in the rover's object mask, alongside the rocks.
 
 ![Crater & Shadow Masks: the generator's 26 craters and their rims](images/studio_masks.jpg)
 
+![Front and rear cameras with their object and shadow masks](images/ground_truth.webp)
+
+*The front navcam and the rear camera during a drive, with their ground-truth object
+masks and shadow masks (5x speed; [video](videos/ground_truth.mp4) at 2.5x). Ahead, the rover's own
+shadow (orange) is labelled apart from the terrain's shadows; behind, the wheel
+tracks it leaves are their own class in the object mask.*
+
 ## Steps
 
 1. **Find Craters** maps them on the DEM and shows them on the map preview.
