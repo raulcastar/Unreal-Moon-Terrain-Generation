@@ -35,6 +35,12 @@ tracks it leaves are their own class in the object mask.*
    `Navcam_Mask` as the mask camera chosen here.
 
    **Restore Original Mask Material** undoes the material change.
+
+   The material, and so the crater map, is one asset for the whole project:
+   a send replaces the crater map in **every** level, not only the open one.
+   If levels sit on different terrains, send the masks again for a level's own
+   map before recording ground truth there (rocks, the rover and wheel tracks
+   are tagged per actor and are not affected).
 4. **GNC Labels** shows the object-mask classes with the rock and crater ids
    chosen here, and whether the GNC simulator's copy
    (`GNC-Moon-Simulator/component_stereo_depth/config/mask_classes.json`, read
