@@ -3,7 +3,9 @@
 Terrain Studio generates procedural lunar elevation maps (DEMs), plans rock
 fields with guaranteed rover corridors, and builds them in Unreal Engine 5: the
 Landscape, the rocks, ground-truth masks for the rover's cameras, and the sun.
-It is part of [GNC-Moon-Simulator](https://github.com/raulcastar/GNC-Moon-Simulator).
+It is part of [MARE](https://github.com/raulcastar/MARE-Lunar-Simulator), an open-source lunar rover simulation suite
+([video overview](https://youtu.be/EI4HgbMFbBE), [project page](https://raulcastar.me/mare/)), with the ROS 2 stack
+[GNC-Moon-Simulator](https://github.com/raulcastar/GNC-Moon-Simulator).
 
 ![A fly-over of a generated mare in Unreal: planned rocks and craters under a 10 degree sun](docs/images/flyover.webp)
 
