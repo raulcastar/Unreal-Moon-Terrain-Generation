@@ -1,5 +1,11 @@
 # Unreal Moon Terrain Generation
 
+[![Part of MARE](https://img.shields.io/badge/Part%20of-MARE-e8a33d)](https://github.com/raulcastar/MARE-Lunar-Simulator)
+[![Video](https://img.shields.io/badge/Video-YouTube-FF0000?logo=youtube&logoColor=white)](https://youtu.be/EI4HgbMFbBE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Unreal Engine 5.7](https://img.shields.io/badge/Unreal%20Engine-5.7-313131?logo=unrealengine&logoColor=white)](https://www.unrealengine.com/)
+[![Python 3](https://img.shields.io/badge/Python-3-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+
 Terrain Studio generates procedural lunar elevation maps (DEMs), plans rock
 fields with guaranteed rover corridors, and builds them in Unreal Engine 5: the
 Landscape, the rocks, ground-truth masks for the rover's cameras, and the sun.
