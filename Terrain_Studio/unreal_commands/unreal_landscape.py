@@ -4,11 +4,13 @@ Unreal Landscape
 Runs inside the Unreal Editor. Spawns a Landscape in the open level with the
 layout and scale the studio computed (heightmap_files), imports its .r16
 heightmap and gives it its material and object-mask id.
+
+Unreal's Python API cannot create Landscape components, so the Landscape is
+created by the UnrealDEMLandscape editor plugin (https://github.com/raulcastar/UnrealDEMLandscape,
+unreal.DEMLandscapeLibrary), which imports the heights as it creates it.
 """
 
 import os
-import struct
-import zlib
 
 import unreal
 
@@ -17,12 +19,17 @@ from unreal_level_saver import save_current_level
 
 CM_PER_METER = 100.0             # Unreal works in centimetres
 
-# Maximum Landscape size (vertices) for the automatic heightmap import. Larger
-# Landscapes fall back to the manual import to bound editor memory use.
-AUTO_HEIGHTMAP_MAX_VERTICES = 4097 * 4097
-
-# Pixels sampled when validating the render target and the merged heightmap.
+# Pixels sampled when checking the merged heightmap.
 _SPOT_CHECKS = 64
+
+
+def landscape_library():
+    """unreal.DEMLandscapeLibrary, or RuntimeError if the UnrealDEMLandscape plugin is not loaded."""
+    library = getattr(unreal, "DEMLandscapeLibrary", None)
+    if library is None:
+        raise RuntimeError("the UnrealDEMLandscape plugin is not loaded: enable it in Edit > Plugins "
+                           "(the MARE Unreal project includes it) and restart the editor")
+    return library
 
 # Material given to every new Landscape, and its id in the rover's object mask
 # (Custom Depth Stencil; config/mask_classes.json).
@@ -45,85 +52,9 @@ def _r16_height(data, width, x, y):
     return data[index] | (data[index + 1] << 8)
 
 
-def heightmap_png(r16_bytes, width, height):
-    """
-    Encodes the heights as an 8-bit RGBA PNG (R = high byte, G = low byte), the
-    layout read by landscape_import_heightmap_from_render_target.
-    """
-    pixels = width * height
-    rgba = bytearray(4 * pixels)
-    rgba[0::4] = r16_bytes[1::2]
-    rgba[1::4] = r16_bytes[0::2]
-    rgba[3::4] = b"\xff" * pixels
-    stride = 4 * width
-    # Each scanline is prefixed with filter type 0 (None).
-    raw = b"".join(b"\x00" + rgba[y * stride:(y + 1) * stride] for y in range(height))
-
-    def chunk(tag, payload):
-        return (struct.pack(">I", len(payload)) + tag + payload
-                + struct.pack(">I", zlib.crc32(tag + payload) & 0xffffffff))
-
-    header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)  # 8-bit RGBA
-    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
-            + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
-
-
-def apply_heightmap(landscape_actor, heightmap_filepath, width, height):
-    """
-    Imports the .r16 heightmap into the Landscape's base edit layer.
-
-    UE 5.7 Landscapes always use edit layers and recompute the final heightmap
-    from them on later ticks, so the data is imported into the layer through a
-    render target rather than written to the final heightmap.
-
-    Returns:
-        str | None: None on success, otherwise the reason the import was skipped.
-    """
-    if width * height > AUTO_HEIGHTMAP_MAX_VERTICES:
-        return f"the Landscape is too large ({width} x {height}) to apply from Python"
-    try:
-        data = read_r16(heightmap_filepath, width, height)
-    except (OSError, ValueError) as error:
-        return str(error)
-
-    rendering = unreal.RenderingLibrary
-    world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
-    texture = rendering.import_buffer_as_texture2d(world, list(heightmap_png(data, width, height)))
-    if texture is None:
-        return "Unreal could not load the heightmap as a texture"
-    # Sample raw texel values: linear colour space, nearest filtering.
-    texture.set_editor_property("srgb", False)
-    texture.set_editor_property("filter", unreal.TextureFilter.TF_NEAREST)
-
-    target = rendering.create_render_target2d(
-        world, width, height, unreal.TextureRenderTargetFormat.RTF_RGBA32F)
-    try:
-        canvas, _size, context = rendering.begin_draw_canvas_to_render_target(world, target)
-        canvas.draw_texture(texture, unreal.Vector2D(0, 0), unreal.Vector2D(width, height),
-                            unreal.Vector2D(0, 0), unreal.Vector2D(1, 1),
-                            unreal.LinearColor(1, 1, 1, 1), unreal.BlendMode.BLEND_OPAQUE)
-        rendering.end_draw_canvas_to_render_target(world, context)
-
-        # Validate the render target before modifying the Landscape.
-        for k in range(_SPOT_CHECKS):
-            x, y = (k * 7919) % width, (k * 104729) % height
-            pixel = rendering.read_render_target_raw_pixel(world, target, x, y)
-            value = int(round(pixel.r * 255)) * 256 + int(round(pixel.g * 255))
-            expected = _r16_height(data, width, x, y)
-            if value != expected:
-                return (f"the render target does not match the .r16 at ({x}, {y}): "
-                        f"{value} instead of {expected}")
-
-        if not landscape_actor.landscape_import_heightmap_from_render_target(target, True, 0):
-            return "Unreal did not accept the heightmap"
-    finally:
-        rendering.release_render_target2d(target)
-    return None
-
-
 def heightmap_merged(landscape_actor, r16_bytes, width, height, samples=_SPOT_CHECKS):
     """Returns True once the Landscape's final heightmap matches the .r16 at the sampled points."""
-    heights = unreal.PythonLandscapeLib.get_heightmap_data(landscape_actor)
+    heights = landscape_library().get_heightmap_data(landscape_actor)
     if len(heights) != width * height:
         return False
     for k in range(samples):
@@ -228,7 +159,7 @@ def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, h
     x_offset -= map_width_meters
 
     # =========================================================================
-    # 1. SPAWN THE LANDSCAPE
+    # 1. SPAWN THE LANDSCAPE WITH ITS HEIGHTMAP
     # =========================================================================
 
     landscape_transform = unreal.Transform(
@@ -237,14 +168,25 @@ def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, h
         scale=[unreal_map_scale_x, unreal_map_scale_y, z_axis_scale]
     )
 
-    # PythonLandscapeLib comes from the TAPython plugin.
-    landscape_actor = unreal.PythonLandscapeLib.create_landscape(
+    # The heights are imported as the Landscape is created; an unreadable or
+    # mis-sized .r16 gives a flat Landscape and the manual import instructions.
+    problem = None if import_heightmap else "automatic import is turned off"
+    if problem is None:
+        try:
+            read_r16(heightmap_filepath, final_width, final_height)
+        except (OSError, ValueError) as error:
+            problem = str(error)
+
+    landscape_actor = landscape_library().create_landscape(
         landscape_transform,
         section_size=quads,
         sections_per_component=sections,
         component_count_x=optimal_comp_x,
-        component_count_y=optimal_comp_y
+        component_count_y=optimal_comp_y,
+        heightmap_file=heightmap_filepath if problem is None else ""
     )
+    if landscape_actor is None:
+        raise RuntimeError("Unreal could not create the Landscape (see the Output Log, LogDEMLandscape)")
 
     landscape_actor.set_actor_label(actor_label)
 
@@ -265,24 +207,21 @@ def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, h
 
     setup_landscape(landscape_actor, landscape_material, mask_stencil)
 
-    # =========================================================================
-    # 2. APPLY THE HEIGHTMAP
-    # =========================================================================
-
-    problem = (apply_heightmap(landscape_actor, heightmap_filepath, final_width, final_height)
-               if import_heightmap else "automatic import is turned off")
     if problem is None:
         unreal.log(f"[*] Heightmap applied from {heightmap_filepath}")
     else:
         unreal.log_warning(f"[*] Heightmap not applied: {problem}. Import it manually.")
 
     # =========================================================================
-    # 3. SELECT IT AND SAVE
+    # 2. SELECT IT AND SAVE
     # =========================================================================
 
-    # Select the new Landscape and frame it in the viewport.
-    unreal.PythonBPLib.select_actor(landscape_actor, selected=True, notify=True)
-    unreal.PythonBPLib.request_viewport_focus_on_selection()
+    # Select the new Landscape and look at it from above, at 45 degrees.
+    unreal.get_editor_subsystem(unreal.EditorActorSubsystem).set_selected_level_actors([landscape_actor])
+    origin, extent = landscape_actor.get_actor_bounds(False)
+    distance = 1.5 * max(extent.x, extent.y, 1.0)
+    unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).set_level_viewport_camera_info(
+        unreal.Vector(origin.x - distance, origin.y, origin.z + distance), unreal.Rotator(0.0, -45.0, 0.0))
 
     # Persist the level. After an automatic import the save is deferred until the
     # edit layers have merged; otherwise the flat Landscape is saved immediately.
@@ -296,7 +235,7 @@ def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, h
         return landscape_actor
 
     # =========================================================================
-    # 4. MANUAL IMPORT INSTRUCTIONS (when the automatic import did not run)
+    # 3. MANUAL IMPORT INSTRUCTIONS (when the automatic import did not run)
     # =========================================================================
 
     dialog_title = "Landscape Generation Complete"

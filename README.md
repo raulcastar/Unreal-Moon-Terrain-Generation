@@ -42,9 +42,8 @@ Python (`sudo apt install python3-tk` on Debian/Ubuntu).
 
 **Unreal setup:** the steps that send to Unreal need a running Unreal Editor
 (5.7) with the *Python Editor Script Plugin* and *Remote Execution* enabled
-(Project Settings), and the
-[TAPython](https://github.com/cgerchenhp/UE_TAPython_Plugin_Release) plugin,
-which builds the Landscape. The
+(Project Settings), and the [UnrealDEMLandscape](https://github.com/raulcastar/UnrealDEMLandscape) editor plugin,
+which builds the Landscape (Unreal's Python API cannot create one). The
 [MARE-Lunar-Simulator](https://github.com/raulcastar/MARE-Lunar-Simulator)
 project has them all.
 
