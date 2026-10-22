@@ -105,6 +105,9 @@ def _apply_editor(light, rotation, intensity_lux, source_angle_deg):
     comp.set_editor_property("atmosphere_sun_light", True)      # Linked to the SkyAtmosphere
     comp.set_editor_property("atmosphere_sun_light_index", 0)
     comp.set_editor_property("cast_shadows", True)
+    # No screen-space contact shadows: at a low sun they mark wide grazing slopes as
+    # shadowed, in a dithered mesh pattern, in the camera images and the shadow mask.
+    comp.set_editor_property("contact_shadow_length", 0.0)
     distance = comp.get_editor_property("dynamic_shadow_distance_movable_light")
     comp.set_editor_property("dynamic_shadow_distance_movable_light",
                              max(float(distance), SHADOW_DISTANCE_CM))
