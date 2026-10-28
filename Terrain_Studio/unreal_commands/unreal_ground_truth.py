@@ -113,7 +113,7 @@ DEFAULT_ROVER_STENCIL = mask_classes.id_of("rover")      # Set in the rover's Bl
 LANDSCAPE_STENCIL = mask_classes.id_of("landscape")       # unreal_landscape sets it
 # Stencils of an earlier numbering, re-tagged on the next send.
 OLD_LANDSCAPE_STENCILS = (10,)
-SHADOW_THRESHOLD = 0.5     # Sun-only display value below which a pixel is shadow (half light, so soft tails count)
+SHADOW_THRESHOLD = 0.02    # Sun-only display value below which a pixel is shadow: just above black (see docs/masks.md)
 
 # Mask camera render: surfaces white, lit by the sun only, fixed exposure. The
 # mask material replaces the colours, so only the mask image depends on this.
