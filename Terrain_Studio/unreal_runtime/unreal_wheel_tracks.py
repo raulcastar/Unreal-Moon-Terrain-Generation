@@ -74,7 +74,12 @@ def _game_state(world, state):
     if not pool:
         state["track_pool"] = []
         return state
-    owner_label = next(str(t)[6:] for t in pool[0].tags if str(t).startswith("owner="))
+    # The pool of a rover in this level (a level copied from another rover's may
+    # still hold that rover's pool); only that rover's own decals are laid.
+    labels = {a.get_actor_label() for a in unreal.GameplayStatics.get_all_actors_of_class(world, unreal.Actor)}
+    owners = sorted({str(t)[6:] for d in pool for t in d.tags if str(t).startswith("owner=")})
+    owner_label = next((o for o in owners if o in labels), owners[0] if owners else "")
+    pool = track_pool(world, owner_label)
     rover = next((a for a in unreal.GameplayStatics.get_all_actors_of_class(world, unreal.Actor)
                   if a.get_actor_label() == owner_label), None)
     state["track_pool"] = pool

@@ -149,18 +149,23 @@ rover's headlights.
 
 ### Shadow threshold
 
-A pixel is shadow when the sun-only render shows it at less than **half of full
-sunlight** (display value 0.5 of 1).
+A pixel is shadow when the sun-only render shows it **just above black**
+(display value 0.02 of 1): no sunlight reaches it.
 
 - Set by `SHADOW_THRESHOLD` in
   `Terrain_Studio/unreal_commands/unreal_ground_truth.py` and written to the
   `ShadowThreshold` parameter of `PPM_GroundTruthMask` on every send.
-- The render is almost all black (shadow) or near white (sunlit); the values in
-  between are penumbra: shadow edges and the thin tails of shadows cast by
-  rocks. Half light counts those tails as shadow and matches what the RGB
-  camera shows; a much lower value (e.g. 0.04) keeps only each shadow's core.
-- Checked with the sun at 3°, 6° and 19° elevation: ground lit at a grazing
-  angle stays above the threshold.
+- With the sun as the only light, a shadowed pixel renders black. A lit one
+  renders at a brightness that follows the sun's angle on it, so lit ground
+  gets dim, but not black, as the sun gets low. A threshold of half of full
+  sunlight (0.5, used before) therefore marked most lit ground as shadow at a
+  low sun, in a fine mesh following the regolith's relief: 75-93 % of the
+  ground below 9° of elevation and 20-60 % at 20-30°, against about 10 % with
+  0.02 at 8°.
+- Surfaces facing away from the sun are shadow too (unlit), including the small
+  facets of the regolith's relief at a low sun, as in the RGB image.
+- Soft shadow edges are thin on the Moon (0.53° solar disc); with sharp shadows
+  (`r.Shadow.Virtual.SMRT.RayCountDirectional 0`) there are none.
 
 ### Shadow class ids
 
