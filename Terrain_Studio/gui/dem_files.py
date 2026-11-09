@@ -25,7 +25,7 @@ DEM_FILETYPES = [("DEM files", "*.npy *.csv *.txt *.tif *.tiff"),
 # Rasters written beside a DEM with the same extensions but which are not
 # elevation. Importing one would build a Landscape out of mask values, so they
 # are excluded from the map lists.
-NON_DEM_TAGS = ('_classmap', '_soilmap', '_obstaclemap', '_rocks',
+NON_DEM_TAGS = ('_classmap', '_soilmap', '_obstaclemap', '_rocks', '_craters',
                 '_roverpaths', '_converted', '_heightmap')
 
 

@@ -22,6 +22,10 @@ if [[ -n "${REBUILD:-}" ]] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; t
 fi
 
 args=(--rm --network host --user "$(id -u):$(id -g)" -v "$DIR:$DIR" -w "$DIR")
+# GNC-Moon-Simulator next to this repository, read-only: the mask-label check
+# compares its copy of mask_classes.json with this repository's.
+GNC="$(dirname "$DIR")/GNC-Moon-Simulator"
+[[ -d "$GNC" ]] && args+=(-v "$GNC:$GNC:ro")
 mode="${1:-gui}"
 [[ $# -gt 0 ]] && shift
 case "$mode" in
@@ -30,7 +34,13 @@ case "$mode" in
         if [[ -n "${XAUTHORITY:-}" && -f "$XAUTHORITY" ]]; then
             x11+=(-e XAUTHORITY=/tmp/.Xauthority -v "$XAUTHORITY:/tmp/.Xauthority:ro")
         fi
-        exec docker run -it "${args[@]}" "${x11[@]}" "$IMAGE" python Terrain_Studio/terrain_studio.py "$@" ;;
+        # The session bus, for "Open output folder" (docker/xdg-open).
+        bus="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/bus"
+        if [[ -S "$bus" ]]; then
+            x11+=(-v "$bus:/run/dbus-session" -e DBUS_SESSION_BUS_ADDRESS=unix:path=/run/dbus-session)
+        fi
+        tty=(); [[ -t 0 ]] && tty=(-it)    # a terminal for Ctrl-C; none from a launcher
+        exec docker run "${tty[@]}" "${args[@]}" "${x11[@]}" "$IMAGE" python Terrain_Studio/terrain_studio.py "$@" ;;
     test)
         exec docker run "${args[@]}" -e MPLBACKEND=Agg "$IMAGE" python -m pytest -p no:cacheprovider "$@" ;;
     mcp)

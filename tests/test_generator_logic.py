@@ -113,3 +113,12 @@ def test_plots_draw_on_a_figure():
     for figure in (relief, surface, slope):
         figure.canvas.draw()
     assert plots.surface_exaggeration(np.array([[0.0, 2.0]]), (0, 100, 0, 50)) == pytest.approx(17.5)
+
+
+@pytest.mark.parametrize("name, is_dem", [
+    ("site_elevationMap.npy", True), ("site_elevationMap.csv", True), ("lro.tif", True),
+    ("site_craters.csv", False), ("site_soilMap.csv", False), ("site_rocks.csv", False),
+    ("site_elevationMap_heightmap.r16", False), ("notes.png", False)])
+def test_map_lists_skip_companion_files(name, is_dem):
+    from gui import dem_files
+    assert dem_files.looks_like_dem(name) is is_dem

@@ -1,0 +1,3 @@
+# The plots' Save button starts in the working directory (the repository), not
+# in the container's throwaway home.
+savefig.directory :
