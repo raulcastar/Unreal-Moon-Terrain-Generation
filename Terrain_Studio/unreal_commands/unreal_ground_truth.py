@@ -55,6 +55,10 @@ may hold several cells per DEM cell (CraterSupersample).
 
 import json
 import math
+import os
+import shutil
+import subprocess
+import sys
 
 import unreal
 
@@ -628,6 +632,29 @@ def _windows_clipboard(text=None):
         user32.CloseClipboard()
 
 
+def _linux_clipboard(text=None):
+    """
+    Reads the clipboard's text, or replaces it with `text`, through xclip (X11,
+    the editor's default on Linux) or wl-clipboard (Wayland).
+    """
+    if os.environ.get("DISPLAY") and shutil.which("xclip"):
+        read, write = ["xclip", "-selection", "clipboard", "-o"], ["xclip", "-selection", "clipboard", "-i"]
+    elif os.environ.get("WAYLAND_DISPLAY") and shutil.which("wl-copy"):
+        read, write = ["wl-paste", "--no-newline"], ["wl-copy"]
+    else:
+        raise RuntimeError("no clipboard tool: install xclip (X11) or wl-clipboard (Wayland)")
+    if text is None:
+        result = subprocess.run(read, capture_output=True, text=True, timeout=5)
+        return result.stdout if result.returncode == 0 else None
+    subprocess.run(write, input=text, text=True, check=True, timeout=5)
+    return text
+
+
+def _clipboard(text=None):
+    """Reads the clipboard's text, or replaces it with `text`."""
+    return _windows_clipboard(text) if sys.platform == "win32" else _linux_clipboard(text)
+
+
 def _paste_helper(actor, label):
     """
     Adds a SceneCapture2D labelled `label` whose capture shows only `actor`.
@@ -639,14 +666,14 @@ def _paste_helper(actor, label):
     text = HELPER_T3D.format(name=ROVER_SHADOW_CAPTURE, shown=shown, label=label)
     actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
     selected = actors.get_selected_level_actors()
-    saved = _windows_clipboard()
+    saved = _clipboard()
     try:
-        _windows_clipboard(text)
+        _clipboard(text)
         unreal.SystemLibrary.execute_console_command(
             unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world(), "EDIT PASTE")
     finally:
         if saved is not None:
-            _windows_clipboard(saved)
+            _clipboard(saved)
         actors.set_selected_level_actors(selected)
     return next((a for a in _level_actors() if a.get_actor_label() == label), None)
 

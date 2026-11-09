@@ -10,6 +10,8 @@ py -m pip install -r requirements-dev.txt
 py -m pytest
 ```
 
+On Linux, without installing anything but Docker: `./run_terrain_studio_docker.sh test`.
+
 They check, among others, that no rock lands in a crater or on the rover
 corridors, that rocks never overlap, that rock sizes follow the lunar
 size-frequency law, the rock height cap, crater detection on known craters, and
