@@ -214,6 +214,24 @@ SCALAR_INPUTS = ("LandscapeStencil", "CraterOriginX", "CraterOriginY", "CraterSt
                  "RoverShadowBias")
 
 
+def _quiet(obj, name, value, notify_later=None):
+    """
+    set_editor_property without the edit notification. On the mask material or one
+    of its nodes each notification recompiles the material and refreshes what is
+    drawn with it, so its graph is built quietly and compiled at the end
+    (recompile_material): on Vulkan (Linux) dozens of refreshes in one editor
+    frame pile up the RHI's deferred deletions until the editor stalls. A node
+    that needs its notification (a CollectionParameter finds its parameter there,
+    a texture object picks its sampler type) is also added to `notify_later`, to
+    be set again, with the notification, once the graph is complete.
+    """
+    obj.set_editor_property(name, value, unreal.PropertyAccessChangeNotifyMode.NEVER)
+    if notify_later is not None and (
+            (isinstance(obj, unreal.MaterialExpressionCollectionParameter) and name == "parameter_name")
+            or (isinstance(obj, unreal.MaterialExpressionTextureBase) and name == "texture")):
+        notify_later.append((obj, name, value))
+
+
 def _game_landscape(label):
     """The Landscape in the running game: during Play In Editor the editor's actors are not listed."""
     world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_game_world()
@@ -319,58 +337,59 @@ def _build_mask_graph(material, texture, values, no_rover, sun_collection):
     """
     lib = unreal.MaterialEditingLibrary
     lib.delete_all_material_expressions(material)
+    notify_later = []
 
     stencil = lib.create_material_expression(material, unreal.MaterialExpressionSceneTexture, -900, 0)
-    stencil.set_editor_property("scene_texture_id", unreal.SceneTextureId.PPI_CUSTOM_STENCIL)
+    _quiet(stencil, "scene_texture_id", unreal.SceneTextureId.PPI_CUSTOM_STENCIL, notify_later)
     red = lib.create_material_expression(material, unreal.MaterialExpressionComponentMask, -650, 0)
     for channel, keep in (("r", True), ("g", False), ("b", False), ("a", False)):
-        red.set_editor_property(channel, keep)
+        _quiet(red, channel, keep, notify_later)
     lib.connect_material_expressions(stencil, "Color", red, "")
 
     scene = lib.create_material_expression(material, unreal.MaterialExpressionSceneTexture, -900, -140)
-    scene.set_editor_property("scene_texture_id", unreal.SceneTextureId.PPI_POST_PROCESS_INPUT0)
+    _quiet(scene, "scene_texture_id", unreal.SceneTextureId.PPI_POST_PROCESS_INPUT0, notify_later)
     rgb = lib.create_material_expression(material, unreal.MaterialExpressionComponentMask, -650, -140)
     for channel, keep in (("r", True), ("g", True), ("b", True), ("a", False)):
-        rgb.set_editor_property(channel, keep)
+        _quiet(rgb, channel, keep, notify_later)
     lib.connect_material_expressions(scene, "Color", rgb, "")
 
     position = lib.create_material_expression(material, unreal.MaterialExpressionWorldPosition, -650, 120)
     crater = lib.create_material_expression(
         material, unreal.MaterialExpressionTextureObjectParameter, -650, 220)
-    crater.set_editor_property("parameter_name", "CraterMask")
-    crater.set_editor_property("texture", texture)
+    _quiet(crater, "parameter_name", "CraterMask", notify_later)
+    _quiet(crater, "texture", texture, notify_later)
     helper = lib.create_material_expression(
         material, unreal.MaterialExpressionTextureObjectParameter, -650, -280)
-    helper.set_editor_property("parameter_name", "RoverDepthFromSun")
-    helper.set_editor_property("texture", no_rover)
+    _quiet(helper, "parameter_name", "RoverDepthFromSun", notify_later)
+    _quiet(helper, "texture", no_rover, notify_later)
     frames = []
     for row, name in enumerate(SHADOW_MAP_PARAMETERS):
         node = lib.create_material_expression(material, unreal.MaterialExpressionCollectionParameter,
                                               -650, -820 - 80 * row)
-        node.set_editor_property("collection", sun_collection)
-        node.set_editor_property("parameter_name", name)
+        _quiet(node, "collection", sun_collection, notify_later)
+        _quiet(node, "parameter_name", name, notify_later)
         frames.append(node)
     camera = lib.create_material_expression(material, unreal.MaterialExpressionCameraVectorWS, -650, -460)
     metallic = lib.create_material_expression(material, unreal.MaterialExpressionSceneTexture, -900, -620)
-    metallic.set_editor_property("scene_texture_id", unreal.SceneTextureId.PPI_METALLIC)
+    _quiet(metallic, "scene_texture_id", unreal.SceneTextureId.PPI_METALLIC, notify_later)
     metal = lib.create_material_expression(material, unreal.MaterialExpressionComponentMask, -650, -620)
     for channel, keep in (("r", True), ("g", False), ("b", False), ("a", False)):
-        metal.set_editor_property(channel, keep)
+        _quiet(metal, channel, keep, notify_later)
     lib.connect_material_expressions(metallic, "Color", metal, "")
     depth = lib.create_material_expression(material, unreal.MaterialExpressionSceneTexture, -900, -720)
-    depth.set_editor_property("scene_texture_id", unreal.SceneTextureId.PPI_SCENE_DEPTH)
+    _quiet(depth, "scene_texture_id", unreal.SceneTextureId.PPI_SCENE_DEPTH, notify_later)
     depth_r = lib.create_material_expression(material, unreal.MaterialExpressionComponentMask, -650, -720)
     for channel, keep in (("r", True), ("g", False), ("b", False), ("a", False)):
-        depth_r.set_editor_property(channel, keep)
+        _quiet(depth_r, channel, keep, notify_later)
     lib.connect_material_expressions(depth, "Color", depth_r, "")
     sun = lib.create_material_expression(material, unreal.MaterialExpressionCollectionParameter, -650, -540)
-    sun.set_editor_property("collection", sun_collection)
-    sun.set_editor_property("parameter_name", SUN_PARAMETER)
+    _quiet(sun, "collection", sun_collection, notify_later)
+    _quiet(sun, "parameter_name", SUN_PARAMETER, notify_later)
 
     custom = lib.create_material_expression(material, unreal.MaterialExpressionCustom, -300, 0)
-    custom.set_editor_property("code", MASK_CODE)
-    custom.set_editor_property("description", "ObjectMaskColour")
-    custom.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT3)
+    _quiet(custom, "code", MASK_CODE, notify_later)
+    _quiet(custom, "description", "ObjectMaskColour", notify_later)
+    _quiet(custom, "output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT3, notify_later)
     names = ("In", "Scene", "Pos", "Crater", "RoverDepth", "MapOrigin", "MapRight", "MapUp",
              "CamVec", "SunDir", "Metal", "Depth") + SCALAR_INPUTS
     inputs = []
@@ -378,7 +397,7 @@ def _build_mask_graph(material, texture, values, no_rover, sun_collection):
         entry = unreal.CustomInput()
         entry.set_editor_property("input_name", name)
         inputs.append(entry)
-    custom.set_editor_property("inputs", inputs)
+    _quiet(custom, "inputs", inputs, notify_later)
 
     lib.connect_material_expressions(red, "", custom, "In")
     lib.connect_material_expressions(rgb, "", custom, "Scene")
@@ -394,11 +413,13 @@ def _build_mask_graph(material, texture, values, no_rover, sun_collection):
     for row, name in enumerate(SCALAR_INPUTS):
         scalar = lib.create_material_expression(
             material, unreal.MaterialExpressionScalarParameter, -650, 360 + 70 * row)
-        scalar.set_editor_property("parameter_name", name)
-        scalar.set_editor_property("default_value", float(values[name]))
+        _quiet(scalar, "parameter_name", name, notify_later)
+        _quiet(scalar, "default_value", float(values[name]), notify_later)
         lib.connect_material_expressions(scalar, "", custom, name)
     lib.connect_material_property(custom, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
 
+    for node, name, value in notify_later:     # the value is unchanged: ALWAYS still notifies
+        node.set_editor_property(name, value, unreal.PropertyAccessChangeNotifyMode.ALWAYS)
     lib.recompile_material(material)
     unreal.EditorAssetLibrary.save_loaded_asset(material)
 
