@@ -26,6 +26,7 @@ DEFAULT_MULTICAST_GROUP_ENDPOINT = ('239.0.0.1', 6766)  # The multicast group en
 DEFAULT_MULTICAST_BIND_ADDRESS = '127.0.0.1'            # The adapter address that the UDP multicast socket should bind to, or 0.0.0.0 to bind to all adapters (must match the "Multicast Bind Address" setting in the Python plugin)
 DEFAULT_COMMAND_ENDPOINT = ('127.0.0.1', 6776)          # The endpoint tuple for the TCP command connection hosted by this client (that the remote client will connect to)
 DEFAULT_RECEIVE_BUFFER_SIZE = 8192                      # The default receive buffer size
+DEFAULT_UNICAST_DISCOVERY = _sys.platform.startswith('linux')  # Also send discovery unicast to the bind address (see _init_broadcast_socket)
 
 # Execution modes (these must match the names given to LexToString for EPythonCommandExecutionMode in IPythonScriptPlugin.h)
 MODE_EXEC_FILE = 'ExecuteFile'                          # Execute the Python command as a file. This allows you to execute either a literal Python script containing multiple statements, or a file with optional arguments
@@ -41,6 +42,7 @@ class RemoteExecutionConfig(object):
         self.multicast_group_endpoint = DEFAULT_MULTICAST_GROUP_ENDPOINT
         self.multicast_bind_address = DEFAULT_MULTICAST_BIND_ADDRESS
         self.command_endpoint = DEFAULT_COMMAND_ENDPOINT
+        self.unicast_discovery = DEFAULT_UNICAST_DISCOVERY
 
 class RemoteExecution(object):
     '''
@@ -260,7 +262,18 @@ class _RemoteExecutionBroadcastConnection(object):
             self._broadcast_socket.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEPORT, 1)
         else:
             self._broadcast_socket.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
-        self._broadcast_socket.bind((self._config.multicast_bind_address, self._config.multicast_group_endpoint[1]))
+        # Linux delivers multicast only to sockets bound to the group or to 0.0.0.0,
+        # never to one bound to an adapter address such as 127.0.0.1, which the
+        # editor's socket is. With unicast discovery this socket binds 0.0.0.0 (so the
+        # editor's replies to the group, sent on the bind address's adapter, arrive)
+        # and every message is also sent unicast to the editor's bind address. The
+        # multicast interface and membership stay on the bind address, so nothing
+        # leaves loopback and the editor keeps its settings.
+        bind_address = self._config.multicast_bind_address
+        if self._config.unicast_discovery:
+            self._broadcast_socket.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+            bind_address = '0.0.0.0'
+        self._broadcast_socket.bind((bind_address, self._config.multicast_group_endpoint[1]))
         self._broadcast_socket.setsockopt(_socket.IPPROTO_IP, _socket.IP_MULTICAST_LOOP, 1)
         self._broadcast_socket.setsockopt(_socket.IPPROTO_IP, _socket.IP_MULTICAST_TTL, self._config.multicast_ttl)
         self._broadcast_socket.setsockopt(_socket.IPPROTO_IP, _socket.IP_MULTICAST_IF, _socket.inet_aton(self._config.multicast_bind_address))
@@ -309,6 +322,8 @@ class _RemoteExecutionBroadcastConnection(object):
             message (_RemoteExecutionMessage): The message to broadcast.
         '''
         self._broadcast_socket.sendto(message.to_json_bytes(), self._config.multicast_group_endpoint)
+        if self._config.unicast_discovery and self._config.multicast_bind_address != '0.0.0.0':
+            self._broadcast_socket.sendto(message.to_json_bytes(), (self._config.multicast_bind_address, self._config.multicast_group_endpoint[1]))
 
     def _broadcast_ping(self, now=None):
         '''
