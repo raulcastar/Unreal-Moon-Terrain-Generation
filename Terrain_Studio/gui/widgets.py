@@ -111,8 +111,9 @@ class Tooltip:
 # =========================================================================
 
 # Mouse wheel: <MouseWheel> with a delta on Windows and macOS, buttons 4 (up)
-# and 5 (down) on X11 (Linux).
-WHEEL_EVENTS = ("<MouseWheel>", "<Button-4>", "<Button-5>")
+# and 5 (down) on X11 (Linux). Only there: on Windows, Tk gives buttons 4 and 5
+# to the mouse's side (back and forward) buttons.
+WHEEL_EVENTS = ("<MouseWheel>",) + (("<Button-4>", "<Button-5>") if sys.platform.startswith("linux") else ())
 
 
 def wheel_units(event):

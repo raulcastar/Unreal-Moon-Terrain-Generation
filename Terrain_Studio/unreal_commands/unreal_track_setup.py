@@ -13,6 +13,8 @@ regolith never has (Landscape_Material leaves Metallic at 0). The object-mask
 material reads it to tag track pixels with their own id.
 """
 
+import sys
+
 import unreal
 
 from unreal_wheel_tracks import POOL_TAG, TRACK_SPACING_CM, WHEEL_SUFFIX, rover_wheels, track_pool, wheel_size
@@ -87,6 +89,7 @@ return lerp(n, f, t) * Whiteness * Shade * (1.0 - LugShade * lug * edge);"""
 LANDSCAPE_MATERIAL = "/Game/Landscape/Landscape_Material"
 REGOLITH_TEXTURES = "/Game/Landscape/Assets/moon_01_4k/Textures"
 NEAR_TILING, FAR_TILING = 2.5, 100.0      # Landscape_Material's LandscapeLayerCoords scales
+QUIET_BUILD = sys.platform.startswith("linux")   # build the material graph without notifications (_quiet)
 
 
 def _quiet(obj, name, value):
@@ -98,9 +101,13 @@ def _quiet(obj, name, value):
     decals in one editor frame pile up the RHI's deferred deletions until the
     editor stalls or runs out of bindless descriptors. Only for node types that
     need nothing from their notification: a CollectionParameter, for one, finds
-    its parameter there.
+    its parameter there. Elsewhere (D3D12 on Windows) the graph is built as it
+    always was, with every notification.
     """
-    obj.set_editor_property(name, value, unreal.PropertyAccessChangeNotifyMode.NEVER)
+    if QUIET_BUILD:
+        obj.set_editor_property(name, value, unreal.PropertyAccessChangeNotifyMode.NEVER)
+    else:
+        obj.set_editor_property(name, value)
 
 
 def _landscape_frame():

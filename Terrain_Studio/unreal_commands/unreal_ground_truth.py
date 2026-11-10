@@ -214,6 +214,9 @@ SCALAR_INPUTS = ("LandscapeStencil", "CraterOriginX", "CraterOriginY", "CraterSt
                  "RoverShadowBias")
 
 
+QUIET_BUILD = sys.platform.startswith("linux")   # build the mask material graph without notifications (_quiet)
+
+
 def _quiet(obj, name, value, notify_later=None):
     """
     set_editor_property without the edit notification. On the mask material or one
@@ -223,8 +226,13 @@ def _quiet(obj, name, value, notify_later=None):
     frame pile up the RHI's deferred deletions until the editor stalls. A node
     that needs its notification (a CollectionParameter finds its parameter there,
     a texture object picks its sampler type) is also added to `notify_later`, to
-    be set again, with the notification, once the graph is complete.
+    be set again, with the notification, once the graph is complete. Elsewhere
+    (D3D12 on Windows) the graph is built as it always was, with every
+    notification.
     """
+    if not QUIET_BUILD:
+        obj.set_editor_property(name, value)
+        return
     obj.set_editor_property(name, value, unreal.PropertyAccessChangeNotifyMode.NEVER)
     if notify_later is not None and (
             (isinstance(obj, unreal.MaterialExpressionCollectionParameter) and name == "parameter_name")
