@@ -82,9 +82,10 @@ These come from actual incidents.
   `send_terrain_to_unreal`, `send_rocks_to_unreal`, `get_sun`, `set_sun`,
   `list_mask_cameras`.
 
-`.mcp.json` registers it for Claude Code, running it in Docker through
-`run_terrain_studio_docker.sh mcp` (on Windows: `py mcp/terrain_studio_mcp.py`
-after `py -m pip install -r mcp/requirements.txt`). Unreal tools need the editor
+`.mcp.json` registers it for Claude Code. Setup:
+`py -m pip install -r mcp/requirements.txt` (Linux, nothing on the host but
+Docker: `claude mcp add terrain-studio -- bash "<repo>/run_terrain_studio_docker.sh" mcp`
+instead). Unreal tools need the editor
 running with the Python Editor Script Plugin and Remote Execution enabled.
 Tools that change the level refuse during Play, and `generate_terrain` won't
 overwrite an existing `outputs/<name>` unless asked. Driving the rover is done

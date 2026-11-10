@@ -110,9 +110,6 @@ class Tooltip:
 # PROGRESS WITH TIME ESTIMATES
 # =========================================================================
 
-# Seconds per unit of work of each job kind, learned from finished runs and
-# kept between sessions, so jobs that cannot report progress still get an
-# estimate.
 # Mouse wheel: <MouseWheel> with a delta on Windows and macOS, buttons 4 (up)
 # and 5 (down) on X11 (Linux).
 WHEEL_EVENTS = ("<MouseWheel>", "<Button-4>", "<Button-5>")
@@ -131,6 +128,9 @@ def scroll_with_wheel(canvas, event):
         canvas.yview_scroll(wheel_units(event), "units")
 
 
+# Seconds per unit of work of each job kind, learned from finished runs and
+# kept between sessions, so jobs that cannot report progress still get an
+# estimate.
 DURATIONS_PATH = os.path.join(os.path.expanduser("~"), ".lunar_terrain_studio", "durations.json")
 
 

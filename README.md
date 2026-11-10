@@ -34,7 +34,7 @@ goes down from 35° to 3°: the studio's cast shadows (blue) and Unreal's
 ```sh
 py -m pip install -r requirements.txt     # once (python3 -m pip on Linux / macOS)
 run_terrain_studio.bat                    # Windows
-./run_terrain_studio.sh                   # Linux / macOS
+./run_terrain_studio.sh                   # Linux / macOS (chmod +x once)
 ./run_terrain_studio_docker.sh            # Linux, in Docker: nothing to install but Docker
 ```
 
@@ -87,7 +87,8 @@ start or stop Play. It runs the same code as the GUI.
 ```sh
 py -m pip install -r mcp/requirements.txt                                # once
 claude mcp add terrain-studio -- py "<repo>/mcp/terrain_studio_mcp.py"   # or use the repo's .mcp.json
-# Linux: the repo's .mcp.json runs it in Docker (run_terrain_studio_docker.sh mcp)
+# Linux, with nothing on the host but Docker: the server in the studio's image
+claude mcp add terrain-studio -- bash "<repo>/run_terrain_studio_docker.sh" mcp
 ```
 
 Tools that change the level refuse while Unreal is in Play. The GNC repository

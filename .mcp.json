@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "terrain-studio": {
-      "command": "bash",
-      "args": ["run_terrain_studio_docker.sh", "mcp"]
+      "command": "py",
+      "args": ["mcp/terrain_studio_mcp.py"]
     }
   }
 }

@@ -3,7 +3,7 @@
 #
 #   ./run_terrain_studio_docker.sh            the studio (Tk GUI on your X server)
 #   ./run_terrain_studio_docker.sh test       the test suite, headless
-#   ./run_terrain_studio_docker.sh mcp        the MCP server on stdio (.mcp.json)
+#   ./run_terrain_studio_docker.sh mcp        the MCP server on stdio (claude mcp add, README)
 #   ./run_terrain_studio_docker.sh cli ARGS   generator/generate_cli.py ARGS
 #
 # The repository is mounted at its own path: the commands the studio sends to
