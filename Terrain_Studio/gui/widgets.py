@@ -110,6 +110,25 @@ class Tooltip:
 # PROGRESS WITH TIME ESTIMATES
 # =========================================================================
 
+# Mouse wheel: <MouseWheel> with a delta on Windows and macOS, buttons 4 (up)
+# and 5 (down) on X11 (Linux). Only there: on Windows, Tk gives buttons 4 and 5
+# to the mouse's side (back and forward) buttons.
+WHEEL_EVENTS = ("<MouseWheel>",) + (("<Button-4>", "<Button-5>") if sys.platform.startswith("linux") else ())
+
+
+def wheel_units(event):
+    """Scroll units for a wheel event, negative upwards, on every platform."""
+    if event.num in (4, 5):
+        return -1 if event.num == 4 else 1
+    return int(-event.delta / 120)
+
+
+def scroll_with_wheel(canvas, event):
+    """Scrolls `canvas` for a wheel event, unless its whole content is in view."""
+    if canvas.yview() != (0.0, 1.0):
+        canvas.yview_scroll(wheel_units(event), "units")
+
+
 # Seconds per unit of work of each job kind, learned from finished runs and
 # kept between sessions, so jobs that cannot report progress still get an
 # estimate.
@@ -645,8 +664,8 @@ class StepTabs(ttk.Notebook):
     def bind_mousewheel(self):
         """Wheel scrolling over each step's settings; call once they are built."""
         def bind(widget, canvas):
-            widget.bind("<MouseWheel>",
-                        lambda e: canvas.yview_scroll(int(-e.delta / 120), "units"))
+            for event in WHEEL_EVENTS:
+                widget.bind(event, lambda e: scroll_with_wheel(canvas, e))
             for child in widget.winfo_children():
                 bind(child, canvas)
         for canvas, settings in self._canvases:

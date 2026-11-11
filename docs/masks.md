@@ -284,4 +284,5 @@ the rover's own shadow get id 5 (`rover_shadow`) instead of 2 or 4.
 - Unreal's Python cannot set a capture's show-only list in the editor, so the
   studio pastes the helper from text with the list filled in. That briefly uses
   the clipboard; its text is put back afterwards (other content, such as an
-  image, is not).
+  image, is not). On Linux the editor needs `xclip` (X11) or `wl-clipboard`
+  (Wayland) for this; MARE-Lunar-Simulator's Unreal container has xclip.

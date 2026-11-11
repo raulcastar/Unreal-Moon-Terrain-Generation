@@ -34,6 +34,7 @@ py -m pip install -r requirements-dev.txt   # once (Windows; python3 elsewhere)
 run_terrain_studio.bat                      # the app
 py -m pytest                                # all tests, from the repo root (~10 s)
 py -m pytest tests/test_terrain_mcp.py      # one file; -k <name> also works
+./run_terrain_studio_docker.sh test        # Linux: the tests in Docker (also: gui, mcp, cli ARGS)
 ```
 
 - `py` is Python 3.14 here; its packages come from `requirements.txt`. If the
@@ -82,7 +83,9 @@ These come from actual incidents.
   `list_mask_cameras`.
 
 `.mcp.json` registers it for Claude Code. Setup:
-`py -m pip install -r mcp/requirements.txt`. Unreal tools need the editor
+`py -m pip install -r mcp/requirements.txt` (Linux, nothing on the host but
+Docker: `claude mcp add terrain-studio -- bash "<repo>/run_terrain_studio_docker.sh" mcp`
+instead). Unreal tools need the editor
 running with the Python Editor Script Plugin and Remote Execution enabled.
 Tools that change the level refuse during Play, and `generate_terrain` won't
 overwrite an existing `outputs/<name>` unless asked. Driving the rover is done

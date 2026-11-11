@@ -13,6 +13,8 @@ regolith never has (Landscape_Material leaves Metallic at 0). The object-mask
 material reads it to tag track pixels with their own id.
 """
 
+import sys
+
 import unreal
 
 from unreal_wheel_tracks import POOL_TAG, TRACK_SPACING_CM, WHEEL_SUFFIX, rover_wheels, track_pool, wheel_size
@@ -87,6 +89,25 @@ return lerp(n, f, t) * Whiteness * Shade * (1.0 - LugShade * lug * edge);"""
 LANDSCAPE_MATERIAL = "/Game/Landscape/Landscape_Material"
 REGOLITH_TEXTURES = "/Game/Landscape/Assets/moon_01_4k/Textures"
 NEAR_TILING, FAR_TILING = 2.5, 100.0      # Landscape_Material's LandscapeLayerCoords scales
+QUIET_BUILD = sys.platform.startswith("linux")   # build the material graph without notifications (_quiet)
+
+
+def _quiet(obj, name, value):
+    """
+    set_editor_property without the edit notification. On the track material or one
+    of its nodes each notification recompiles the material and refreshes all the
+    pool's decals, so its graph is built quietly and compiled once at the end
+    (recompile_material). On Vulkan (Linux) dozens of refreshes of thousands of
+    decals in one editor frame pile up the RHI's deferred deletions until the
+    editor stalls or runs out of bindless descriptors. Only for node types that
+    need nothing from their notification: a CollectionParameter, for one, finds
+    its parameter there. Elsewhere (D3D12 on Windows) the graph is built as it
+    always was, with every notification.
+    """
+    if QUIET_BUILD:
+        obj.set_editor_property(name, value, unreal.PropertyAccessChangeNotifyMode.NEVER)
+    else:
+        obj.set_editor_property(name, value)
 
 
 def _landscape_frame():
@@ -146,9 +167,9 @@ def _track_material(style=None):
         material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
             TRACK_MATERIAL.rsplit("/", 1)[-1], TRACK_MATERIAL.rsplit("/", 1)[0], unreal.Material,
             unreal.MaterialFactoryNew())
-    material.set_editor_property("material_domain", unreal.MaterialDomain.MD_DEFERRED_DECAL)
-    material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)   # Decal: colour, normal, roughness, metallic
-    material.set_editor_property("tangent_space_normal", False)    # The normal is built in world space
+    _quiet(material, "material_domain", unreal.MaterialDomain.MD_DEFERRED_DECAL)
+    _quiet(material, "blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)   # Decal: colour, normal, roughness, metallic
+    _quiet(material, "tangent_space_normal", False)    # The normal is built in world space
     lib.delete_all_material_expressions(material)
 
     uv = lib.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate, -1400, 0)
@@ -157,26 +178,26 @@ def _track_material(style=None):
 
     def custom(code, output, inputs, x, y):
         node = lib.create_material_expression(material, unreal.MaterialExpressionCustom, x, y)
-        node.set_editor_property("code", code)
-        node.set_editor_property("output_type", output)
+        _quiet(node, "code", code)
+        _quiet(node, "output_type", output)
         entries = []
         for name in inputs:
             entry = unreal.CustomInput()
             entry.set_editor_property("input_name", name)
             entries.append(entry)
-        node.set_editor_property("inputs", entries)
+        _quiet(node, "inputs", entries)
         return node
 
     def scalar(name, value, x, y):
         node = lib.create_material_expression(material, unreal.MaterialExpressionScalarParameter, x, y)
-        node.set_editor_property("parameter_name", name)
-        node.set_editor_property("default_value", float(value))
+        _quiet(node, "parameter_name", name)
+        _quiet(node, "default_value", float(value))
         return node
 
     def texture(name, sampler, coords, y):
         node = lib.create_material_expression(material, unreal.MaterialExpressionTextureSample, -700, y)
-        node.set_editor_property("texture", unreal.load_asset(f"{REGOLITH_TEXTURES}/{name}"))
-        node.set_editor_property("sampler_type", sampler)
+        _quiet(node, "texture", unreal.load_asset(f"{REGOLITH_TEXTURES}/{name}"))
+        _quiet(node, "sampler_type", sampler)
         lib.connect_material_expressions(coords, "", node, "UVs")
         return node
 
@@ -210,11 +231,11 @@ def _track_material(style=None):
     def decal_axis(x, y, z, top):
         """A decal-space axis in world space (the decal's own transform)."""
         constant = lib.create_material_expression(material, unreal.MaterialExpressionConstant3Vector, -1000, top)
-        constant.set_editor_property("constant", unreal.LinearColor(x, y, z, 0.0))
+        _quiet(constant, "constant", unreal.LinearColor(x, y, z, 0.0))
         transform = lib.create_material_expression(material, unreal.MaterialExpressionTransform, -800, top)
-        transform.set_editor_property("transform_source_type",
+        _quiet(transform, "transform_source_type",
                                       unreal.MaterialVectorCoordTransformSource.TRANSFORMSOURCE_LOCAL)
-        transform.set_editor_property("transform_type", unreal.MaterialVectorCoordTransform.TRANSFORM_WORLD)
+        _quiet(transform, "transform_type", unreal.MaterialVectorCoordTransform.TRANSFORM_WORLD)
         lib.connect_material_expressions(constant, "", transform, "")
         return transform
 

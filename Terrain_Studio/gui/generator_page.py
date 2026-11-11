@@ -21,6 +21,7 @@ from matplotlib.figure import Figure
 from gui import generator_logic as logic
 from gui import generator_plots as plots
 from gui import paths
+from gui.widgets import WHEEL_EVENTS, scroll_with_wheel
 from gui.generator_logic import COLORMAPS, PARAM_GROUPS, PREVIEW_SIZES  # noqa: F401  (used by other pages)
 from gui.backend import terrain_core, heightmap_files, LOADER_AVAILABLE, LOADER_IMPORT_ERROR
 from gui.dem_files import (DEM_FILETYPES, dem_source_note, dem_source_problem, drop_dem_menu,
@@ -72,11 +73,12 @@ class GeneratorPage:
         canvas.pack(side="left", fill="both", expand=True)
 
         def on_wheel(event):
-            canvas.yview_scroll(int(-event.delta / 120), "units")
+            scroll_with_wheel(canvas, event)
             return "break"
 
         def enter(_event):
-            canvas.bind_all("<MouseWheel>", on_wheel)
+            for event in WHEEL_EVENTS:
+                canvas.bind_all(event, on_wheel)
 
         def leave(_event):
             # Leave also fires when moving onto a child widget; tkinter does not
@@ -86,7 +88,8 @@ class GeneratorPage:
             inside = (left <= x < left + canvas.winfo_width()
                       and top <= y < top + canvas.winfo_height())
             if not inside:
-                canvas.unbind_all("<MouseWheel>")
+                for event in WHEEL_EVENTS:
+                    canvas.unbind_all(event)
 
         canvas.bind("<Enter>", enter)
         canvas.bind("<Leave>", leave)
