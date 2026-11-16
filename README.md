@@ -60,7 +60,8 @@ step, with that step's buttons pinned under its settings.
 | **2. Rocks & Rover Paths** | Scatters rocks around drivable corridors and places them in Unreal, tagged for the object mask | [docs/rocks.md](docs/rocks.md) |
 | **3. Crater & Shadow Masks** | Adds craters, shadows, the sun, wheel tracks and the rover's shadow to the rover's object-mask camera | [docs/masks.md](docs/masks.md) |
 | **4. Sun & Shadows** | Sets a lunar sun in Unreal from the shadow you draw | [docs/sun.md](docs/sun.md) |
-| **Library** | Browse every map; send any existing DEM to Unreal | [docs/terrain.md](docs/terrain.md#send-to-unreal) |
+| **Library** | Browse every map; send any existing DEM to Unreal, or crop a region of it | [docs/terrain.md](docs/terrain.md#send-to-unreal) |
+| **Lunar Datasets** | Preview real lunar DEMs (LROC NAC, LOLA), download them or a region, and send them to Unreal | [docs/datasets.md](docs/datasets.md) |
 
 ![Creating a terrain](docs/images/create-terrain.gif)
 
@@ -98,7 +99,8 @@ has the matching server for driving the rover.
 
 | | |
 |---|---|
-| [Terrain](docs/terrain.md) | Step 1: parameters, outputs, Send to Unreal, command line |
+| [Terrain](docs/terrain.md) | Step 1: parameters, outputs, Send to Unreal (and cropping a large map), command line |
+| [Lunar datasets](docs/datasets.md) | Real lunar DEMs: sources, previews, downloads and region crops |
 | [Rocks](docs/rocks.md) | Step 2: how the plan is made, presets, export, placing in Unreal |
 | [Masks](docs/masks.md) | Step 3: crater map, object mask ids, shadows, sun, wheel tracks, rover shadow |
 | [Sun](docs/sun.md) | Step 4: setting the sun and sending it to Unreal |

@@ -31,10 +31,15 @@ Terrain_Studio/
     generator_page.py            Generate view: layout, events, background jobs
     generator_logic.py             its parameter schema, seeds, read-outs (no Tk)
     generator_plots.py             its relief, 3D surface and slope drawing (Matplotlib)
-    landscape_page.py            Send to Unreal view: DEM to Landscape
+    landscape_page.py            Send to Unreal view: DEM to Landscape, with the crop panel
     rock_planner_page.py         Rock Planner view: layout, events, jobs
     rock_planner_logic.py          its schema, input parsing, read-outs (no Tk)
     rock_planner_plots.py          its plan drawing
+    crop_logic.py                Cropping a large DEM to a Landscape-sized region (no Tk)
+    crop_panel.py                The crop controls shared by Send to Unreal and Lunar Datasets
+    datasets_page.py             Lunar Datasets view: catalogue, preview, downloads, region crops
+    datasets_logic.py              its catalogue, details, previews, downloads (no Tk)
+    remote_tiff.py               Reading windows of a remote GeoTIFF by HTTP range requests (no Tk)
     ground_truth_page.py         Ground Truth view: crater map, mask ids, mask camera, tracks
     ground_truth_logic.py          its mask ids and classes, crater source, track look, cameras
     ground_truth_plots.py          its crater-mask drawing

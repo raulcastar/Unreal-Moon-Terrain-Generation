@@ -228,7 +228,11 @@ def load_dem_array(path):
             import tifffile
         except ImportError:
             raise ValueError("Reading .tif needs the 'tifffile' package.")
-        data = tifffile.imread(path)
+        with tifffile.TiffFile(path) as tif:
+            data = tif.asarray().astype(float)
+            nodata = _tiff_nodata(tif)
+        if nodata is not None:
+            data = _nodata_to_nan(data, nodata)
     elif ext in ('.csv', '.txt'):
         try:
             data = np.loadtxt(path)              # whitespace-delimited
@@ -240,4 +244,39 @@ def load_dem_array(path):
     data = np.asarray(data, dtype=float)
     if data.ndim != 2:
         raise ValueError(f"Expected a 2D map, got shape {data.shape}.")
+    return data
+
+
+def _tiff_nodata(tif):
+    """
+    A GeoTIFF's NoData value, or None.
+
+    GDAL stores it as text. tifffile can fail to parse it (an LRO DEM's
+    -3.4e38 does not fit its float32 check) yet still keep the raw text, so the
+    text is read here rather than trusting tifffile's own conversion.
+    """
+    tag = tif.pages[0].tags.get('GDAL_NODATA')
+    if tag is None:
+        return None
+    try:
+        return float(str(tag.value).strip().strip('\x00'))
+    except ValueError:
+        return None
+
+
+def _nodata_to_nan(data, nodata):
+    """
+    `data` with its NoData cells as NaN, so they are not drawn or meshed as
+    deep pits.
+
+    The value is matched at float32 precision, the usual DEM type; a sentinel
+    near the float32 limit (LRO uses -3.4e38) also catches anything beyond
+    1e30, since no real elevation is that large.
+    """
+    missing = data == np.float32(nodata)
+    if abs(nodata) > 1e30:
+        missing |= np.abs(data) > 1e30
+    if missing.any():
+        data = data.copy()
+        data[missing] = np.nan
     return data

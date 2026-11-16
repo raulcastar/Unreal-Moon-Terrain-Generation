@@ -14,8 +14,9 @@ from contextlib import redirect_stdout
 import tkinter as tk
 from tkinter import filedialog, ttk
 
-from gui import paths
+from gui import crop_logic, paths
 from gui.backend import terrain_core, send_terrain, LOADER_AVAILABLE, LOADER_IMPORT_ERROR
+from gui.crop_panel import CropPanel
 from gui.dem_files import DEM_FILETYPES, dem_source_note, dem_source_problem, drop_dem_menu
 from gui.map_views import MapView
 from gui.paths import map_browse_dir, output_group_dir
@@ -40,7 +41,7 @@ class UnrealUnavailable(RuntimeError):
 
 
 def convert_and_dispatch(source_path, resolution, dispatch, output_dir,
-                         log, progress, dialog, cancelled, save_level=True):
+                         log, progress, dialog, cancelled, save_level=True, nanite=True):
     """
     Converts a DEM to Unreal's 16-bit heightmap and optionally spawns the
     Landscape actor. Runs on a worker thread.
@@ -88,16 +89,25 @@ def convert_and_dispatch(source_path, resolution, dispatch, output_dir,
     with redirect_stdout(buffer):
         send_terrain.send_to_unreal(config, interp_resolution, z_scale, heightmap,
                                     z_offset=z_offset, output_directory=output_dir,
-                                    save_level=save_level)
+                                    save_level=save_level, nanite=nanite)
     output = buffer.getvalue()
     for line in output.splitlines():
         if line.strip():
             log(line, level="error" if "[-]" in line else None)
     if "[-]" in output:
+        # Report Unreal's own reason (e.g. it is in Play) rather than a guess.
+        reason = next(line.split("[-]", 1)[1].strip() for line in output.splitlines() if "[-]" in line)
         raise UnrealUnavailable(
-            "Unreal did not complete the import. Check that the editor is running with the "
-            "Python Editor Script Plugin and 'Remote Execution' enabled, then retry. The "
-            f"heightmap is written: {heightmap_path}")
+            f"Unreal did not build the Landscape: {reason} The heightmap is written: "
+            f"{heightmap_path}")
+    # This text is logged by unreal_landscape.create_landscape; keep the two in step.
+    if "Heightmap not applied" in output:
+        # The Landscape was spawned flat: the manual import steps, shown here
+        # rather than in a modal dialog that would freeze the editor.
+        dialog("Import the heightmap in Unreal",
+               "The Landscape was created, but its heightmap was not applied "
+               "automatically. Heightmap:\n\n" + format_path_block(heightmap_path)
+               + "\n\n" + IMPORT_STEPS)
     progress("Dispatch complete", 1.0)
     return heightmap_path
 
@@ -192,6 +202,21 @@ class LandscapePage(ttk.Frame):
                   style="Readout.TLabel", foreground="#b8860b",
                   wraplength=self.CONTROLS_WIDTH - 60).pack(anchor="w")
 
+        # --- crop ---
+        self.crop = CropPanel(
+            outer, get_resolution=lambda: self._read_resolution(quiet=True),
+            toggle_text="Send only a region of the map",
+            toggle_tip="Draws a rectangle on the map: drag to draw a new one, drag its\n"
+                       "inside to move it and its handles to resize it. The region is\n"
+                       "saved as its own map, so rocks, masks and the sun use it too.",
+            buttons=[("Save crop", self.save_crop,
+                      "Writes the region as a new map in outputs/<name>_crop_.../ and\n"
+                      "makes it the current map, without sending it. Send to Unreal\n"
+                      "saves the crop too, when the region is on.")],
+            wraplength=self.CONTROLS_WIDTH - 60)
+        self.crop.pack(fill="x", pady=(8, 0))
+        self.save_crop_button = self.crop.buttons["Save crop"]
+
         # --- settings ---
         settings = ttk.Labelframe(outer, text="Conversion",
                                   style="Group.TLabelframe", padding=8)
@@ -209,6 +234,8 @@ class LandscapePage(ttk.Frame):
         ttk.Entry(settings, textvariable=self.resolution_var, width=12,
                   justify="right", font=("Consolas", 9)).grid(
             row=0, column=1, sticky="w", padx=(8, 0))
+        # The crop read-out gives sizes in metres, which follow this field.
+        self.resolution_var.trace_add("write", lambda *_: self.crop.refresh_readout())
 
         self.dispatch_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(settings, text="Dispatch to running Unreal Editor",
@@ -222,6 +249,15 @@ class LandscapePage(ttk.Frame):
                                      variable=self.save_level_var)
         save_check.grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
         Tooltip(save_check, 'Saves the open Unreal level once the Landscape is spawned and its\nheightmap applied.')
+        self.nanite_var = tk.BooleanVar(value=True)
+        nanite_check = ttk.Checkbutton(settings, text="Nanite Landscape",
+                                       variable=self.nanite_var)
+        nanite_check.grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        Tooltip(nanite_check,
+                "Renders large Landscapes faster. Unreal rebuilds the Nanite mesh\n"
+                "on every save, which freezes the editor: about 15 s more for a\n"
+                "1009 x 1009 Landscape, longer for bigger ones. Untick it for quick\n"
+                "saves while iterating.")
 
         # --- destination ---
         destination = ttk.Frame(outer)
@@ -256,7 +292,9 @@ class LandscapePage(ttk.Frame):
 
         # --- right: the map, with the log beneath it ---
         self._log = ActivityLog(right, height=6)
-        self.view = MapView(right, figure_dpi=figure_dpi, on_status=self.log)
+        self.view = MapView(right, figure_dpi=figure_dpi, on_status=self.log,
+                            on_loaded=self.crop.map_loaded, show_3d=True)
+        self.crop.view = self.view
         self._log.pack(side="bottom", fill="x")
         self.view.pack(side="top", fill="both", expand=True)
 
@@ -272,10 +310,23 @@ class LandscapePage(ttk.Frame):
         self._reflow_destination()
         self.source_note_var.set(dem_source_note(path))
         self.open_folder_button.state(["!disabled"])
+        # A new map starts uncropped; its rectangle is placed once it is drawn.
+        self.crop.reset()
         # Preview the map as soon as it is selected.
         self.view.show_path(path)
         if announce:
             self.log(f"Source map: {path}")
+        # A GeoTIFF knows its pixel size and a saved crop recorded its own, so
+        # the field is filled from the map rather than left at a guess.
+        native = crop_logic.native_resolution(path)
+        if native and abs(native - (self._read_resolution(quiet=True) or 0)) > 1e-9:
+            self.resolution_var.set(f"{native:g}")
+            self.log(f"Resolution set to {native:g} m/px, from the map itself.")
+
+    def open_with_crop(self, path):
+        """Shows `path` with the crop turned on, for a map too large to send whole."""
+        self.set_source(path)
+        self.crop.set_enabled(True)   # the rectangle is placed once the map is drawn
 
     def _reflow_destination(self, event=None):
         """
@@ -326,20 +377,23 @@ class LandscapePage(ttk.Frame):
         except AttributeError:  # pragma: no cover - non-Windows fallback
             subprocess.Popen(["xdg-open", target])
 
-    def _read_resolution(self):
+    def _read_resolution(self, quiet=False):
         """The resolution entry as a positive float, or None if it is unusable."""
         try:
             value = float(self.resolution_var.get().strip())
         except ValueError:
-            self.log("Resolution must be a number, e.g. 1.0", level="error")
+            if not quiet:
+                self.log("Resolution must be a number, e.g. 1.0", level="error")
             return None
         if not value > 0:
-            self.log("Resolution must be greater than zero.", level="error")
+            if not quiet:
+                self.log("Resolution must be greater than zero.", level="error")
             return None
         return value
 
     # ------------------------------------------------------------- action
     def send(self):
+        """Converts the map (or its crop) and sends it to Unreal on a worker thread."""
         if self._busy():
             self.log("A conversion is already running.", level="warn")
             return
@@ -356,24 +410,39 @@ class LandscapePage(ttk.Frame):
         source_path = self.source_path
         dispatch = self.dispatch_var.get()
         save_level = self.save_level_var.get()
-        output_dir = output_group_dir(source_path)
+        nanite = self.nanite_var.get()
+        crop_bounds = self.crop.bounds if self.crop.active() else None
 
-        self.log(f"Sending to Unreal: {os.path.basename(source_path)}")
+        if crop_bounds:
+            row, col, rows, cols = crop_bounds
+            self.log(f"Sending a {cols} x {rows} px region of "
+                     f"{os.path.basename(source_path)} to Unreal")
+        else:
+            self.log(f"Sending to Unreal: {os.path.basename(source_path)}")
+        # The size Unreal gets: the region, or the whole map once it is drawn.
+        sent_shape = crop_bounds[2:] if crop_bounds else self.crop.map_shape
+        warning = crop_logic.nanite_warning(sent_shape) if nanite and sent_shape else None
+        if warning and dispatch:
+            self.log(warning, level="warn")
         self._cancel_event.clear()
         self.progress.start("Sending to Unreal...", "dispatch", max(os.path.getsize(source_path) / 1e6, 0.01) if os.path.exists(source_path) else 1.0)
-        self.send_button.state(["disabled"])
-        self.stop_button.state(["!disabled"])
+        self._set_running(True)
 
         def job():
             try:
+                # The crop is written first as its own map, so the Landscape
+                # and every later step share the same subsection.
+                map_path = (self._cut_crop(source_path, crop_bounds, resolution)
+                            if crop_bounds else source_path)
                 convert_and_dispatch(
-                    source_path, resolution, dispatch, output_dir,
+                    map_path, resolution, dispatch, output_group_dir(map_path),
                     log=lambda text, level=None: self._post("log", (text, level)),
                     progress=lambda message, fraction: self._post(
                         "progress", (message, fraction)),
                     dialog=lambda title, message: self._post(
                         "dialog", (title, message)),
-                    cancelled=self._cancel_event.is_set, save_level=save_level)
+                    cancelled=self._cancel_event.is_set, save_level=save_level,
+                    nanite=nanite)
             except terrain_core.TerrainCancelled:
                 self._post("cancelled", None)
             except UnrealUnavailable as exc:
@@ -385,6 +454,54 @@ class LandscapePage(ttk.Frame):
 
         self.worker = threading.Thread(target=job, daemon=True)
         self.worker.start()
+
+    def save_crop(self):
+        """Writes the selected region as a new map and switches to it, without sending."""
+        if self._busy():
+            self.log("A conversion is already running.", level="warn")
+            return
+        if not self.crop.active():
+            self.log("Turn on 'Send only a region' and draw a region smaller than the map.",
+                     level="warn")
+            return
+        resolution = self._read_resolution()
+        if resolution is None:
+            return
+        source_path, bounds = self.source_path, self.crop.bounds
+        self._cancel_event.clear()
+        self.progress.start("Saving the crop...", "crop", 1.0)
+        self._set_running(True)
+
+        def job():
+            try:
+                self._cut_crop(source_path, bounds, resolution)
+            except Exception:
+                self._post("error", traceback.format_exc())
+            finally:
+                self._post("done", None)
+
+        self.worker = threading.Thread(target=job, daemon=True)
+        self.worker.start()
+
+    def _cut_crop(self, source_path, bounds, resolution):
+        """
+        Saves the crop (worker thread) and has the view switch to it; returns
+        the new map's path.
+        """
+        self._post("progress", ("Cutting the selected region", 0.05))
+        dem_path, info = crop_logic.save_crop(source_path, bounds, resolution)
+        note = (f", {info['missing_fraction']:.1%} of it without data"
+                if info["missing_fraction"] else "")
+        self._post("log", (f"Crop saved: {dem_path}{note}", "ok"))
+        self._post("source", dem_path)
+        return dem_path
+
+    def _set_running(self, running):
+        """Locks the actions while a job runs, and frees them after."""
+        # Without the loader modules Send stays off; saving a crop still works.
+        self.send_button.state(["disabled"] if running or not LOADER_AVAILABLE else ["!disabled"])
+        self.stop_button.state(["!disabled"] if running else ["disabled"])
+        self.crop.update_states(busy=running)
 
     def stop(self):
         if not self._busy():
@@ -415,6 +532,14 @@ class LandscapePage(ttk.Frame):
                 elif kind == "dialog":
                     title, message = payload
                     show_message(self, title, message)
+                elif kind == "source":
+                    # A crop was saved: it is now the map, here and for the
+                    # other steps, and it needs no rectangle of its own.
+                    self.crop.set_enabled(False)
+                    self.set_source(payload)
+                    if hasattr(self.app, "_set_unreal_source"):
+                        self.app._set_unreal_source(payload)
+                    self.log("The crop is now the current map for the other steps.")
                 elif kind == "cancelled":
                     self.log("Conversion cancelled.", level="warn")
                     self.progress.finish("cancelled")
@@ -422,8 +547,7 @@ class LandscapePage(ttk.Frame):
                     self.log(payload, level="error" if kind == "error" else "warn")
                     self.progress.finish("failed")
                 elif kind == "done":
-                    self.send_button.state(["!disabled"])
-                    self.stop_button.state(["disabled"])
+                    self._set_running(False)
                     self.progress.finish()
         except queue.Empty:
             pass

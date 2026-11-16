@@ -102,19 +102,21 @@ def generate_lunar_terrain(input_map_filepath, output_map_directory, input_resol
 
 
 def send_to_unreal(landscape_config, interpolation_resolution, z_axis_scale, heightmap_filename,
-                   z_offset=0.0, output_directory=None, save_level=True):
+                   z_offset=0.0, output_directory=None, save_level=True, nanite=True):
     """
     Has a running Unreal Editor build the Landscape from the heightmap
     (unreal_landscape.create_landscape), printing the editor's output; failures
     print a line starting with "[-]". With save_level, Unreal saves the level
-    once the Landscape is spawned.
+    once the Landscape is spawned. With nanite, the Landscape uses Nanite
+    (faster rendering, but every save rebuilds its mesh and freezes the editor).
     """
     # The heightmap is in its per-map output folder.
     heightmap_directory = (output_directory or BASE_OUTPUT_DIRECTORY).replace("\\", "/")
     target_r16_path = f"{heightmap_directory}/{heightmap_filename}"
     command = unreal_call(
         f"create_landscape({landscape_config}, {interpolation_resolution}, {z_axis_scale}, "
-        f"'{target_r16_path}', {0.0}, {0.0}, {z_offset}, save_level={bool(save_level)})",
+        f"'{target_r16_path}', {0.0}, {0.0}, {z_offset}, save_level={bool(save_level)}, "
+        f"nanite={bool(nanite)})",
         "unreal_level_saver", "unreal_landscape")
 
     def log(text, level=None):

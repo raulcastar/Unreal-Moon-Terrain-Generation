@@ -10,14 +10,16 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, ttk
 import matplotlib
+import matplotlib.image
 import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import LightSource, Normalize
 from matplotlib.figure import Figure
 from matplotlib.ticker import MaxNLocator
+from matplotlib.widgets import RectangleSelector
 
-from gui import paths
+from gui import crop_logic, paths
 from gui.dem_files import load_dem_array, scan_dem_folder
 from gui.paths import map_browse_dir
 from gui.widgets import ActivityLog, ViewHeader
@@ -39,17 +41,34 @@ class MapView(ttk.Frame):
 
     Maps load on a worker thread and are drawn on the main thread; a token
     discards stale loads when a newer map is requested. The 3D surface is drawn
-    only while its tab is showing. The host supplies `on_status` (log line) and
-    `on_title` (map name).
+    only while its tab is showing. The host supplies `on_status` (log line),
+    `on_title` (map name) and `on_loaded` (full-resolution shape, once a map is
+    drawn).
+
+    A host can also turn on a crop rectangle (enable_crop): the user drags it
+    over the relief, and the host is told its full-resolution bounds.
     """
 
     DISPLAY_MAX_EDGE = 1200
 
+    # The crop rectangle in the studio's accent colour, translucent so the
+    # relief under it stays readable.
+    CROP_PROPS = dict(facecolor="#e8923a", edgecolor="#e8923a", alpha=0.22,
+                      fill=True, linewidth=1.5)
+
     def __init__(self, parent, figure_dpi=100, on_status=None, on_title=None,
-                 show_3d=False):
+                 show_3d=False, on_loaded=None):
         super().__init__(parent)
         self._on_status = on_status or (lambda text, level=None: None)
         self._on_title = on_title or (lambda name: None)
+        self._on_loaded = on_loaded or (lambda shape: None)
+
+        # Crop rectangle: on while _on_crop is set; bounds in full-resolution
+        # pixels (row, col, rows, cols), so they survive a redraw or a resize.
+        self._on_crop = None
+        self._crop_bounds = None
+        self._crop_selector = None
+        self._relief_axes = None
 
         self._load_queue = queue.Queue()
         self._load_token = 0
@@ -108,6 +127,8 @@ class MapView(ttk.Frame):
         self._load_token += 1
         token = self._load_token
         self._awaiting = token
+        # A crop rectangle belongs to the map it was drawn on.
+        self._crop_bounds = None
 
         self._on_title(f"loading {name}...")
         self.show_message(f"Loading  {name} ...")
@@ -123,6 +144,45 @@ class MapView(ttk.Frame):
         threading.Thread(target=worker, daemon=True).start()
         if self._poll_job is None:
             self._poll_job = self.after(80, self._poll_load)
+
+    def show_array(self, name, data, full_shape=None):
+        """
+        Draws an elevation array already in memory (on the main thread).
+
+        `full_shape` is the shape of the map `data` was reduced from, such as a
+        remote GeoTIFF read at an overview level: the axes, the read-outs and
+        the crop rectangle then work in that map's full-resolution pixels.
+        """
+        self._load_token += 1           # drop any file still loading
+        self._awaiting = None
+        self._crop_bounds = None
+        payload = self._prepare(data)
+        if full_shape is not None and tuple(full_shape) != tuple(data.shape):
+            payload['orig_shape'] = tuple(full_shape)
+            payload['step'] = max(1, int(round(full_shape[1] / payload['shaded'].shape[1])))
+        self._render(name, payload)
+        self._on_title(name)
+        self._on_loaded(payload['orig_shape'])
+
+    def show_picture(self, path, title):
+        """Draws a picture (a ready-made preview, not elevation) in place of the map."""
+        # A new token drops any map still loading; show_message clears the drawn
+        # map, its crop rectangle and its stored state, so nothing of the
+        # previous map is left behind the picture.
+        self._load_token += 1
+        self._awaiting = None
+        self.show_message("")
+        if self.notebook is not None:
+            self.notebook.select(0)     # a picture has no 3D surface
+        self.figure.clear()
+        axes = self.figure.add_subplot(111)
+        picture =matplotlib.image.imread(path)
+        # Archive shaded reliefs are single-channel: drawn in grey, not in a false-colour map.
+        axes.imshow(picture, interpolation="bilinear", cmap="gray" if picture.ndim == 2 else None)
+        axes.set_title(title, fontsize=9)
+        axes.axis("off")
+        self.canvas.draw_idle()
+        self._on_title(os.path.basename(path))
 
     def _prepare(self, data):
         """Downsamples and shades the DEM (runs in the worker thread; numpy only)."""
@@ -157,6 +217,7 @@ class MapView(ttk.Frame):
                     rows, cols = payload['orig_shape']
                     self._on_status(f"Loaded {name}  ({cols} x {rows} px, "
                                     f"relief {payload['relief']:.3g})", level="ok")
+                    self._on_loaded(payload['orig_shape'])
                 else:
                     self.show_message(f"Could not load\n{name}")
                     self._on_status(f"Failed to load {name}: {payload}", level="error")
@@ -170,6 +231,9 @@ class MapView(ttk.Frame):
         """Draws a centred status message in place of the plots."""
         self._payload = None
         self._surface_artists = None
+        # The figure is cleared below, taking the crop rectangle's axes with it.
+        self._crop_selector = None
+        self._relief_axes = None
         figures = [(self.figure, self.canvas)]
         if self.surface_figure is not None:
             figures.append((self.surface_figure, self.surface_canvas))
@@ -189,11 +253,14 @@ class MapView(ttk.Frame):
 
         self.figure.clear()
         axes = self.figure.add_subplot(111)
-        axes.imshow(payload['shaded'], origin="upper", interpolation="bilinear")
-
         step = payload['step']
         note = f" (shown at 1/{step})" if step > 1 else ""
         rows, cols = payload['orig_shape']
+        # The image spans the map's full-resolution pixel edges, so the axes and
+        # the crop rectangle read in the map's own pixels even when the preview
+        # is downsampled.
+        axes.imshow(payload['shaded'], origin="upper", interpolation="bilinear",
+                    extent=(0, cols, rows, 0))
         axes.set_title(
             f"{name}{note}\n{cols} x {rows} px   min {payload['vmin']:.3g}   "
             f"max {payload['vmax']:.3g}   relief {payload['relief']:.3g}", fontsize=9)
@@ -203,20 +270,105 @@ class MapView(ttk.Frame):
         mappable = ScalarMappable(
             norm=Normalize(vmin=payload['vmin'], vmax=payload['vmax']), cmap="gray")
         self.figure.colorbar(mappable, ax=axes, shrink=0.8, label="Elevation")
+
+        # figure.clear() above dropped any crop rectangle; put it back.
+        self._relief_axes = axes
+        self._crop_selector = None
+        if self._on_crop is not None:
+            self._attach_crop_selector()
         self.canvas.draw_idle()
 
         if self._surface_showing():
             self._draw_surface()
 
+    # ------------------------------------------------------------ crop
+    def enable_crop(self, on_change, bounds=None):
+        """
+        Shows a draggable crop rectangle; `on_change(bounds)` gets its
+        full-resolution bounds whenever the user draws or adjusts it.
+        """
+        self._on_crop = on_change
+        if bounds is not None:
+            self._crop_bounds = tuple(bounds)
+        if self._relief_axes is not None and self._crop_selector is None:
+            self._attach_crop_selector()
+            self.canvas.draw_idle()
+        self._crop_changed()
+
+    def disable_crop(self):
+        """Removes the crop rectangle."""
+        self._on_crop = None
+        if self._crop_selector is not None:
+            self._crop_selector.set_visible(False)
+            self._crop_selector.set_active(False)
+            self._crop_selector = None
+            self.canvas.draw_idle()
+        self._crop_changed()
+
+    def set_crop_bounds(self, bounds):
+        """Moves the rectangle to `bounds` without reporting it back to the host."""
+        self._crop_bounds = tuple(bounds)
+        if self._crop_selector is not None and self._payload:
+            self._crop_selector.extents = crop_logic.bounds_to_display(self._crop_bounds)
+            self.canvas.draw_idle()
+        self._crop_changed()
+
+    def _attach_crop_selector(self):
+        """Creates the rectangle on the relief axes, at the remembered bounds."""
+        shape = self._payload['orig_shape']
+        if self._crop_bounds is None:
+            self._crop_bounds = crop_logic.default_crop(shape)
+        self._crop_selector = RectangleSelector(
+            self._relief_axes, self._on_crop_drawn, useblit=True, button=[1],
+            interactive=True, minspanx=2, minspany=2, spancoords="data",
+            props=self.CROP_PROPS, handle_props=dict(markeredgecolor="#e8923a"),
+            ignore_event_outside=False)
+        self._crop_selector.extents = crop_logic.bounds_to_display(self._crop_bounds)
+
+    def _on_crop_drawn(self, _press, _release):
+        """Converts the drawn rectangle to full-resolution bounds for the host."""
+        if self._crop_selector is None or not self._payload or self._on_crop is None:
+            return
+        x0, x1, y0, y1 = self._crop_selector.extents
+        self._crop_bounds = crop_logic.display_to_bounds(
+            x0, x1, y0, y1, self._payload['orig_shape'])
+        self._on_crop(self._crop_bounds)
+
     def _on_tab_changed(self, _event=None):
         if self._surface_showing() and self._surface_stale and self._payload:
             self._draw_surface()
 
-    def _draw_surface(self):
-        """3D mesh of the loaded map, with an auto-fitted vertical exaggeration."""
+    def _surface_region(self):
+        """
+        (elevation, (row, col, rows, cols)) for the 3D surface: the crop while
+        a rectangle is on, so the 3D view shows what goes to Unreal, otherwise
+        the whole map. Bounds are full-resolution pixels; the elevation is the
+        preview's (downsampled) grid cut to them.
+        """
         payload = self._payload
         elevation = payload['elevation']
         rows_full, cols_full = payload['orig_shape']
+        if self._on_crop is None or self._crop_bounds is None:
+            return elevation, (0, 0, rows_full, cols_full)
+        row, col, rows, cols = self._crop_bounds
+        scale_y = elevation.shape[0] / rows_full
+        scale_x = elevation.shape[1] / cols_full
+        y0, x0 = int(row * scale_y), int(col * scale_x)
+        # At least two samples a side, or there is no surface to draw.
+        y1 = max(y0 + 2, int(np.ceil((row + rows) * scale_y)))
+        x1 = max(x0 + 2, int(np.ceil((col + cols) * scale_x)))
+        return elevation[y0:y1, x0:x1], (row, col, rows, cols)
+
+    def _crop_changed(self):
+        """The rectangle moved or was switched: the 3D surface follows it."""
+        self._surface_stale = True
+        if self._payload and self._surface_showing():
+            self._draw_surface()
+
+    def _draw_surface(self):
+        """3D mesh of the loaded map (or its crop), with an auto-fitted vertical exaggeration."""
+        elevation, (row0, col0, rows_full, cols_full) = self._surface_region()
+        cropped = (rows_full, cols_full) != tuple(self._payload['orig_shape'])
         rows, cols = elevation.shape
 
         figure = self.surface_figure
@@ -234,8 +386,9 @@ class MapView(ttk.Frame):
         def plot_mesh(detail):
             step = max(1, int(np.ceil(max(rows, cols) / detail)))
             mesh = elevation[::step, ::step]
-            mesh_x = np.linspace(0, span_x, mesh.shape[1])
-            mesh_y = np.linspace(0, span_y, mesh.shape[0])
+            # In the map's own pixels, so a crop's axes read where it was cut.
+            mesh_x = np.linspace(col0, col0 + span_x, mesh.shape[1])
+            mesh_y = np.linspace(row0, row0 + span_y, mesh.shape[0])
             grid_x, grid_y = np.meshgrid(mesh_x, mesh_y)
             cell = span / max(mesh.shape)
             colors = light.shade(mesh, cmap=matplotlib.colormaps["gray"],
@@ -256,7 +409,9 @@ class MapView(ttk.Frame):
 
         # No exaggeration factor in the title: the map's resolution is unknown
         # here, so X/Y are in pixels and a ratio against Z would mix units.
-        axes.set_title(f"{self._name} - 3D surface\n"
+        what = (f"crop {cols_full} x {rows_full} px at x {col0}, y {row0}" if cropped
+                else "3D surface")
+        axes.set_title(f"{self._name} - {what}\n"
                        f"vertical scale auto-fitted", fontsize=9)
         axes.set_xlabel("pixels")
         axes.set_ylabel("pixels")

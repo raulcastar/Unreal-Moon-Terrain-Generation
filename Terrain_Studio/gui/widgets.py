@@ -183,7 +183,11 @@ class ProgressPanel(ttk.Frame):
     def __init__(self, parent):
         super().__init__(parent)
         self.text_var = tk.StringVar(value="Idle")
-        ttk.Label(self, textvariable=self.text_var, style="Readout.TLabel").pack(anchor="w")
+        label = ttk.Label(self, textvariable=self.text_var, style="Readout.TLabel")
+        label.pack(anchor="w", fill="x")
+        # Wrap to the panel's width: in a narrow controls column the elapsed
+        # and remaining times would otherwise be cut off.
+        label.bind("<Configure>", lambda event: label.configure(wraplength=max(event.width - 4, 50)))
         self.bar = ttk.Progressbar(self, mode="determinate", maximum=1.0)
         self.bar.pack(fill="x", pady=(2, 0))
         self._job = None

@@ -24,7 +24,7 @@ The code is split by where it runs; `docs/development.md` has the full layout.
 | `Terrain_Studio/unreal_commands/` | Unreal | What the senders run inside the editor |
 | `Terrain_Studio/unreal_runtime/` | Unreal | The per-frame editor watcher, copied to `<Project>/Content/Python` |
 | `mcp/terrain_studio_mcp.py` | studio | MCP server for agents, which calls the modules above |
-| `config/` | | Terrain presets (`*.yaml`), `mask_classes.json` |
+| `config/` | | Terrain presets (`*.yaml`), `mask_classes.json`, `lunar_datasets.json` |
 | `input_maps/`, `outputs/<name>/` | | Source DEMs; everything generated (untracked) |
 
 ## Run and test
@@ -51,6 +51,9 @@ These come from actual incidents.
   `tests/conftest.py` redirects every output path to a temporary folder, and
   fails the run if `outputs/` changed. Keep new tests inside that setup, and
   read output paths at call time (`paths.GENERATOR_OUTPUT_DIR`), not at import.
+- **Tests must never reach the internet.** The dataset tests serve files from
+  a local HTTP server and redirect `input_maps/` (`tests/test_datasets_logic.py`);
+  keep new network code testable the same way.
 - **Tests must never reach a real Unreal Editor.** A test once reached the
   reopened editor and saved changes into the user's level. Stub
   `run_in_unreal` in every sender module that imports it, as

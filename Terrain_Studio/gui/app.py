@@ -17,6 +17,7 @@ import numpy as np
 
 from gui import paths
 from gui.backend import terrain_core, LOADER_AVAILABLE, LOADER_IMPORT_ERROR
+from gui.datasets_page import DatasetsPage
 from gui.dem_files import scan_dem_folder
 from gui.generator_page import GeneratorPage
 from gui.ground_truth_logic import DEFAULT_MASK_IDS
@@ -77,6 +78,7 @@ class TerrainStudio(GeneratorPage, tk.Tk):
         self.landscape_page = None       # standalone export window, reused
         self.map_viewer = None          # Reused MapViewer window
         self.map_browser = None         # Reused MapBrowser window
+        self.datasets_page = None       # Reused Lunar Datasets view
         self.rock_planner_page = None         # Reused RockPlannerPage window
         self.sun_page = None           # Reused SunPage window
         self.ground_truth_page = None         # Reused GroundTruthPage window
@@ -363,11 +365,16 @@ class TerrainStudio(GeneratorPage, tk.Tk):
                         "Turn any elevation map into a heightmap and spawn its Landscape "
                         "in Unreal.", self.enter_landscape).grid(
             row=3, column=1, sticky="nsew", padx=(gap, 0))
+        self._home_card(grid, None, "Lunar Datasets",
+                        "Preview real lunar DEMs (LROC NAC, LOLA), download them or a "
+                        "cropped region, and send them to Unreal.", self.enter_datasets).grid(
+            row=3, column=2, sticky="nsew", padx=(gap, 0))
 
         # Maps on disk and the current map; refreshed by show_home.
         status = tk.Frame(grid, background=colours["card"], highlightthickness=1,
                           highlightbackground=colours["border"])
-        status.grid(row=3, column=2, columnspan=len(stages) - 2, sticky="nsew", padx=(gap, 0))
+        status.grid(row=3, column=3, columnspan=max(1, len(stages) - 3), sticky="nsew",
+                    padx=(gap, 0))
         tk.Label(status, text="PROJECT", font=("Segoe UI Semibold", 8),
                  foreground=colours["muted"], background=colours["card"]).pack(
             anchor="w", padx=self.px(18), pady=(self.px(16), self.px(4)))
@@ -507,7 +514,8 @@ class TerrainStudio(GeneratorPage, tk.Tk):
     def _all_views(self):
         """Every frame that can occupy the window, home and studio included."""
         return [self.home_frame, self.studio_frame, self.map_browser,
-                self.rock_planner_page, self.landscape_page, self.sun_page, self.ground_truth_page]
+                self.rock_planner_page, self.landscape_page, self.sun_page, self.ground_truth_page,
+                self.datasets_page]
 
     def show_view(self, view, title=None):
         """
@@ -653,6 +661,24 @@ class TerrainStudio(GeneratorPage, tk.Tk):
         elif source and source != self.sun_page.dem_path:
             self.sun_page.load_dem(source)
         self.show_view(self.sun_page, "Sun & Shadows")
+
+    def enter_datasets(self):
+        """Opens the Lunar Datasets view, keeping its selection and loaded list from last time."""
+        if self.datasets_page is None or not self.datasets_page.winfo_exists():
+            self.datasets_page = DatasetsPage(self, figure_dpi=self.figure_dpi)
+        self.show_view(self.datasets_page, "Lunar Datasets")
+
+    def open_in_landscape(self, path, crop=False):
+        """
+        Makes `path` the current map and opens it in Send to Unreal, with the
+        crop turned on when `crop` (a map too large to send whole).
+        """
+        self._set_unreal_source(path)
+        self.enter_landscape()
+        if crop:
+            self.landscape_page.open_with_crop(path)
+        else:
+            self.landscape_page.set_source(path)
 
     def browse_maps(self):
         """Opens the map browser, seeded with whatever map is already in hand."""

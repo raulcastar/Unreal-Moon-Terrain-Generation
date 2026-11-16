@@ -13,3 +13,4 @@ PyYAML==6.0.3
 matplotlib==3.10.8
 pillow==12.2.0          # crater maps and heightmap previews (PNG)
 tifffile==2026.4.11     # only for GeoTIFF (.tif) input maps
+imagecodecs==2026.11.11 # compressed GeoTIFFs (LOLA mosaics: deflate + floating-point predictor)

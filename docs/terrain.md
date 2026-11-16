@@ -50,12 +50,53 @@ mask (Render CustomDepth on, stencil 5, `landscape`; see
 warning is logged and the engine's default stays. Both defaults are at the top
 of `unreal_landscape.py`.
 
+*Nanite Landscape* (on by default, in Send an Existing Map) renders large
+Landscapes faster, but Unreal rebuilds the Nanite mesh on every save, which
+freezes the editor while it saves: about 15 s more for a 1009 × 1009 Landscape
+(24 s against 10 s), and longer as the Landscape grows. Untick it for quick
+saves while iterating. The build also needs a lot of memory: a 2269 × 2080
+Nanite Landscape once ran the editor out of memory while it held several other
+Landscapes, so the activity log warns when Nanite is on for a Landscape over
+2017 vertices a side. If the editor reports *Unable to
+Check Out From Revision Control* on each save, revision control is switched on
+without a working connection: turn it off (bottom-right *Revision Control* →
+*Disable*) unless you use it.
+
 Landscapes larger than 4097 × 4097 vertices, or an automatic import that fails,
 fall back to the manual import (Landscape Mode → Manage → right-click →
 Import), with the steps shown in the editor.
 
 **Library → Send an Existing Map** is the same sender on its own, for any
-elevation map already on disk.
+elevation map already on disk. A GeoTIFF fills in *Resolution* from its own
+pixel size, and its NoData cells are treated as missing (not as deep pits) in
+the preview and in crops.
+
+### Crop a region of a large map
+
+Real DEMs are often far larger than one Landscape: an LRO NAC strip is about
+12 000 px a side, past both the automatic import (4097 vertices) and, at worst,
+the 50 × 50 components a Landscape can hold. To bring in only part of it, tick
+**Send only a region of the map** in the *Crop* group:
+
+- A rectangle appears on the map: drag to draw a new one, drag inside it to move
+  it, and drag its handles to resize it. *X*, *Y*, *Width* and *Height* show it
+  in the map's pixels and can be typed instead; the map's axes use the same
+  pixels. For a map too large to import automatically, it starts as the largest
+  square that is, centred.
+- **Snap to a Landscape size** shrinks the region to a size Unreal builds
+  exactly (a whole number of components of one size, in both directions), so no
+  edge is padded.
+- The read-out gives the region in pixels and metres, and the Landscape it
+  makes (components, quads, sections, vertices, padding). It turns amber when
+  Unreal would need the manual import or cannot hold the region at all.
+
+**Send to Unreal** then saves the region as its own map and sends it; **Save
+crop** only saves it. Either way the crop is written to
+`outputs/<map>_crop_x<X>_y<Y>_<W>x<H>/` as a `.npy`, with a `_crop.json` that
+records its source map, its position and its resolution (which a `.npy` cannot
+carry). The crop becomes the current map, so the rock planner, the masks and
+the sun work on the same region as the Landscape, and its later files land in
+the same folder.
 
 ## Browse maps
 

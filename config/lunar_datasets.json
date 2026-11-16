@@ -1,0 +1,416 @@
+{
+  "_comment": "Lunar DEM sources for the Lunar Datasets view. LROC NAC DTMs are listed live from the PDS Orbital Data Explorer; the LOLA entries are fixed here. Sizes were read from the servers in November 2026.",
+  "sources": {
+    "lroc_nac": {
+      "label": "LROC NAC DTMs (1-5 m/px)",
+      "description": "Stereo terrain models of about 670 sites (Apollo landing sites, craters, volcanic and polar features) from the LRO Narrow Angle Camera. Each is a 32-bit GeoTIFF strip, typically a few km wide and tens of km long.",
+      "credit": "NASA/GSFC/Arizona State University (LROC)",
+      "reference": "Henriksen et al., Icarus, doi:10.1016/j.icarus.2016.05.012",
+      "info_url": "https://pds.lroc.asu.edu/data/LRO-L-LROC-5-RDR-V1.0/LROLRC_2001/DATA/SDP/NAC_DTM/",
+      "live": true
+    },
+    "lola_sites": {
+      "label": "LOLA south-pole landing sites (5 m/px)",
+      "description": "Elevation models of candidate south-pole landing sites from the LRO laser altimeter, each 16 km or more a side.",
+      "credit": "NASA/GSFC Planetary Geology, Geophysics and Geochemistry Lab (LOLA)",
+      "reference": "Barker et al., Planetary and Space Science 203 (2021), doi:10.1016/j.pss.2020.105119",
+      "info_url": "https://pgda.gsfc.nasa.gov/products/78",
+      "entries": [
+        {
+          "id": "lola5m_dm1",
+          "name": "DM1",
+          "title": "South-pole site DM1",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 64033681,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/DM1/DM1_final_adj_5mpp_surf.tif",
+          "filename": "DM1_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_dm2",
+          "name": "DM2",
+          "title": "Nobile rim 2 (DM2)",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 64025607,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/DM2/DM2_final_adj_5mpp_surf.tif",
+          "filename": "DM2_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_haworth",
+          "name": "Haworth",
+          "title": "Haworth (Haworth)",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 142123767,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/Haworth/Haworth_final_adj_5mpp_surf.tif",
+          "filename": "Haworth_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_lm1",
+          "name": "LM1",
+          "title": "South-pole site LM1",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 64033673,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/LM1/LM1_final_adj_5mpp_surf.tif",
+          "filename": "LM1_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_lm2",
+          "name": "LM2",
+          "title": "South-pole site LM2",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 64033675,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/LM2/LM2_final_adj_5mpp_surf.tif",
+          "filename": "LM2_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_lm3",
+          "name": "LM3",
+          "title": "South-pole site LM3",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 64033679,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/LM3/LM3_final_adj_5mpp_surf.tif",
+          "filename": "LM3_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_lm4",
+          "name": "LM4",
+          "title": "South-pole site LM4",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 64033675,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/LM4/LM4_final_adj_5mpp_surf.tif",
+          "filename": "LM4_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_lm5",
+          "name": "LM5",
+          "title": "South-pole site LM5",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 64033679,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/LM5/LM5_final_adj_5mpp_surf.tif",
+          "filename": "LM5_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_lm6",
+          "name": "LM6",
+          "title": "South-pole site LM6",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 64033677,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/LM6/LM6_final_adj_5mpp_surf.tif",
+          "filename": "LM6_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_lm7",
+          "name": "LM7",
+          "title": "South-pole site LM7",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 64033675,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/LM7/LM7_final_adj_5mpp_surf.tif",
+          "filename": "LM7_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_lm8",
+          "name": "LM8",
+          "title": "South-pole site LM8",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 64033679,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/LM8/LM8_final_adj_5mpp_surf.tif",
+          "filename": "LM8_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_npa",
+          "name": "NPA",
+          "title": "South-pole site NPA",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 64033687,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/NPA/NPA_final_adj_5mpp_surf.tif",
+          "filename": "NPA_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_npb",
+          "name": "NPB",
+          "title": "South-pole site NPB",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 64033687,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/NPB/NPB_final_adj_5mpp_surf.tif",
+          "filename": "NPB_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_npc",
+          "name": "NPC",
+          "title": "South-pole site NPC",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 64033691,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/NPC/NPC_final_adj_5mpp_surf.tif",
+          "filename": "NPC_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_npd",
+          "name": "NPD",
+          "title": "South-pole site NPD",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 64033687,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/NPD/NPD_final_adj_5mpp_surf.tif",
+          "filename": "NPD_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_sl2",
+          "name": "SL2",
+          "title": "South-pole site SL2",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 64025605,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/SL2/SL2_final_adj_5mpp_surf.tif",
+          "filename": "SL2_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_sl3",
+          "name": "SL3",
+          "title": "South-pole site SL3",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 64025611,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/SL3/SL3_final_adj_5mpp_surf.tif",
+          "filename": "SL3_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_shoemaker",
+          "name": "Shoemaker",
+          "title": "Shoemaker (Shoemaker)",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 64025605,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/Shoemaker/Shoemaker_final_adj_5mpp_surf.tif",
+          "filename": "Shoemaker_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_site01",
+          "name": "Site01",
+          "title": "Connecting ridge (Site01)",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 40980810,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/Site01/Site01_final_adj_5mpp_surf.tif",
+          "filename": "Site01_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_site04",
+          "name": "Site04",
+          "title": "Shackleton rim (Site04)",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 40980806,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/Site04/Site04_final_adj_5mpp_surf.tif",
+          "filename": "Site04_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_site06",
+          "name": "Site06",
+          "title": "Nobile rim 1 (Site06)",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 64025603,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/Site06/Site06_final_adj_5mpp_surf.tif",
+          "filename": "Site06_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_site07",
+          "name": "Site07",
+          "title": "Peak near Shackleton (Site07)",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 40980808,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/Site07/Site07_final_adj_5mpp_surf.tif",
+          "filename": "Site07_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_site11",
+          "name": "Site11",
+          "title": "de Gerlache rim (Site11)",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 40980806,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/Site11/Site11_final_adj_5mpp_surf.tif",
+          "filename": "Site11_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_site20",
+          "name": "Site20",
+          "title": "Leibnitz beta plateau (Site20)",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 40980802,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/Site20/Site20_final_adj_5mpp_surf.tif",
+          "filename": "Site20_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_site20v2",
+          "name": "Site20v2",
+          "title": "Leibnitz beta plateau (v2) (Site20v2)",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 108192905,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/Site20v2/Site20v2_final_adj_5mpp_surf.tif",
+          "filename": "Site20v2_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_site23",
+          "name": "Site23",
+          "title": "Malapert massif (Site23)",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 70586804,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/Site23/Site23_final_adj_5mpp_surf.tif",
+          "filename": "Site23_final_adj_5mpp_surf.tif",
+          "tiled": false
+        },
+        {
+          "id": "lola5m_site42",
+          "name": "Site42",
+          "title": "South-pole site Site42",
+          "region": "Lunar south pole",
+          "resolution_m": 5.0,
+          "size_bytes": 64025611,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_5mpp/Site42/Site42_final_adj_5mpp_surf.tif",
+          "filename": "Site42_final_adj_5mpp_surf.tif",
+          "tiled": false
+        }
+      ]
+    },
+    "lola_mosaics": {
+      "label": "LOLA south-pole mosaics (10-240 m/px)",
+      "description": "The south polar region from the LRO laser altimeter, from 60°S to the pole. Cloud-optimised GeoTIFFs: previewed and cropped without downloading the whole file.",
+      "credit": "NASA/GSFC Planetary Geology, Geophysics and Geochemistry Lab (LOLA)",
+      "reference": "PGDA product 90, A New View of the Lunar South Pole from LOLA",
+      "info_url": "https://pgda.gsfc.nasa.gov/products/90",
+      "entries": [
+        {
+          "id": "lolamosaic_ldem_80s_80mpp_adj",
+          "name": "LDEM_80S_80MPP_ADJ",
+          "title": "South pole from 80°S to the pole, 80 m/px",
+          "region": "Lunar south pole, 80°S to 90°S",
+          "resolution_m": 80.0,
+          "size_bytes": 189158392,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_20mpp/LDEM_80S_80MPP_ADJ.TIF",
+          "filename": "LDEM_80S_80MPP_ADJ.TIF",
+          "tiled": true
+        },
+        {
+          "id": "lolamosaic_ldem_80s_40mpp_adj",
+          "name": "LDEM_80S_40MPP_ADJ",
+          "title": "South pole from 80°S to the pole, 40 m/px",
+          "region": "Lunar south pole, 80°S to 90°S",
+          "resolution_m": 40.0,
+          "size_bytes": 716299920,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_20mpp/LDEM_80S_40MPP_ADJ.TIF",
+          "filename": "LDEM_80S_40MPP_ADJ.TIF",
+          "tiled": true
+        },
+        {
+          "id": "lolamosaic_ldem_80s_20mpp_adj",
+          "name": "LDEM_80S_20MPP_ADJ",
+          "title": "South pole from 80°S to the pole, 20 m/px",
+          "region": "Lunar south pole, 80°S to 90°S",
+          "resolution_m": 20.0,
+          "size_bytes": 2696082051,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_20mpp/LDEM_80S_20MPP_ADJ.TIF",
+          "filename": "LDEM_80S_20MPP_ADJ.TIF",
+          "tiled": true
+        },
+        {
+          "id": "lolamosaic_ldem_83s_10mpp_adj",
+          "name": "LDEM_83S_10MPP_ADJ",
+          "title": "South pole from 83°S to the pole, 10 m/px",
+          "region": "Lunar south pole, 83°S to 90°S",
+          "resolution_m": 10.0,
+          "size_bytes": 5116709568,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_20mpp/LDEM_83S_10MPP_ADJ.TIF",
+          "filename": "LDEM_83S_10MPP_ADJ.TIF",
+          "tiled": true
+        },
+        {
+          "id": "lolamosaic_ldem_75s_30mpp_adj",
+          "name": "LDEM_75S_30MPP_ADJ",
+          "title": "South pole from 75°S to the pole, 30 m/px",
+          "region": "Lunar south pole, 75°S to 90°S",
+          "resolution_m": 30.0,
+          "size_bytes": 2802850273,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_20mpp/LDEM_75S_30MPP_ADJ.TIF",
+          "filename": "LDEM_75S_30MPP_ADJ.TIF",
+          "tiled": true
+        },
+        {
+          "id": "lolamosaic_ldem_60s_240mpp_adj",
+          "name": "LDEM_60S_240MPP_ADJ",
+          "title": "South pole from 60°S to the pole, 240 m/px",
+          "region": "Lunar south pole, 60°S to 90°S",
+          "resolution_m": 240.0,
+          "size_bytes": 218961039,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_20mpp/LDEM_60S_240MPP_ADJ.TIF",
+          "filename": "LDEM_60S_240MPP_ADJ.TIF",
+          "tiled": true
+        },
+        {
+          "id": "lolamosaic_ldem_60s_120mpp_adj",
+          "name": "LDEM_60S_120MPP_ADJ",
+          "title": "South pole from 60°S to the pole, 120 m/px",
+          "region": "Lunar south pole, 60°S to 90°S",
+          "resolution_m": 120.0,
+          "size_bytes": 821504895,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_20mpp/LDEM_60S_120MPP_ADJ.TIF",
+          "filename": "LDEM_60S_120MPP_ADJ.TIF",
+          "tiled": true
+        },
+        {
+          "id": "lolamosaic_ldem_60s_60mpp_adj",
+          "name": "LDEM_60S_60MPP_ADJ",
+          "title": "South pole from 60°S to the pole, 60 m/px",
+          "region": "Lunar south pole, 60°S to 90°S",
+          "resolution_m": 60.0,
+          "size_bytes": 3089110093,
+          "url": "https://pgda.gsfc.nasa.gov/data/LOLA_20mpp/LDEM_60S_60MPP_ADJ.TIF",
+          "filename": "LDEM_60S_60MPP_ADJ.TIF",
+          "tiled": true
+        }
+      ]
+    }
+  }
+}

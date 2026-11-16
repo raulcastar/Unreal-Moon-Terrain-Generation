@@ -120,7 +120,8 @@ def setup_landscape(landscape_actor, material_path=DEFAULT_LANDSCAPE_MATERIAL,
 
 
 def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, heightmap_filepath="outputs/lunar_terrain.r16", x_offset=0.0, y_offset=0.0, z_offset=0.0, save_level=True, import_heightmap=True,
-                     landscape_material=DEFAULT_LANDSCAPE_MATERIAL, mask_stencil=LANDSCAPE_MASK_STENCIL):
+                     landscape_material=DEFAULT_LANDSCAPE_MATERIAL, mask_stencil=LANDSCAPE_MASK_STENCIL,
+                     nanite=True):
     """
     Spawns the Landscape for a converted DEM, imports its heightmap and sets it up.
 
@@ -136,9 +137,19 @@ def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, h
         landscape_material (str): Material asset applied to the Landscape ('' keeps
             the engine default).
         mask_stencil (int): Custom Depth Stencil id for the object mask (0 = off).
+        nanite (bool): Enable Nanite on the Landscape. It renders large
+            Landscapes faster, but Unreal rebuilds the Nanite mesh on every
+            save, which freezes the editor (about 15 s more on a 1009 x 1009
+            Landscape, longer on bigger ones).
     """
 
     optimal_comp_x, optimal_comp_y, quads, sections, final_width, final_height = landscape_config
+
+    # Changes made during Play are lost or unsafe (see AGENTS.md), so refuse
+    # rather than spawn a Landscape into a level that is being played.
+    if unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).is_in_play_in_editor():
+        unreal.log_error("[-] Unreal is in Play: stop Play, then send the map again.")
+        return None
 
     # Labelled after the heightmap ('lunar_terrain' for outputs/lunar_terrain.r16).
     base_filename = os.path.basename(heightmap_filepath)
@@ -198,18 +209,23 @@ def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, h
                f"(requested Z={z_axis_scale:.4f}); location Z={applied_location.z:.2f} cm; "
                f"full 16-bit range spans {relief_m:.2f} m")
 
-    # Nanite Landscape (UE 5.3+)
-    try:
-        landscape_actor.set_editor_property("bEnableNanite", True)
-        unreal.log(f"[*] Nanite enabled for Landscape '{actor_label}'.")
-    except Exception as e:
-        unreal.log_warning(f"[*] Could not enable Nanite. Ensure you are using UE 5.3+. Error: {e}")
+    # Nanite Landscape (UE 5.3+): faster rendering, slower saves (see `nanite`).
+    if nanite:
+        try:
+            landscape_actor.set_editor_property("bEnableNanite", True)
+            unreal.log(f"[*] Nanite enabled for Landscape '{actor_label}'.")
+        except Exception as e:
+            unreal.log_warning(f"[*] Could not enable Nanite. Ensure you are using UE 5.3+. Error: {e}")
+    else:
+        unreal.log(f"[*] Nanite left off for Landscape '{actor_label}' (faster saves).")
 
     setup_landscape(landscape_actor, landscape_material, mask_stencil)
 
     if problem is None:
         unreal.log(f"[*] Heightmap applied from {heightmap_filepath}")
     else:
+        # The studio looks for "Heightmap not applied" to show the manual import
+        # steps (gui/landscape_page.py); keep the wording.
         unreal.log_warning(f"[*] Heightmap not applied: {problem}. Import it manually.")
 
     # =========================================================================
@@ -255,7 +271,9 @@ def create_landscape(landscape_config, interpolation_resolution, z_axis_scale, h
         dialog_message += ("\n\nThe level has been saved with the flat Landscape: "
                            "save it again (Ctrl+S) after the import.")
 
-    unreal.EditorDialog.show_message(
-        dialog_title, dialog_message, unreal.AppMsgType.OK, unreal.AppReturnType.OK
-    )
+    # Logged, not shown in a modal dialog: this runs inside a Remote Execution
+    # command, and a modal dialog freezes the editor while the studio waits on
+    # the reply, until someone finds and closes it. The studio shows these
+    # steps in its own window when it reads the line below.
+    unreal.log_warning(f"[*] {dialog_title}. Manual import needed:\n{dialog_message}")
     return landscape_actor
