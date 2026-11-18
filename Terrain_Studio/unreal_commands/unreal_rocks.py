@@ -156,6 +156,25 @@ def ensure_simple_collision(mesh):
     return True
 
 
+def full_detail_fallback(mesh):
+    """
+    Sets a Nanite mesh's fallback to full detail and saves it; returns True if
+    it changed. Ray tracing uses the fallback, and a simplified one makes the
+    rock shadow itself in blotches.
+    """
+    settings = mesh.get_editor_property("nanite_settings")
+    if not settings.get_editor_property("enabled"):
+        return False
+    if (settings.get_editor_property("fallback_target") == unreal.NaniteFallbackTarget.RELATIVE_ERROR
+            and settings.get_editor_property("fallback_relative_error") == 0.0):
+        return False
+    settings.set_editor_property("fallback_target", unreal.NaniteFallbackTarget.RELATIVE_ERROR)
+    settings.set_editor_property("fallback_relative_error", 0.0)
+    mesh.set_editor_property("nanite_settings", settings)
+    unreal.EditorAssetLibrary.save_loaded_asset(mesh)
+    return True
+
+
 def _loaded(paths, cls):
     assets = (unreal.load_asset(path.split(".")[0]) for path in paths)
     return [a for a in assets if isinstance(a, cls)]
@@ -305,6 +324,8 @@ def import_rock_models(models_folder):
             continue
         if ensure_simple_collision(mesh):
             unreal.log(f"[*] Added convex collision to {mesh.get_name()}.")
+        if full_detail_fallback(mesh):
+            unreal.log(f"[*] {mesh.get_name()}: Nanite fallback set to full detail.")
         bounds = mesh.get_bounds()
         extent, origin = bounds.box_extent, bounds.origin
         radius_cm = max(extent.x, extent.y, 1e-3)

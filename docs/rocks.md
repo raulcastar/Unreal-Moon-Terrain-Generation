@@ -88,6 +88,9 @@ default (or any folder of `.gltf`/`.glb`/`.obj`/`.fbx` models, picked with
 *Browse...*); the studio measures them and gives
 each rock one of the models closest to its size, so they are scaled little.
 
+Each model is imported as a Nanite mesh with simple collision and a
+full-detail Nanite fallback, so ray-traced shadows stay clean on the rocks.
+
 A field is placed as one actor, `<name>_rocks`, with one instanced static mesh
 component per rock model and mask id, instead of one actor per rock. Every view
 in Unreal (the editor and each rover camera and sensor) handles actors one by
