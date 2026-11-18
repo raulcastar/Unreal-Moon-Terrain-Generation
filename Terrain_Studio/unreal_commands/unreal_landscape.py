@@ -36,6 +36,15 @@ def landscape_library():
 DEFAULT_LANDSCAPE_MATERIAL = "/Game/Landscape/Landscape_Material"
 LANDSCAPE_MASK_STENCIL = mask_classes.id_of("landscape")
 
+# Projects other than MARE's (the ESA XR Example, a new project) have no
+# /Game/Landscape. The UnrealDEMLandscape plugin ships the same regolith
+# material with 2K textures, in the same layout under its own content. It is
+# copied into the project rather than used from the plugin, so that packaged
+# builds keep it and the wheel-track decal finds the textures where it expects
+# them (unreal_track_setup.REGOLITH_TEXTURES).
+PROJECT_LANDSCAPE_FOLDER = "/Game/Landscape"
+PLUGIN_LANDSCAPE_FOLDER = "/UnrealDEMLandscape/Landscape"
+
 
 def read_r16(heightmap_filepath, width, height):
     """Reads a little-endian .r16 heightmap. Raises ValueError if its size does not match."""
@@ -99,14 +108,89 @@ def save_when_heightmap_merged(landscape_actor, heightmap_filepath, width, heigh
     state["handle"] = unreal.register_slate_post_tick_callback(on_tick)
 
 
+def _material_textures(material):
+    """
+    The expressions of `material` that hold a texture, found by walking its
+    graph back from every output (Python cannot list a material's expressions).
+    """
+    library = unreal.MaterialEditingLibrary
+    stack = []
+    for prop in unreal.MaterialProperty:
+        try:
+            node = library.get_material_property_input_node(material, prop)
+        except Exception:  # a property this material type has no input for
+            node = None
+        if node:
+            stack.append(node)
+    seen, found = set(), []
+    while stack:
+        node = stack.pop()
+        key = node.get_path_name()
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            if node.get_editor_property("texture"):
+                found.append(node)
+        except Exception:  # not a texture expression
+            pass
+        stack.extend(n for n in library.get_inputs_for_material_expression(material, node) if n)
+    return found
+
+
+def copy_plugin_landscape_material():
+    """
+    Copies the plugin's Landscape_Material and its textures into
+    /Game/Landscape and points the copied material at the copied textures
+    (duplicating keeps the old references). Returns the copied paths.
+    """
+    assets = unreal.EditorAssetLibrary
+    copied = []
+    for source in assets.list_assets(PLUGIN_LANDSCAPE_FOLDER, recursive=True, include_folder=False):
+        source = source.split(".")[0]
+        target = PROJECT_LANDSCAPE_FOLDER + source[len(PLUGIN_LANDSCAPE_FOLDER):]
+        if not assets.does_asset_exist(target):
+            assets.duplicate_asset(source, target)
+        copied.append(target)
+    material = unreal.load_asset(DEFAULT_LANDSCAPE_MATERIAL)
+    for node in _material_textures(material):
+        texture_path = node.get_editor_property("texture").get_path_name().split(".")[0]
+        if texture_path.startswith(PLUGIN_LANDSCAPE_FOLDER + "/"):
+            local = PROJECT_LANDSCAPE_FOLDER + texture_path[len(PLUGIN_LANDSCAPE_FOLDER):]
+            node.set_editor_property("texture", unreal.load_asset(local))
+    unreal.MaterialEditingLibrary.recompile_material(material)
+    for path in copied:
+        assets.save_asset(path, only_if_is_dirty=False)
+    return copied
+
+
+def landscape_material(material_path=DEFAULT_LANDSCAPE_MATERIAL):
+    """
+    The material asset for new Landscapes, or None. When the project lacks the
+    default one but the UnrealDEMLandscape plugin ships it, it is copied in first.
+    """
+    assets = unreal.EditorAssetLibrary
+    if assets.does_asset_exist(material_path):
+        return unreal.load_asset(material_path)
+    if material_path != DEFAULT_LANDSCAPE_MATERIAL or \
+            not assets.does_asset_exist(PLUGIN_LANDSCAPE_FOLDER + "/Landscape_Material"):
+        return None
+    copied = copy_plugin_landscape_material()
+    unreal.log(f"[*] This project had no {material_path}: copied the lunar regolith material from the "
+               f"UnrealDEMLandscape plugin ({len(copied)} assets into {PROJECT_LANDSCAPE_FOLDER}).")
+    return unreal.load_asset(material_path)
+
+
 def setup_landscape(landscape_actor, material_path=DEFAULT_LANDSCAPE_MATERIAL,
                     mask_stencil=LANDSCAPE_MASK_STENCIL):
     """
-    Gives a Landscape its material and its object-mask id. A missing material
-    is logged and left as the engine default; a stencil of 0 leaves the mask off.
+    Gives a Landscape its material and its object-mask id. The default material
+    comes from the UnrealDEMLandscape plugin when the project lacks it; any
+    other missing material is logged and left as the engine default. A stencil
+    of 0 leaves the mask off.
     """
     if material_path:
-        material = unreal.load_asset(material_path)
+        material = landscape_material(material_path)
         if material is None:
             unreal.log_warning(f"[*] Landscape material {material_path} not found; "
                                "the Landscape keeps the default material.")
