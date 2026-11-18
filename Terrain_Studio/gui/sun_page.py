@@ -14,6 +14,7 @@ from tkinter import filedialog, ttk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
 
+from gui import crop_logic
 from gui import rock_planner_logic
 from gui import sun_logic as logic
 from gui import sun_plots as plots
@@ -404,6 +405,10 @@ class SunPage(ttk.Frame):
         self.source_var.set(os.path.basename(path))
         self.dem_path = path
         self.source_note_var.set(dem_source_note(path))
+        # The map's own scale when it records one, so shadow lengths are right.
+        native = crop_logic.native_resolution(path)
+        if native:
+            self.resolution_var.set(f"{native:g}")
         self.log(f"Loading DEM: {os.path.basename(path)} ...")
         self._show_message(f"Loading {os.path.basename(path)} ...")
         self.progress.start(f"Loading {os.path.basename(path)}", "load_dem",

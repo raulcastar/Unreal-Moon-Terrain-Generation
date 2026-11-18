@@ -200,12 +200,16 @@ def describe_crop(bounds, resolution, shape=None):
 
 def native_resolution(path):
     """
-    Metres per pixel a map carries itself: a GeoTIFF's pixel scale, or the
-    resolution recorded beside a saved crop. None when the map has none.
+    Metres per pixel a map carries itself: the resolution recorded beside a
+    saved crop, a generated map's crater list (each crater in pixels and in
+    metres), or a GeoTIFF's pixel scale. None when the map has none.
     """
     info = read_crop_info(path)
     if info and info.get("resolution_m_per_px"):
         return float(info["resolution_m_per_px"])
+    from_craters = _crater_list_resolution(path)
+    if from_craters:
+        return from_craters
     if os.path.splitext(path)[1].lower() not in (".tif", ".tiff"):
         return None
     try:
@@ -218,6 +222,25 @@ def native_resolution(path):
     except Exception:
         return None
     return None
+
+
+def _crater_list_resolution(path):
+    """
+    Metres per pixel from the generator's <group>_craters.csv beside a map
+    (radius_m / radius_px of its largest crater, the most precise), or None.
+    """
+    craters = os.path.join(os.path.dirname(path), f"{dem_group_name(path)}_craters.csv")
+    try:
+        with open(craters, encoding="utf-8") as handle:
+            header = handle.readline().strip().split(",")
+            px, m = header.index("radius_px"), header.index("radius_m")
+            best = max((line.strip().split(",") for line in handle if line.strip()),
+                       key=lambda row: float(row[px]), default=None)
+    except (OSError, ValueError):
+        return None
+    if best is None or float(best[px]) <= 0:
+        return None
+    return round(float(best[m]) / float(best[px]), 6)
 
 
 def crop_name(source_path, bounds):

@@ -39,6 +39,10 @@ GENERATOR_OUTPUT_DIR = OUTPUT_ROOT
 INPUT_MAPS_DIR = os.path.join(PROJECT_ROOT, "input_maps")
 
 
+# The rock models the repository ships (Poly Haven, CC0): the default for placing rocks.
+INPUT_ROCKS_DIR = os.path.join(PROJECT_ROOT, "input_rocks")
+
+
 def map_browse_dir():
     """Where a DEM picker opens: generated maps first, then the raw input maps."""
     for candidate in (OUTPUT_ROOT, INPUT_MAPS_DIR):

@@ -83,8 +83,9 @@ small rock (ids 9 and 10 by default, split at `BOULDER_MIN_RADIUS_M`). If the
 export is out of date, or missing, the studio offers **Export, then Place**.
 **Update Mask Ids Only** re-tags rocks already placed without moving them.
 
-The rock models are the Poly Haven glTF rocks in `input_rocks/` (or any folder
-of `.gltf`/`.glb`/`.obj`/`.fbx` models); the studio measures them and gives
+The rock models are the Poly Haven glTF rocks in `input_rocks/`, selected by
+default (or any folder of `.gltf`/`.glb`/`.obj`/`.fbx` models, picked with
+*Browse...*); the studio measures them and gives
 each rock one of the models closest to its size, so they are scaled little.
 
 A field is placed as one actor, `<name>_rocks`, with one instanced static mesh

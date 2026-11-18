@@ -23,7 +23,11 @@ The map shows the terrain lit by that sun, with no sky light, so shadows are
 black; cast shadows can be tinted to tell them apart from slopes facing away. A
 second tab shows a lit 3D view. Shadows are cast from the DEM, which matches the
 Landscape: line traces in Unreal agree with them at 97–100% of points, and every
-mismatch lies on a shadow edge.
+mismatch lies on a shadow edge. On kilometre-scale maps at a low sun, Unreal's
+default shadow maps lose long shadows (Shackleton's floor rendered lit at 1.5°);
+with ray tracing enabled in the project, `r.RayTracing.Shadows 1` and
+`r.RayTracing.Culling 0` in the editor console give shadows that match the
+studio's.
 
 **Send Sun to Unreal** updates the light labelled `LunarSun`, or the level's
 only Directional Light, and spawns `LunarSun` if there is neither. It applies

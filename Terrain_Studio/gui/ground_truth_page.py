@@ -14,6 +14,7 @@ from tkinter import filedialog, ttk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
 
+from gui import crop_logic
 from gui import ground_truth_logic as logic
 from gui import ground_truth_plots as plots
 from gui import paths
@@ -473,6 +474,10 @@ class GroundTruthPage(ttk.Frame):
     def load_dem(self, path):
         self.dem_path = path
         self.source_var.set(os.path.basename(path))
+        # The map's own scale when it records one, so craters are sized in metres right.
+        native = crop_logic.native_resolution(path)
+        if native:
+            self.resolution_var.set(f"{native:g}")
         self.craters = None
         self.crater_list_path = logic.crater_list_for(path, dem_group_name(path))
         self.crater_source_var.set("generator" if self.crater_list_path else "detect")

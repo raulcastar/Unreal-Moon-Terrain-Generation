@@ -69,7 +69,9 @@ Import), with the steps shown in the editor.
 **Library → Send an Existing Map** is the same sender on its own, for any
 elevation map already on disk. A GeoTIFF fills in *Resolution* from its own
 pixel size, and its NoData cells are treated as missing (not as deep pits) in
-the preview and in crops.
+the preview and in crops. Every view that loads a map (Send to Unreal, Rocks,
+Masks, Sun) takes its resolution from the map when it records one: a GeoTIFF,
+a saved crop, or a map generated here (from its crater list).
 
 ### Crop a region of a large map
 

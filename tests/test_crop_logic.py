@@ -150,3 +150,15 @@ def test_nanite_warning_only_for_large_landscapes():
     assert crop.nanite_warning((1009, 1261)) is None
     message = crop.nanite_warning((2080, 2269))      # rows, cols
     assert message is not None and "2269 x 2080" in message
+
+
+def test_native_resolution_of_a_generated_map(tmp_path):
+    # The generator's crater list gives each crater in pixels and metres.
+    dem = tmp_path / "mare_elevationMap.npy"
+    np.save(dem, np.zeros((8, 8), dtype=np.float32))
+    (tmp_path / "mare_craters.csv").write_text(
+        "id,row,col,radius_px,x_m,y_m,radius_m\n"
+        "0,1,1,2.0,0.5,0.5,1.0\n"
+        "1,4,4,40.0,2.0,2.0,20.0\n", encoding="utf-8")
+    assert crop.native_resolution(str(dem)) == 0.5
+    assert crop.native_resolution(str(tmp_path / "other.npy")) is None

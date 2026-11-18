@@ -14,6 +14,7 @@ from tkinter import filedialog, ttk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
 
+from gui import crop_logic
 from gui import generator_logic
 from gui import paths
 from gui import rock_planner_logic as logic
@@ -68,6 +69,12 @@ class RockPlannerPage(ttk.Frame):
 
         self.after(80, self._drain_queue)
         self.log("Rock planner ready. Load a DEM to begin.")
+        # Start with the rock models the repository ships, so Place Rocks in
+        # Unreal works without browsing first; Browse... picks another folder.
+        if os.path.isdir(paths.INPUT_ROCKS_DIR):
+            self.models_folder = os.path.normpath(paths.INPUT_ROCKS_DIR)
+            self.models_folder_var.set(self.models_folder)
+            self._read_model_sizes()
 
         if source_path and os.path.exists(source_path):
             self.load_dem(source_path)
@@ -566,6 +573,11 @@ class RockPlannerPage(ttk.Frame):
         self.source_var.set(os.path.basename(path))
         self.dem_path = path
         self.source_note_var.set(dem_source_note(path))
+        # Plan at the map's own scale when it records one (crop, GeoTIFF,
+        # generated map): rocks planned at another scale land off the Landscape.
+        native = crop_logic.native_resolution(path)
+        if native:
+            self.resolution_var.set(f"{native:g}")
 
         # Name the export after the map so the rocks land in its output folder.
         self.export_name_var.set(dem_group_name(path))
