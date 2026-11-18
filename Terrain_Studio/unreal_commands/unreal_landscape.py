@@ -36,12 +36,9 @@ def landscape_library():
 DEFAULT_LANDSCAPE_MATERIAL = "/Game/Landscape/Landscape_Material"
 LANDSCAPE_MASK_STENCIL = mask_classes.id_of("landscape")
 
-# Projects other than MARE's (the ESA XR Example, a new project) have no
-# /Game/Landscape. The UnrealDEMLandscape plugin ships the same regolith
-# material with 2K textures, in the same layout under its own content. It is
-# copied into the project rather than used from the plugin, so that packaged
-# builds keep it and the wheel-track decal finds the textures where it expects
-# them (unreal_track_setup.REGOLITH_TEXTURES).
+# Fallback for projects without /Game/Landscape: the UnrealDEMLandscape plugin's
+# copy of the material, in the same layout. It is copied into the project so
+# packaged builds keep it and the wheel tracks find its textures.
 PROJECT_LANDSCAPE_FOLDER = "/Game/Landscape"
 PLUGIN_LANDSCAPE_FOLDER = "/UnrealDEMLandscape/Landscape"
 

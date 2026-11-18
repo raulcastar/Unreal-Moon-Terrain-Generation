@@ -46,12 +46,10 @@ steps), or *Save the level afterwards* to leave saving to you.
 Every new Landscape is set up for the simulator: it gets the project's
 `/Game/Landscape/Landscape_Material`, and it is tagged for the rover's object
 mask (Render CustomDepth on, stencil 5, `landscape`; see
-[Object mask ids](masks.md#object-mask-ids)). A project without that material
-(the ESA XR Example, a new project) gets the lunar regolith material that the
-UnrealDEMLandscape plugin ships, with 2K textures: the first send copies it
-into `/Game/Landscape`, so packaged builds keep it and the wheel tracks find
-its textures. If neither exists (an older plugin), a warning is logged and the
-engine's default stays. Both defaults are at the top of `unreal_landscape.py`.
+[Object mask ids](masks.md#object-mask-ids)). In a project without that
+material, the first send copies the regolith material shipped with the
+UnrealDEMLandscape plugin into `/Game/Landscape`. Both defaults are at the top
+of `unreal_landscape.py`.
 
 *Nanite Landscape* (on by default, in Send an Existing Map) renders large
 Landscapes faster, but Unreal rebuilds the Nanite mesh on every save, which
