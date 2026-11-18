@@ -95,13 +95,21 @@ def probe_tip(x0, y0, azimuth, length):
     return x0 - math.sin(a) * length, y0 + math.cos(a) * length
 
 
+KEEP_INTENSITY = "keep"
+
+
 def parse_sun_settings(intensity_text, disc_text):
-    """(intensity in lux, sun disc in deg), or an error message (str)."""
+    """
+    (intensity in lux, sun disc in deg), or an error message (str). An empty
+    intensity or "keep" gives None: the light keeps its brightness.
+    """
+    keep = intensity_text.strip().lower() in ("", KEEP_INTENSITY)
     try:
-        intensity, disc = float(intensity_text), float(disc_text)
+        intensity = None if keep else float(intensity_text)
+        disc = float(disc_text)
     except ValueError:
-        return "Intensity and sun disc must be numbers."
-    if intensity <= 0 or disc < 0:
+        return f"Intensity must be a number or '{KEEP_INTENSITY}', and the sun disc a number."
+    if (intensity is not None and intensity <= 0) or disc < 0:
         return "Intensity must be positive and the sun disc not negative."
     return intensity, disc
 

@@ -414,22 +414,25 @@ def get_sun() -> dict:
 
 
 @server.tool(annotations=LEVEL)
-def set_sun(azimuth_deg: float, elevation_deg: float, intensity_lux: float = 120000.0,
+def set_sun(azimuth_deg: float, elevation_deg: float, intensity_lux: float | None = None,
             save_level: bool = True) -> dict:
     """
     Sets the lunar sun: azimuth (deg, compass), elevation above the horizon (deg;
-    low = long shadows), intensity (lux; 120000 is lunar noon). Saves the level.
+    low = long shadows). Omit intensity_lux to keep the level's brightness;
+    120000 is lunar sunlight, for MARE's levels. Saves the level.
     """
     if not -10.0 <= elevation_deg <= 90.0:
         raise ToolError('elevation_deg must be between -10 and 90.')
+    if intensity_lux is not None and intensity_lux <= 0:
+        raise ToolError('intensity_lux must be positive, or omitted to keep the level\'s.')
     lines = []
     with _captured(lines):
         ok = send_sun.send_sun_to_unreal(azimuth_deg, elevation_deg, intensity_lux, save_level=save_level,
                                          log=lambda text, level=None: lines.append(text))
     if not ok:
         raise ToolError('Unreal did not set the sun:\n' + '\n'.join(lines[-8:]))
-    return {'azimuth_deg': azimuth_deg, 'elevation_deg': elevation_deg, 'intensity_lux': intensity_lux,
-            'saved': save_level}
+    return {'azimuth_deg': azimuth_deg, 'elevation_deg': elevation_deg,
+            'intensity_lux': intensity_lux if intensity_lux is not None else 'kept', 'saved': save_level}
 
 
 @server.tool(annotations=READ)

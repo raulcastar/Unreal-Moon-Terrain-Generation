@@ -18,18 +18,26 @@ def _sun_call(call):
     return unreal_call(call, "unreal_level_saver", "unreal_sun")
 
 
+# Lunar sunlight, the preset for MARE's exposure (must match unreal_sun.LUNAR_SUNLIGHT_LUX).
+LUNAR_SUNLIGHT_LUX = 120000.0
+
+
 def build_command(azimuth_deg, elevation_deg, intensity_lux, source_angle_deg, save_level):
+    intensity = "None" if intensity_lux is None else repr(float(intensity_lux))
     args = ", ".join([f"{float(azimuth_deg)!r}", f"{float(elevation_deg)!r}",
-                      f"intensity_lux={float(intensity_lux)!r}",
+                      f"intensity_lux={intensity}",
                       f"source_angle_deg={float(source_angle_deg)!r}",
                       f"save_level={bool(save_level)}"])
     return _sun_call(f"set_sun({args})")
 
 
-def send_sun_to_unreal(azimuth_deg, elevation_deg, intensity_lux=120000.0,
+def send_sun_to_unreal(azimuth_deg, elevation_deg, intensity_lux=None,
                        source_angle_deg=0.53, save_level=True, log=print,
                        discovery_seconds=2.0):
-    """Sets the lunar sun in a running Unreal Editor. Returns True on success."""
+    """
+    Sets the lunar sun in a running Unreal Editor; intensity_lux None keeps the
+    light's brightness. Returns True on success.
+    """
     command = build_command(azimuth_deg, elevation_deg, intensity_lux,
                             source_angle_deg, save_level)
     return run_in_unreal(command, log, "Setting the sun in Unreal", discovery_seconds)

@@ -50,7 +50,11 @@ def test_probe_tip_points_away_from_the_sun():
 
 def test_parse_sun_settings_and_log():
     assert logic.parse_sun_settings("120000", "0.53") == (120000.0, 0.53)
-    assert "numbers" in logic.parse_sun_settings("x", "1")
+    # "keep" (the default) or an empty field: the level's light keeps its brightness.
+    assert logic.parse_sun_settings("keep", "0.53") == (None, 0.53)
+    assert logic.parse_sun_settings(" Keep ", "0.53") == (None, 0.53)
+    assert logic.parse_sun_settings("", "0.53") == (None, 0.53)
+    assert "a number or 'keep'" in logic.parse_sun_settings("x", "1")
     assert "positive" in logic.parse_sun_settings("0", "1")
     line = logic.unreal_sun_log({"label": "Sun", "azimuth": 10, "elevation": 5, "intensity": 1e5,
                                  "pie": True})

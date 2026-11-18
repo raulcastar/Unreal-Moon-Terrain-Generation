@@ -234,12 +234,13 @@ class SunPage(ttk.Frame):
         settings = ttk.Frame(unreal_group)
         settings.pack(fill="x")
         settings.columnconfigure(0, weight=1)
-        self.intensity_var = tk.StringVar(value="120000")
+        # "keep" by default: projects other than MARE use their own exposure.
+        self.intensity_var = tk.StringVar(value=logic.KEEP_INTENSITY)
         self.disc_var = tk.StringVar(value="0.53")
         for row, (label, var, tip) in enumerate((
                 ("Intensity (lux)", self.intensity_var,
-                 "Illuminance of the sunlight. Direct sunlight on the Moon is about\n"
-                 "130,000 lux; 120,000 is what the level's camera exposure is set for."),
+                 "Sunlight in lux. 'keep' leaves the level's brightness unchanged.\n"
+                 "Lunar (120,000) matches MARE's camera exposure."),
                 ("Sun disc (deg)", self.disc_var,
                  "Angular diameter of the sun, which sets how soft shadow edges are.\n"
                  "0.53 deg is the Sun seen from the Moon."))):
@@ -248,6 +249,10 @@ class SunPage(ttk.Frame):
             ttk.Entry(settings, textvariable=var, width=9, justify="right",
                       font=("Consolas", 9)).grid(row=row, column=1, sticky="e", pady=1)
             Tooltip(name, tip)
+        lunar = ttk.Button(settings, text="Lunar", width=6,
+                           command=lambda: self.intensity_var.set(f"{send_sun.LUNAR_SUNLIGHT_LUX:.0f}"))
+        lunar.grid(row=0, column=2, sticky="e", padx=(4, 0), pady=1)
+        Tooltip(lunar, "Lunar sunlight, 120,000 lux, for MARE's levels.")
         self.save_level_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(unreal_group, text="Save the level afterwards",
                         variable=self.save_level_var).pack(anchor="w", pady=(4, 0))
@@ -614,8 +619,9 @@ class SunPage(ttk.Frame):
         intensity, disc = settings
         azimuth, elevation = self.sun()
         save_level = self.save_level_var.get()
+        brightness = "the level's brightness kept" if intensity is None else f"{intensity:.0f} lux"
         self.log(f"Sending the sun to Unreal: azimuth {azimuth:.1f}, elevation "
-                 f"{elevation:.1f} deg, {intensity:.0f} lux.")
+                 f"{elevation:.1f} deg, {brightness}.")
         self._start_unreal_job(
             "Setting the sun in Unreal...", key="sun_send", job=
             lambda log: send_sun.send_sun_to_unreal(

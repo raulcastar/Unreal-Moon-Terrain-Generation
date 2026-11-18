@@ -32,8 +32,12 @@ studio's.
 **Send Sun to Unreal** updates the light labelled `LunarSun`, or the level's
 only Directional Light, and spawns `LunarSun` if there is neither. It applies
 lunar settings: white light with no atmospheric reddening, a 0.53° sun disc,
-movable with dynamic shadows reaching at least 200 m, and the intensity set in
-the panel.
+and movable with dynamic shadows reaching at least 200 m.
+
+*Intensity* is `keep` by default, which leaves the light's brightness as it
+is. **Lunar** sets 120,000 lux, the value MARE's camera exposure expects; other
+projects may turn white at that. A spawned `LunarSun` starts at 120,000 lux.
+The MCP tool `set_sun` keeps the brightness when `intensity_lux` is omitted.
 
 During Play In Editor only the running game changes; send the sun again after
 stopping it to keep it in the level. **Read Sun from Unreal** loads the level's

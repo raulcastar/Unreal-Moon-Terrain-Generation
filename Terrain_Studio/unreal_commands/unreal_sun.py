@@ -21,6 +21,10 @@ SUN_TAG = "LunarSun"
 SUN_DISC_DEG = 0.53           # Angular diameter of the Sun seen from the Moon
 SHADOW_DISTANCE_CM = 20000.0  # Minimum dynamic shadow distance (200 m)
 SUN_HEIGHT_CM = 50000.0       # Spawn height; position does not affect a directional light
+# Lunar sunlight, which MARE's camera exposure expects. set_sun keeps a light's
+# intensity unless one is given (other projects use their own exposure); a sun
+# it spawns gets this.
+LUNAR_SUNLIGHT_LUX = 120000.0
 
 
 def light_rotation(azimuth_deg, elevation_deg):
@@ -97,7 +101,8 @@ def _apply_editor(light, rotation, intensity_lux, source_angle_deg):
     light.set_actor_rotation(rotation, False)
     comp = light.light_component
     comp.set_editor_property("mobility", unreal.ComponentMobility.MOVABLE)
-    comp.set_editor_property("intensity", float(intensity_lux))
+    if intensity_lux is not None:
+        comp.set_editor_property("intensity", float(intensity_lux))
     comp.set_editor_property("light_color", unreal.Color(255, 255, 255, 255))
     comp.set_editor_property("use_temperature", False)
     comp.set_editor_property("light_source_angle", float(source_angle_deg))
@@ -117,7 +122,8 @@ def _apply_runtime(light, rotation, intensity_lux, source_angle_deg):
     """Sets a running game's light through its runtime setters, which apply at once."""
     light.set_actor_rotation(rotation, False)
     comp = light.light_component
-    comp.set_intensity(float(intensity_lux))
+    if intensity_lux is not None:
+        comp.set_intensity(float(intensity_lux))
     comp.set_light_color(unreal.LinearColor(1.0, 1.0, 1.0, 1.0), True)
     comp.set_use_temperature(False)
     comp.set_light_source_angle(float(source_angle_deg))
@@ -129,12 +135,14 @@ def _apply_runtime(light, rotation, intensity_lux, source_angle_deg):
     comp.set_dynamic_shadow_distance_movable_light(max(float(distance), SHADOW_DISTANCE_CM))
 
 
-def set_sun(azimuth_deg, elevation_deg, intensity_lux=120000.0,
+def set_sun(azimuth_deg, elevation_deg, intensity_lux=None,
             source_angle_deg=SUN_DISC_DEG, save_level=False):
     """
     Points the level's sun at (azimuth, elevation) with lunar settings. Uses the
     'LunarSun' light or the level's only Directional Light, else spawns one.
-    During Play In Editor only the running game changes. Returns a summary line.
+    intensity_lux None keeps the light's brightness (a spawned sun gets
+    LUNAR_SUNLIGHT_LUX). During Play In Editor only the running game changes.
+    Returns a summary line.
     """
     rotation = light_rotation(azimuth_deg, elevation_deg)
     sun = f"azimuth {azimuth_deg:.1f} deg, elevation {elevation_deg:.1f} deg"
@@ -162,10 +170,14 @@ def set_sun(azimuth_deg, elevation_deg, intensity_lux=120000.0,
             unreal.log_warning(f"{len(lights)} Directional Lights in the level; spawning "
                                f"'{SUN_LABEL}'. Remove the others to avoid double shadows.")
         light, action = _spawn_sun(), "Spawned"
+        if intensity_lux is None:
+            intensity_lux = LUNAR_SUNLIGHT_LUX
     _apply_editor(light, rotation, intensity_lux, source_angle_deg)
     atmospheres = lunar_atmosphere(world)
 
-    summary = f"{action} '{light.get_actor_label()}': {sun}, {intensity_lux:.0f} lux."
+    lux = float(light.light_component.get_editor_property("intensity"))
+    kept = "" if intensity_lux is not None else " (kept)"
+    summary = f"{action} '{light.get_actor_label()}': {sun}, {lux:.0f} lux{kept}."
     if atmospheres:
         summary += " SkyAtmosphere set to lunar vacuum (Moon radius, no scattering)."
     if save_level:

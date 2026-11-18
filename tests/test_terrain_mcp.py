@@ -105,6 +105,15 @@ def test_rocks_need_their_landscape(outputs_dir, unreal, tmp_path):
         studio.send_rocks_to_unreal("t/t_elevationMap.npy", str(tmp_path))
 
 
+def test_set_sun_keeps_the_levels_brightness_unless_given(unreal):
+    assert studio.set_sun(135.0, 5.0)["intensity_lux"] == "kept"
+    assert "intensity_lux=None" in unreal.commands[-1]
+    studio.set_sun(135.0, 5.0, intensity_lux=120000.0)
+    assert "intensity_lux=120000.0" in unreal.commands[-1]
+    with pytest.raises(ToolError, match="positive"):
+        studio.set_sun(135.0, 5.0, intensity_lux=0.0)
+
+
 def test_play_and_an_absent_editor(unreal):
     assert studio.unreal_play()["playing"]
     assert any("editor_request_begin_play" in c for c in unreal.commands)
