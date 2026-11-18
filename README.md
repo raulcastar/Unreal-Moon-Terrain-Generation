@@ -7,9 +7,10 @@
 [![Unreal Engine 5.7](https://img.shields.io/badge/Unreal%20Engine-5.7-313131?logo=unrealengine&logoColor=white)](https://www.unrealengine.com/)
 [![Python 3](https://img.shields.io/badge/Python-3-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 
-Terrain Studio generates procedural lunar elevation maps (DEMs), plans rock
-fields with guaranteed rover corridors, and builds them in Unreal Engine 5: the
-Landscape, the rocks, ground-truth masks for the rover's cameras, and the sun.
+Terrain Studio generates procedural lunar elevation maps (DEMs) or downloads
+real ones from NASA (LROC NAC, LOLA), plans rock fields with guaranteed rover
+corridors, and builds them in Unreal Engine 5: the Landscape, the rocks,
+ground-truth masks for the rover's cameras, and the sun.
 It is part of [MARE](https://github.com/raulcastar/MARE-Lunar-Simulator), an open-source lunar rover simulation suite
 ([video overview](https://youtu.be/EI4HgbMFbBE), [project page](https://raulcastar.me/mare/)), with the ROS 2 stack
 [GNC-Moon-Simulator](https://github.com/raulcastar/GNC-Moon-Simulator).
@@ -44,7 +45,8 @@ Python (`sudo apt install python3-tk` on Debian/Ubuntu).
 **Unreal setup:** the steps that send to Unreal need a running Unreal Editor
 (5.7) with the *Python Editor Script Plugin* and *Remote Execution* enabled
 (Project Settings), and the [UnrealDEMLandscape](https://github.com/raulcastar/UnrealDEMLandscape) editor plugin,
-which builds the Landscape (Unreal's Python API cannot create one). The
+which builds the Landscape (Unreal's Python API cannot create one) and provides
+the lunar surface material in any project. The
 [MARE-Lunar-Simulator](https://github.com/raulcastar/MARE-Lunar-Simulator)
 project has them all.
 
@@ -68,6 +70,22 @@ step, with that step's buttons pinned under its settings.
 Everything a map produces goes to `outputs/<name>/`: the DEM and its soil map
 (the maps the GNC path planner reads), the crater list, the heightmap, the rock
 field and the crater mask.
+
+## Real lunar terrain
+
+**Library → Lunar Datasets** downloads real elevation maps from NASA's public
+servers, with no account needed:
+
+| Source | Maps | Resolution |
+|---|---|---|
+| LROC NAC DTMs | ~670 stereo models: Apollo sites, craters, rilles, polar features | 1-5 m/px |
+| LOLA landing sites | 27 south-pole candidate sites (Shackleton rim, Malapert...) | 5 m/px |
+| LOLA mosaics | The south polar region, from 60° to 83°S to the pole | 10-240 m/px |
+
+Preview a map, download it whole, or draw a region on a mosaic and fetch only
+that part, then send it to Unreal. See [docs/datasets.md](docs/datasets.md).
+
+![Lunar Datasets: a region of the 80 m/px south-pole mosaic, drawn for download](docs/images/lunar_datasets.jpg)
 
 ## Folders
 
