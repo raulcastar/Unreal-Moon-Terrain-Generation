@@ -117,6 +117,7 @@ has the matching server for driving the rover.
 
 | | |
 |---|---|
+| [User dossier (PDF)](docs/Lunar_Terrain_Studio_Dossier.pdf) | The studio in 14 illustrated pages: installation, a real site step by step, procedural terrain, rocks, sun, limits |
 | [Terrain](docs/terrain.md) | Step 1: parameters, outputs, Send to Unreal (and cropping a large map), command line |
 | [Lunar datasets](docs/datasets.md) | Real lunar DEMs: sources, previews, downloads and region crops |
 | [Rocks](docs/rocks.md) | Step 2: how the plan is made, presets, export, placing in Unreal |
