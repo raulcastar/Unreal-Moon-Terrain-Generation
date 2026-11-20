@@ -611,7 +611,7 @@ class GroundTruthPage(ttk.Frame):
                                                rim_fraction, k)
             written = crater_map.export_crater_mask(
                 labels, paths.GENERATOR_OUTPUT_DIR, group, resolution, depth,
-                ids["crater"], rim, rim_fraction, supersample=k, source=source)
+                ids["crater"], rim, rim_fraction, supersample=k, source=source, craters=craters)
             log(f"Crater map written ({labels.shape[1]} x {labels.shape[0]}, {k} per DEM cell):",
                 "ok")
             for path in written.values():

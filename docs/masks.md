@@ -72,10 +72,20 @@ JSON beside it. It uses 4 cells per DEM cell (25 cm on a 1 m map), capped at
 | `6` | Crater: ground inside the rim crest |
 | `7` | Crater rim: a ring outside the crest, 0.2 × the radius wide by default |
 
+Beside it, `<name>_craterField.png` (16-bit) holds, per cell, the largest
+`1 − distance / radius` over all craters: 0 on a crater's edge, −0.2 on its
+rim's outer edge, and stored from −1 (65535 = 1). Read cell by cell, the id map's
+outlines are 25 cm steps, which look like long straight segments near the
+camera. The field varies smoothly, so the mask material interpolates it at each
+pixel's exact point and draws the circles themselves.
+
 ## How the mask is drawn
 
 The mask camera's material looks at each Landscape pixel (stencil 5), takes the
-world point it shows, and reads the crater map there. So rocks and the rover
+world point it shows, and reads the crater field there (crater where it is
+≥ 0, rim where it is ≥ −0.2). The id map itself is not used in Unreal: it is the
+crater label map for other tools. A crater map exported before the field
+existed has to be exported again. So rocks and the rover
 keep their own ids, and craters hidden behind terrain stay hidden. It also
 works during Play In Editor, although camera changes made then last only until
 it stops.
@@ -86,7 +96,7 @@ Everything lives in `/Game/GroundTruth_Masks`, one subfolder per feature:
 | --- | --- |
 | `Mask/PPM_GroundTruthMask` | Post-process material on the mask camera: object ids, crater ids on the Landscape, shadow flag bits |
 | `Mask/PPM_GroundTruthMask_Backup` | That material as it was before the studio first changed it; **Restore Original Mask Material** puts it back |
-| `CraterMaps/T_CraterIds_<map>` | Crater map: crater or rim id per cell |
+| `CraterMaps/T_CraterField_<map>` | Crater field, interpolated per pixel (16-bit) |
 | `RoverShadow/RT_RoverDepthFromSun` | The rover's shadow map: its depth seen from the sun |
 | `Sun/MPC_Sun` | The sun's direction and disc size, for its id in the object mask |
 | `WheelTracks/M_WheelTrackDecal` | The wheel-track decal material |

@@ -14,7 +14,13 @@ craters) are rejected.
 The map stores the mask ids themselves (0 = not a crater), so Unreal's mask
 material can read a cell and use its value as the stencil id. Craters are
 circles, so the map can be drawn finer than the DEM (SUPERSAMPLE cells per DEM
-cell) for smooth edges up close. UI-free.
+cell) for smooth edges up close.
+
+Read cell by cell, even 25 cm cells show as steps near the camera. So the
+crater field is exported beside the map: per cell, max over craters of
+1 - distance / radius (>= 0 inside a crater, >= -rim_fraction on a rim). It
+varies smoothly, so Unreal interpolates it at each pixel's exact position and
+applies the same rule there, which draws the circles themselves. UI-free.
 """
 
 import hashlib
@@ -48,6 +54,8 @@ RAYS = 48               # Radial profiles per crater
 REGIONAL_SIGMA_M = 15.0 # Smoothing that defines the regional relief for the second pass
 SUPERSAMPLE = 4         # Map cells per DEM cell, along each axis
 MAX_MAP_SIDE = 8192     # Largest map side (texture limit)
+FIELD_MIN = -1.0        # Crater field floor: further out is plain ground. Interpolation near a rim's
+                        # outer edge stays exact while a crater spans more than half a DEM cell
 
 
 def _rim_circle(dem, centre, radius):
@@ -231,6 +239,30 @@ def render_labels(shape, craters, crater_id=CRATER_ID, rim_id=RIM_ID,
     return labels
 
 
+def render_field(shape, craters, supersample=1):
+    """
+    float32 map of (rows * supersample, cols * supersample), the same cells as
+    render_labels: max over craters of 1 - distance / radius, clipped to
+    [FIELD_MIN, 1]. A cell is crater where it is >= 0 and rim where it is
+    >= -rim_fraction, as render_labels draws it.
+    """
+    k = int(supersample)
+    rows, cols = shape[0] * k, shape[1] * k
+    field = np.full((rows, cols), FIELD_MIN, dtype=np.float32)
+    for row, col, radius in craters:
+        if radius <= 0:
+            continue
+        cr, cc, r = (row + 0.5) * k - 0.5, (col + 0.5) * k - 0.5, radius * k
+        reach = r * (1.0 - FIELD_MIN) + 1
+        r0, r1 = int(max(0, cr - reach)), int(min(rows, cr + reach + 2))
+        c0, c1 = int(max(0, cc - reach)), int(min(cols, cc + reach + 2))
+        if r0 >= r1 or c0 >= c1:
+            continue
+        yy, xx = np.ogrid[r0:r1, c0:c1]
+        np.maximum(field[r0:r1, c0:c1], 1.0 - np.hypot(yy - cr, xx - cc) / r, out=field[r0:r1, c0:c1])
+    return np.clip(field, FIELD_MIN, 1.0)
+
+
 def crater_labels(dem, resolution, min_depth_m, crater_id=CRATER_ID, rim_id=RIM_ID,
                   rim_fraction=RIM_FRACTION, supersample=1):
     """
@@ -249,11 +281,14 @@ def crater_labels(dem, resolution, min_depth_m, crater_id=CRATER_ID, rim_id=RIM_
 
 def export_crater_mask(labels, output_dir, base_name, resolution, min_depth_m,
                        crater_id=CRATER_ID, rim_id=RIM_ID, rim_fraction=RIM_FRACTION,
-                       supersample=1, source="detected"):
+                       supersample=1, source="detected", craters=None):
     """
     Writes <group>_craterMask.png (8-bit, values are mask ids, row 0 = DEM row 0,
     `supersample` cells per DEM cell) and <group>_craterMask.json beside the
-    map's other outputs. Returns {'crater_mask_png': path, 'crater_mask_json': path}.
+    map's other outputs. With `craters` (the circles the labels were drawn from),
+    also <group>_craterField.png: render_field on the same cells, 16-bit,
+    0 = FIELD_MIN and 65535 = 1. Returns {'crater_mask_png': path,
+    'crater_mask_json': path[, 'crater_field_png': path]}.
     """
     group = base_name.replace('_elevationMap', '')
     target_dir = os.path.join(output_dir, group)
@@ -261,6 +296,13 @@ def export_crater_mask(labels, output_dir, base_name, resolution, min_depth_m,
     png = os.path.join(target_dir, f"{group}_craterMask.png")
     meta = os.path.join(target_dir, f"{group}_craterMask.json")
     Image.fromarray(labels.astype(np.uint8), mode="L").save(png)
+    written = {"crater_mask_png": png, "crater_mask_json": meta}
+    if craters is not None:
+        shape = (labels.shape[0] // supersample, labels.shape[1] // supersample)
+        field = render_field(shape, craters, supersample)
+        written["crater_field_png"] = os.path.join(target_dir, f"{group}_craterField.png")
+        encoded = np.round((field - FIELD_MIN) / (1.0 - FIELD_MIN) * 65535.0).astype(np.uint16)
+        Image.fromarray(encoded).save(written["crater_field_png"])
     with open(meta, "w") as handle:
         json.dump({
             "width": int(labels.shape[1]), "height": int(labels.shape[0]),
@@ -271,5 +313,6 @@ def export_crater_mask(labels, output_dir, base_name, resolution, min_depth_m,
             "rim_fraction": float(rim_fraction),
             "crater_cover": float((labels == crater_id).mean()),
             "rim_cover": float((labels == rim_id).mean()),
+            "field_min": FIELD_MIN if craters is not None else None,
         }, handle, indent=2)
-    return {"crater_mask_png": png, "crater_mask_json": meta}
+    return written
