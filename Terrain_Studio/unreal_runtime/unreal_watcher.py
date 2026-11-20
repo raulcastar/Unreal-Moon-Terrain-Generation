@@ -25,7 +25,7 @@ import unreal
 #                                    ids, crater ids on the Landscape, shadow flag bits
 #   Mask/PPM_GroundTruthMask_Backup  that material as it was before the studio first
 #                                    changed it (Restore Original Mask Material)
-#   CraterMaps/T_CraterIds_<map>     crater map: crater / rim id per cell
+#   CraterMaps/T_CraterField_<map>   crater field, interpolated per pixel (16-bit)
 #   RoverShadow/RT_RoverDepthFromSun  the rover's shadow map: its depth seen from the sun
 #   Sun/MPC_Sun                      sun direction and disc size for the sun's id
 #   WheelTracks/M_WheelTrackDecal    wheel-track decal material (unreal_track_setup)

@@ -95,3 +95,44 @@ def test_export_crater_mask(outputs_dir):
     assert (meta["width"], meta["height"]) == (80, 64)
     assert (meta["crater_id"], meta["rim_id"]) == (crater_map.CRATER_ID, crater_map.RIM_ID)
     assert meta["crater_cover"] == pytest.approx((labels == crater_map.CRATER_ID).mean())
+
+
+# ---------------------------------------------------------------- crater field
+
+def test_field_thresholds_give_back_the_labels():
+    """At cell centres the field, read with the crater map's rule, is render_labels."""
+    craters = [(30.0, 30.0, 9.0), (36.0, 44.0, 5.5), (12.0, 70.0, 3.0)]   # two overlap
+    labels = crater_map.render_labels((64, 80), craters, supersample=4)
+    field = crater_map.render_field((64, 80), craters, supersample=4)
+    rule = np.where(field >= 0, crater_map.CRATER_ID,
+                    np.where(field >= -crater_map.RIM_FRACTION, crater_map.RIM_ID, 0))
+    assert np.mean(rule == labels) > 0.9999      # ties exactly on a boundary may round either way
+
+
+def test_field_between_cells_follows_the_circle():
+    """Interpolated between cell centres, the crater edge lies on the circle, not on a cell step."""
+    field = crater_map.render_field((40, 40), [(20.0, 20.0, 6.0)], supersample=1)
+    row = field[20]                              # through the centre, along a row
+    j = np.where(row >= 0)[0].max()              # last cell inside; the edge is between j and j + 1
+    edge = j + row[j] / (row[j] - row[j + 1])    # where the interpolated field crosses 0
+    assert edge == pytest.approx(26.0, abs=0.01)
+
+
+def test_export_writes_the_field(outputs_dir):
+    craters = [(32.0, 40.0, 9.0)]
+    labels = crater_map.render_labels((64, 80), craters, supersample=2)
+    written = crater_map.export_crater_mask(labels, str(outputs_dir), "unit_elevationMap",
+                                            RESOLUTION, 0.5, supersample=2, craters=craters)
+    encoded = np.array(Image.open(written["crater_field_png"]))
+    assert encoded.dtype == np.uint16 and encoded.shape == labels.shape
+    meta = json.load(open(written["crater_mask_json"]))
+    decoded = encoded / 65535.0 * (1.0 - meta["field_min"]) + meta["field_min"]
+    assert np.abs(decoded - crater_map.render_field((64, 80), craters, 2)).max() < 1e-4
+
+
+def test_export_without_craters_has_no_field(outputs_dir):
+    labels = crater_map.render_labels((64, 80), [(32.0, 40.0, 9.0)])
+    written = crater_map.export_crater_mask(labels, str(outputs_dir), "unit_elevationMap",
+                                            RESOLUTION, 0.5)
+    assert "crater_field_png" not in written
+    assert json.load(open(written["crater_mask_json"]))["field_min"] is None

@@ -48,9 +48,13 @@ helper capture renders only the rover's depth, looking along the sunlight
 watcher). A shadowed pixel is the rover's shadow when the rover lies between it
 and the sun, even where a rock, crater wall or slope shades it too.
 
-The crater map is read with an exact texel fetch at the pixel's world
-position, in the same DEM frame as the rock placer (columns run towards -X); it
-may hold several cells per DEM cell (CraterSupersample).
+Craters come from the crater field the studio exports beside the crater map
+(<name>_craterField.png: per cell, the largest 1 - distance / radius over all
+craters), read at the pixel's world position in the same DEM frame as the rock
+placer (columns run towards -X), with several cells per DEM cell
+(CraterSupersample). It is interpolated at the exact point and thresholded with
+the crater map's own rule, so crater and rim outlines are the circles
+themselves, not the cells' 25 cm steps.
 """
 
 import json
@@ -75,7 +79,7 @@ CAMERAS_JSON_PREFIX = "CAMERAS_JSON "
 #                                    ids, crater ids on the Landscape, shadow flag bits
 #   Mask/PPM_GroundTruthMask_Backup  that material as it was before the studio first
 #                                    changed it (Restore Original Mask Material)
-#   CraterMaps/T_CraterIds_<map>     crater map: crater / rim id per cell
+#   CraterMaps/T_CraterField_<map>   crater field, interpolated per pixel (16-bit)
 #   RoverShadow/RT_RoverDepthFromSun  the rover's shadow map: its depth seen from the sun
 #   Sun/MPC_Sun                      sun direction and disc size for the sun's id
 #   WheelTracks/M_WheelTrackDecal    wheel-track decal material (unreal_track_setup)
@@ -86,7 +90,8 @@ ROVER_SHADOW_TARGET = f"{GROUND_TRUTH_FOLDER}/RoverShadow/RT_RoverDepthFromSun"
 SHADOW_MAP_SIZE = 512          # Texels across the rover's shadow map
 SHADOW_MAP_MARGIN = 1.25       # Its width, over the rover's size seen from any side
 ROVER_SHADOW_BIAS_CM = 3.0     # A point is in the rover's shadow if the rover is this much nearer the sun
-CRATER_TEXTURE_PREFIX = "T_CraterIds_"
+FIELD_TEXTURE_PREFIX = "T_CraterField_"
+CRATER_TEXTURE_PREFIX = "T_CraterIds_"    # Earlier crater textures (an id per cell): only tidied up now
 # Object-mask ids: 0 = nothing tagged. From config/mask_classes.json, which the
 # GNC simulator keeps a copy of (component_stereo_depth/config/mask_classes.json).
 MASK_IDS = mask_classes.ids()            # {id: name}
@@ -140,11 +145,24 @@ if (ground)
     // spans map cells [c * S, (c + 1) * S), centred on vertex c.
     float2 dem = float2((Pos.x - CraterOriginX) / CraterStepX,
                         (Pos.y - CraterOriginY) / CraterStepY);
-    int2 cell = int2(floor((dem + 0.5) * CraterSupersample));
-    if (cell.x >= 0 && cell.y >= 0 && cell.x < CraterWidth && cell.y < CraterHeight)
+    // Crater field (max over craters of 1 - distance / radius) sampled at cell
+    // centres: interpolated at this point, then the crater map's rule, crater
+    // where >= 0 and rim where >= -RimFraction.
+    float2 g = (dem + 0.5) * CraterSupersample - 0.5;
+    if (g.x >= -0.5 && g.y >= -0.5 && g.x < CraterWidth - 0.5 && g.y < CraterHeight - 0.5)
     {
-        float id = round(Crater.Load(int3(cell, 0)).r * 255.0);
-        if (id > 0.5) v = id;
+        int2 c0 = int2(floor(g));
+        float2 t = g - float2(c0);
+        int2 hi = int2(CraterWidth - 1.0, CraterHeight - 1.0);
+        int2 a = clamp(c0, int2(0, 0), hi);
+        int2 b = clamp(c0 + int2(1, 1), int2(0, 0), hi);
+        float f00 = Crater.Load(int3(a.x, a.y, 0)).r;
+        float f10 = Crater.Load(int3(b.x, a.y, 0)).r;
+        float f01 = Crater.Load(int3(a.x, b.y, 0)).r;
+        float f11 = Crater.Load(int3(b.x, b.y, 0)).r;
+        float f = lerp(lerp(f00, f10, t.x), lerp(f01, f11, t.x), t.y) * (1.0 - CraterFieldMin) + CraterFieldMin;
+        if (f >= 0.0) v = CraterId;
+        else if (RimId > 0.5 && f >= -RimFraction) v = RimId;
     }
     // Wheel track: its decal leaves a metallic marker regolith never has.
     if (TrackEnabled > 0.5 && Metal >= TrackMetallic * 0.5) v = TrackId;
@@ -208,6 +226,7 @@ MASK_CODE = MASK_CODE.replace("PALETTE_CODE", "\n".join(
 
 SCALAR_INPUTS = ("LandscapeStencil", "CraterOriginX", "CraterOriginY", "CraterStepX",
                  "CraterStepY", "CraterWidth", "CraterHeight", "CraterSupersample",
+                 "CraterFieldMin", "CraterId", "RimId", "RimFraction",
                  "ShadowEnabled", "ShadowThreshold", "RoverShadowEnabled", "RoverStencil",
                  "SunEnabled", "SunId", "SunGlareId", "SunGlareCos",
                  "TrackEnabled", "TrackId", "TrackMetallic", "SkyId", "SkyDepth",
@@ -795,7 +814,18 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
     stem = png_path.replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[0]
     if stem.endswith("_craterMask"):
         stem = stem[:-len("_craterMask")]
-    texture = import_mask_texture(png_path, CRATER_TEXTURE_PREFIX + stem)
+    # The crater field the studio exports beside the crater map (field_min in its JSON).
+    base = os.path.splitext(png_path)[0]
+    meta_path, field_png = base + ".json", base[:-len("_craterMask")] + "_craterField.png"
+    crater_meta = {}
+    if os.path.isfile(meta_path):
+        with open(meta_path) as handle:
+            crater_meta = json.load(handle)
+    if not (base.endswith("_craterMask") and os.path.isfile(field_png)
+            and crater_meta.get("field_min") is not None):
+        return (f"[-] No crater field beside {png_path}: export the crater map again "
+                f"(it now writes <map>_craterField.png too).")
+    texture = import_mask_texture(field_png, FIELD_TEXTURE_PREFIX + stem)
     material = unreal.load_asset(MASK_MATERIAL)
     if material is None:
         return f"[-] {MASK_MATERIAL} not found: set up the object mask first (UnrealStereoCam's docs/object-mask.md)."
@@ -844,6 +874,10 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
         "LandscapeStencil": landscape_stencil, "CraterOriginX": x0, "CraterOriginY": y0,
         "CraterStepX": step_x, "CraterStepY": step_y,
         "CraterWidth": width, "CraterHeight": height, "CraterSupersample": supersample,
+        "CraterFieldMin": float(crater_meta["field_min"]),
+        "CraterId": crater_meta.get("crater_id", mask_classes.id_of("crater")),
+        "RimId": crater_meta.get("rim_id", mask_classes.id_of("crater_rim")),
+        "RimFraction": crater_meta.get("rim_fraction", 0.2),
         "ShadowEnabled": 1.0 if shadows else 0.0, "ShadowThreshold": SHADOW_THRESHOLD,
         "RoverShadowEnabled": 1.0 if rover_on else 0.0, "RoverStencil": rover_stencil,
         "SunEnabled": 1.0 if sun else 0.0, "SunId": SUN_ID, "SunGlareId": SUN_GLARE_ID,
@@ -853,7 +887,8 @@ def apply_crater_mask(png_path, width, height, resolution=1.0, landscape_label="
         "TrackMetallic": unreal_track_setup.TRACK_METALLIC},
         no_rover, _sun_collection(_current_world()))
     summary = (f"Crater ground truth on '{landscape.get_actor_label()}': {texture.get_path_name()} "
-               f"({width} x {height}, {supersample} per DEM cell) in {MASK_MATERIAL}. "
+               f"({width} x {height}, {supersample} per DEM cell, outlines drawn as circles) "
+               f"in {MASK_MATERIAL}. "
                f"Backup: {BACKUP_MATERIAL}.")
     if retagged:
         summary += "\n" + retagged
